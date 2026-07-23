@@ -56,6 +56,7 @@ These are enforced in `CONVENTIONS.md`, which every skill reads first.
 | `add-task` | Create a task **and** break it into micro-steps. |
 | `complete-task` | Mark a task done → move to the archive (never delete). |
 | `learn-skill` | Grow a new skill at runtime, recall it, reinforce it (neuroplasticity). |
+| `visualize` | Open a live, interactive map of the whole graph in the browser. |
 | `remind` | Set a real alarm (scheduled routine) that DMs you on Slack. |
 | `calendar` | Read/create Google Calendar events; time-block tasks. |
 | `read-email` | Read & triage Gmail; turn action items into tasks. |
@@ -92,6 +93,19 @@ python3 scripts/graph.py add-skill --name triage-x --title "..." --when "..." --
 python3 scripts/graph.py match-skills "a situation"            # associative recall
 python3 scripts/graph.py use-skill --id skill_triage-x         # reinforce
 ```
+
+## Visualize the brain
+
+A dependency-free local server renders the live graph — force-directed layout,
+zoom/pan, search, type filters, and click-to-inspect showing every connection
+and its direction. It polls the DB so changes appear in real time.
+
+```bash
+python3 viz/serve.py            # opens http://127.0.0.1:8770/ in your browser
+python3 viz/serve.py --no-open --port 8771 &   # background, custom port
+```
+
+Binds to localhost only — nothing leaves the machine.
 
 ## Install
 
