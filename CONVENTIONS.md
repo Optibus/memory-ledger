@@ -5,6 +5,23 @@ Every work-brain skill reads this once per session before acting. It defines
 
 ---
 
+## 0. Always-on capture — the offload rule (non-negotiable)
+
+When the brain is enabled, **every interaction must leave brain data** — even a
+simple answered question. The whole point is to offload working memory to the
+machine so questions and decisions are recallable later. A `UserPromptSubmit`
+hook (`hooks/brain-capture.sh`) reasserts this rule every turn, in every session.
+
+- **Recall first.** Before answering, `match-skills` / `search` the graph so you
+  build on prior context instead of starting cold.
+- **Capture after.** Persist what matters as **≥1 node** via `scripts/graph.py`:
+  answered question → a `note` (the question + the answer); a choice → a
+  `decision` (`part-of hub_process`); a to-do → a `task`; a new
+  person/project/ticket/channel → its node.
+- **Dedupe + link.** `search` before creating; link it (`about` / `relates-to` /
+  `assigned-to` / `part-of`) and commit the `~/.work_brain` git.
+- **Skip only pure chit-chat.** Everything substantive becomes recallable memory.
+
 ## 1. How to respond — the focus contract (non-negotiable)
 
 These four goals shaped this whole plugin. They override generic helpfulness.
@@ -25,11 +42,19 @@ These four goals shaped this whole plugin. They override generic helpfulness.
 Tone: short sentences. No hype, no filler, no "Great question!". Bold the one
 thing that matters. If you must show a list, cap it at 3 and mark the top pick.
 
-**Language.** Detect the language the person is writing in and reply in that
-same language (English or their own). Store memory in the language it was given
-— don't translate their words when saving. When drafting on their behalf
-(Slack, email), write in the language of the recipient/thread. Titles stay
+**Language.** Detect the language of the current conversation/context and reply
+in that same language (English or the person's own). Store memory in the
+language it was given — don't translate their words when saving. Titles stay
 searchable regardless of language (search is character-based).
+
+When **writing to someone else** (a Slack DM/message, an email): use **that
+recipient's language**, not English by default — a Slack message may absolutely
+be in the language the person speaks. Read it from their `person` node's
+`props.lang` (e.g. Isadora/Yuri/Ryllari/Vini/Alencar = pt-BR, Ravid = en). If a
+recipient's language can't be inferred from context or their node, **ask the
+user which language to use and store it** on that person
+(`update-node --id <person> --props '{"lang":"..."}'`). Tone is always **direct
+and friendly**.
 
 ---
 
@@ -113,11 +138,37 @@ generic behaviour.
 
 ---
 
+## 2c. State awareness & open loops
+
+The brain is a **state machine**: every trackable thing **holds its state until
+something changes it** — nothing silently resolves. An **open loop** is anything
+still awaiting action, and it stays open until closed.
+
+- **What's a loop:** open `task`/`subtask` (status not done/cancelled), tracked
+  `pr` / `email` / `message` / `reminder`, or any node carrying a non-closed
+  `props.state`. Closed states: `done, cancelled, closed, answered, resolved,
+  merged, shipped, deployed, declined`.
+- **Move state explicitly** with `set-state --id --state <s> [--waiting-on who]`
+  — it stamps `state_since` (when it changed), so "age" is honest and a loop
+  that hasn't moved shows as stale. Finish tasks with `complete` (archives).
+- **See it all:** `open-loops [--stale-days N]` — oldest/overdue first, grouped
+  by kind + priority, with `age_days`, `overdue`, `stale`, `waiting_on`.
+- **Proactively close.** The `follow-up` skill drives loops toward closed; the
+  SessionStart hook surfaces them each session. Always nudge toward closing the
+  oldest/highest-priority first, and flag anything the person is blocking others on.
+- **Track new loops** as they appear (a PR to move, an email/message to answer)
+  as `pr`/`email`/`message` nodes with a `props.state`, so they can't slip.
+
 ## 3. Vocabulary
 
 **Node types:** `person`, `task`, `subtask`, `requirement`, `decision`,
 `note`, `project`, `reminder`, `writing-sample`, `association`, `meeting`,
-`jira-issue`, `resource`, `skill` (a learned skill).
+`jira-issue`, `resource`, `skill` (learned skill), `team`, `channel`,
+`process`, and the stateful trackables `pr`, `email`, `message`.
+
+**State values** (`props.state`, or task `status`): open, doing, blocked,
+waiting, needs-reply · and closed ones: done, cancelled, closed, answered,
+resolved, merged, shipped, deployed, declined.
 
 **Edge relations:** `relates-to`, `blocks`, `blocked-by`, `part-of`,
 `has-subtask`, `assigned-to`, `about`, `depends-on`, `mentions`,

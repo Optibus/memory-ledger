@@ -17,6 +17,11 @@ Read `${CLAUDE_PLUGIN_ROOT}/CONVENTIONS.md` once per session first.
    Slack handle in props, use it.
 2. **Draft in the person's voice.** If they have `writing-sample` nodes, apply
    the `writing-style` skill so the message sounds like them, not like a bot.
+3. **Write in the RECIPIENT's language** — direct and friendly (CONVENTIONS §1).
+   Read it from the recipient's `person` node `props.lang` (pt-BR for most of
+   CORD, en for Ravid); a Slack message in the person's own language is expected,
+   not English-by-default. If the language is unknown, **ask the user and store
+   it** on that person before sending.
 3. **Confirm before sending** (outward action): show the resolved recipient and
    the exact text, and get a yes — unless the person clearly already authorized
    this send. For scheduled sends, use `slack_schedule_message`.

@@ -47,14 +47,23 @@ first. Learnings are global, so a skill learned in one project applies in anothe
 
 These are enforced in `CONVENTIONS.md`, which every skill reads first.
 
+**Always-on capture.** When the brain is enabled, a plugin `UserPromptSubmit`
+hook (`hooks/brain-capture.sh`) fires on every prompt in every session and
+injects the standing rule: *recall relevant context before answering, and
+persist the interaction as graph data afterwards* — even a simple answered
+question becomes a recallable node. Disable it by removing/renaming the brain
+home (`~/.work_brain`); the hook then no-ops.
+
 ## Skills
 
 | Skill | What it does |
 |---|---|
 | `remember` | Capture info into the graph as linked nodes. |
+| `ingest-context` | Ingest a Google Meet transcript, Slack thread, email, or plain text into the graph (auto-ingests meeting-transcript emails). |
 | `recall` | Retrieve / resurface context ("what's on my plate", "what's due"). |
 | `add-task` | Create a task **and** break it into micro-steps. |
 | `complete-task` | Mark a task done → move to the archive (never delete). |
+| `follow-up` | Surface every open loop (tasks, PRs, emails, messages) and drive it toward closed. |
 | `learn-skill` | Grow a new skill at runtime, recall it, reinforce it (neuroplasticity). |
 | `visualize` | Open a live, interactive map of the whole graph in the browser. |
 | `remind` | Set a real alarm (scheduled routine) that DMs you on Slack. |

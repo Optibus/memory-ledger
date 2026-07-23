@@ -584,6 +584,88 @@ def cmd_use_skill(args):
 
 
 # ---------------------------------------------------------------------------
+# state awareness / open loops
+# ---------------------------------------------------------------------------
+# A node is an OPEN LOOP until its state says otherwise. State persists (stays
+# the same) until explicitly changed via set-state / update-node.
+CLOSED_STATES = {"done", "cancelled", "closed", "answered", "resolved",
+                 "merged", "shipped", "deployed", "declined"}
+LOOP_TYPES = {"task", "subtask", "reminder", "pr", "email", "message"}
+
+
+def _is_open_loop(d):
+    """True if node d is still an open loop. Tasks/trackables are open unless
+    their status/state is a closed one; other nodes are open only if they carry
+    a non-closed props.state (so notes/people aren't loops by default)."""
+    status = (d.get("status") or "").lower()
+    state = str(d["props"].get("state", "")).lower()
+    if status in CLOSED_STATES or state in CLOSED_STATES:
+        return False
+    if d["type"] in LOOP_TYPES:
+        return True
+    return bool(state)  # any other node is a loop only if it has an open state
+
+
+def cmd_set_state(args):
+    """Change a node's state and stamp WHEN it changed (state_since). For tasks,
+    also mirror it onto status. This is how a loop moves; until then it holds."""
+    con = connect()
+    row = con.execute("SELECT * FROM nodes WHERE id=?", (args.id,)).fetchone()
+    if not row:
+        out({"ok": False, "error": f"no node {args.id}"}); return
+    d = _node_dict(row)
+    p = d["props"]
+    p["state"] = args.state
+    p["state_since"] = now()
+    if args.waiting_on is not None:
+        p["waiting_on"] = args.waiting_on
+    status = d["status"]
+    if d["type"] in ("task", "subtask") and args.state in (
+            "open", "doing", "blocked", "done", "cancelled"):
+        status = args.state
+    con.execute("UPDATE nodes SET status=?, props=?, updated=? WHERE id=?",
+                (status, json.dumps(p), now(), args.id))
+    con.commit()
+    row = con.execute("SELECT * FROM nodes WHERE id=?", (args.id,)).fetchone()
+    out({"ok": True, "node": _node_dict(row)})
+
+
+def cmd_open_loops(args):
+    """Everything still awaiting action, oldest-first. The state-aware view:
+    open tasks, tracked PRs/emails/messages, anything with a non-closed state.
+    `age_days` counts from state_since (when it entered its state) or updated."""
+    con = connect()
+    now_dt = datetime.now(timezone.utc)
+    rows = con.execute("SELECT * FROM nodes").fetchall()
+    loops = []
+    for r in rows:
+        d = _node_dict(r)
+        if not _is_open_loop(d):
+            continue
+        since = d["props"].get("state_since") or d["updated"]
+        since_dt = _parse_dt(since) or now_dt
+        d["age_days"] = (now_dt - since_dt).days
+        d["kind"] = d["type"]
+        d["waiting_on"] = d["props"].get("waiting_on", "")
+        due_dt = _parse_dt(d["due"]) if d["due"] else None
+        d["overdue"] = bool(due_dt and due_dt < now_dt)
+        d["stale"] = d["age_days"] >= args.stale_days
+        loops.append(d)
+    # oldest first; overdue floats up
+    loops.sort(key=lambda x: (not x["overdue"], -x["age_days"]))
+    by_kind, by_prio = {}, {}
+    for x in loops:
+        by_kind[x["kind"]] = by_kind.get(x["kind"], 0) + 1
+        pr = x["props"].get("priority", "--")
+        by_prio[pr] = by_prio.get(pr, 0) + 1
+    out({"ok": True, "count": len(loops),
+         "stale": sum(1 for x in loops if x["stale"]),
+         "overdue": sum(1 for x in loops if x["overdue"]),
+         "by_kind": by_kind, "by_priority": by_prio,
+         "results": loops[: args.limit]})
+
+
+# ---------------------------------------------------------------------------
 # arg parsing
 # ---------------------------------------------------------------------------
 def build_parser():
@@ -649,6 +731,16 @@ def build_parser():
 
     a = sub.add_parser("use-skill"); a.set_defaults(func=cmd_use_skill)
     a.add_argument("--id", required=True)
+
+    a = sub.add_parser("open-loops"); a.set_defaults(func=cmd_open_loops)
+    a.add_argument("--stale-days", dest="stale_days", type=int, default=2)
+    a.add_argument("--limit", type=int, default=50)
+
+    a = sub.add_parser("set-state"); a.set_defaults(func=cmd_set_state)
+    a.add_argument("--id", required=True)
+    a.add_argument("--state", required=True,
+                   help="open|doing|blocked|waiting|needs-reply|done|closed|answered|...")
+    a.add_argument("--waiting-on", dest="waiting_on")
 
     a = sub.add_parser("due"); a.set_defaults(func=cmd_due)
     a.add_argument("--within-days", dest="within_days", type=int, default=7)
