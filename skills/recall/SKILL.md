@@ -1,0 +1,29 @@
+---
+name: recall
+description: Retrieve and resurface things from the work-brain memory graph — answer "what do I know about X", "what's on my plate", "what's due", "what was decided about Y", "how is this connected". Use whenever the person asks about past context, or before acting so you don't lose what's already known.
+---
+
+# recall
+
+Get context back out of the graph, and surface it without overwhelming.
+
+Read `${CLAUDE_PLUGIN_ROOT}/CONVENTIONS.md` once per session first.
+
+## Pick the right lookup
+
+- **Topic / "what do I know about X"** → `search "X"`, then `get-node --id` or
+  `neighbors --id X --depth 1` on the best hit to pull its connections.
+- **"What's on my plate" / open work** → `list --type task --status open`
+  (and `--status doing`).
+- **"What's due / am I behind"** → `due --within-days 7`. Flag `overdue` first.
+- **"How is X connected to Y" / show the web** → `neighbors --id X --depth 2`.
+- **A specific person/project** → `search` for it, then `neighbors` to see
+  everything hanging off it.
+
+## Present it (focus contract)
+
+- Lead with **the single most relevant thing**, bolded.
+- If there's more, say the count ("3 other tasks are open") and offer to show
+  them — don't dump them all unprompted.
+- Overdue/at-risk items come first, in plain calm language.
+- Never paste raw JSON. Translate ids into titles.

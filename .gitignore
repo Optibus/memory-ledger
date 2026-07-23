@@ -1,0 +1,7 @@
+# The brain lives globally at ~/.work_brain, OUTSIDE this repo — it is never
+# committed. Nothing under memory/ should exist in the repo anymore.
+memory/
+
+.idea/
+__pycache__/
+*.pyc
