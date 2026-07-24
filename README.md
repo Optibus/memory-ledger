@@ -31,6 +31,14 @@ it's never committed:
 the done archive: out of your active views, but kept, searchable, and still
 linked so the brain can learn from what worked.
 
+**neo4j master + sections.** The unified source of truth is a **neo4j** graph
+(config in `~/.work_brain/neo4j.json`); the local SQLite is a durable mirror.
+Every write goes to both — and if neo4j is down it's **queued and auto-synced**
+when it's back (`neo4j-status`, `flush`, `scripts/brain_sync.py`). Every node
+carries a **`realm` / section** (`optibus`, `personal`, …) so one graph holds
+work + personal life, filterable (`sections`, `add-node --realm`). The
+visualizer reads from neo4j too.
+
 **The brain grows (neuroplasticity).** When a repeatable procedure shows up, it
 `learn`s a new skill — writing it to `learned_skills/` and recording *when to use
 it*. Next time a matching situation appears, it recalls the skill (associative

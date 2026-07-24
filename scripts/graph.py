@@ -15,13 +15,18 @@ DB location: $WORK_BRAIN_DB, else <plugin>/memory/graph.db
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
 import secrets
 import sys
+import urllib.request
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+
+# Default section (realm) for new nodes; override with $WORK_BRAIN_REALM or --realm.
+DEFAULT_REALM = os.environ.get("WORK_BRAIN_REALM", "optibus")
 
 # ---------------------------------------------------------------------------
 # vocabulary (soft — not enforced, just documented + used for defaults)
@@ -143,7 +148,175 @@ def _ensure_schema(con) -> None:
         END;
         """
     )
+    # --- realm (section) column + neo4j sync outbox ---
+    cols = [r[1] for r in con.execute("PRAGMA table_info(nodes)").fetchall()]
+    if "realm" not in cols:
+        con.execute("ALTER TABLE nodes ADD COLUMN realm TEXT DEFAULT ''")
+        con.execute("UPDATE nodes SET realm=? WHERE realm IS NULL OR realm=''",
+                    (DEFAULT_REALM,))
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS outbox ("
+        "seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, ref TEXT, created TEXT)")
     con.commit()
+
+
+# ---------------------------------------------------------------------------
+# neo4j master + offline outbox
+# ---------------------------------------------------------------------------
+# neo4j is the unified master store. Every mutation also writes to the local
+# SQLite mirror (durable + offline) and is queued in `outbox`; we push to neo4j
+# immediately, and if neo4j is down the queue drains automatically on the next
+# successful op or an explicit `flush`.
+
+def _neo4j_cfg() -> dict:
+    cfg = {}
+    f = home_dir() / "neo4j.json"
+    if f.exists():
+        try:
+            cfg = json.loads(f.read_text())
+        except Exception:
+            cfg = {}
+    return {
+        "url": os.environ.get("WORK_BRAIN_NEO4J_URL", cfg.get("url", "")),
+        "db": os.environ.get("WORK_BRAIN_NEO4J_DB", cfg.get("db", "neo4j")),
+        "user": os.environ.get("WORK_BRAIN_NEO4J_USER", cfg.get("user", "neo4j")),
+        "password": os.environ.get("WORK_BRAIN_NEO4J_PASSWORD", cfg.get("password", "")),
+    }
+
+
+def _neo4j_call(statements, timeout=6):
+    """POST Cypher to neo4j's HTTP tx endpoint. Returns (ok, error_or_None)."""
+    cfg = _neo4j_cfg()
+    if not cfg["url"] or not cfg["password"]:
+        return False, "neo4j not configured"
+    endpoint = cfg["url"].rstrip("/") + f"/db/{cfg['db']}/tx/commit"
+    auth = base64.b64encode(f"{cfg['user']}:{cfg['password']}".encode()).decode()
+    req = urllib.request.Request(
+        endpoint, data=json.dumps({"statements": statements}).encode(),
+        headers={"Content-Type": "application/json", "Accept": "application/json",
+                 "Authorization": f"Basic {auth}"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = json.loads(resp.read())
+        errs = body.get("errors") or []
+        return (not errs), (errs[0].get("message") if errs else None)
+    except Exception as e:
+        return False, str(e)
+
+
+def _neo4j_up() -> bool:
+    cfg = _neo4j_cfg()
+    if not cfg["url"]:
+        return False
+    try:
+        urllib.request.urlopen(cfg["url"].rstrip("/") + "/", timeout=3).read()
+        return True
+    except Exception:
+        return False
+
+
+def _clean_props(props: dict) -> dict:
+    out = {}
+    for k, v in (props or {}).items():
+        if isinstance(v, (str, int, float, bool)) or v is None:
+            out[k] = v
+        elif isinstance(v, list) and all(isinstance(x, (str, int, float, bool)) for x in v):
+            out[k] = v
+        else:
+            out[k] = json.dumps(v, ensure_ascii=False)
+    return out
+
+
+EDGE_SEP = "\x1f"
+
+_NODE_UPSERT = (
+    "UNWIND $nodes AS n MERGE (x:Node {id:n.id}) "
+    "SET x += n.props, x.realm=n.realm, x.type=n.type, x.title=n.title, "
+    "x.body=n.body, x.status=n.status, x.due=n.due, x.created=n.created, x.updated=n.updated")
+_EDGE_UPSERT = ("UNWIND $edges AS e MATCH (a:Node {id:e.src}),(b:Node {id:e.dst}) "
+                "MERGE (a)-[r:REL {rel:e.rel}]->(b)")
+_NODE_DEL = "UNWIND $ids AS i MATCH (x:Node {id:i}) DETACH DELETE x"
+_EDGE_DEL = ("UNWIND $edges AS e MATCH (a:Node {id:e.src})-[r:REL {rel:e.rel}]->"
+             "(b:Node {id:e.dst}) DELETE r")
+
+
+def _enqueue(con, kind, ref):
+    con.execute("INSERT INTO outbox(kind,ref,created) VALUES(?,?,?)", (kind, ref, now()))
+
+
+def _node_payload(con, nid):
+    r = con.execute("SELECT * FROM nodes WHERE id=?", (nid,)).fetchone()
+    if not r:
+        return None
+    d = dict(r)
+    try:
+        props = _clean_props(json.loads(d.get("props") or "{}"))
+    except Exception:
+        props = {}
+    return {"id": d["id"], "type": d["type"], "title": d["title"], "body": d["body"],
+            "status": d["status"], "due": d["due"], "created": d["created"],
+            "updated": d["updated"], "realm": d.get("realm") or DEFAULT_REALM, "props": props}
+
+
+def _flush(con):
+    """Drain the outbox to neo4j. Upserts current state of queued nodes/edges and
+    applies queued deletes. On failure (neo4j down) leaves the queue intact."""
+    rows = con.execute("SELECT seq,kind,ref FROM outbox ORDER BY seq").fetchall()
+    if not rows:
+        return {"ok": True, "pending": 0, "pushed": 0}
+    node_ids, edge_refs, del_ids, del_edges, seqs = [], [], [], [], []
+    for r in rows:
+        seqs.append(r["seq"])
+        if r["kind"] == "node":
+            node_ids.append(r["ref"])
+        elif r["kind"] == "edge":
+            edge_refs.append(r["ref"])
+        elif r["kind"] == "del_node":
+            del_ids.append(r["ref"])
+        elif r["kind"] == "del_edge":
+            del_edges.append(r["ref"])
+    nodes = [n for n in (_node_payload(con, i) for i in set(node_ids)) if n]
+    edges = []
+    for ref in set(edge_refs):
+        s, d, rel = ref.split(EDGE_SEP)
+        if con.execute("SELECT 1 FROM edges WHERE src=? AND dst=? AND rel=?", (s, d, rel)).fetchone():
+            edges.append({"src": s, "dst": d, "rel": rel})
+    dedges = [dict(zip(("src", "dst", "rel"), ref.split(EDGE_SEP))) for ref in set(del_edges)]
+    stmts = []
+    if nodes:
+        stmts.append({"statement": _NODE_UPSERT, "parameters": {"nodes": nodes}})
+    if edges:
+        stmts.append({"statement": _EDGE_UPSERT, "parameters": {"edges": edges}})
+    if dedges:
+        stmts.append({"statement": _EDGE_DEL, "parameters": {"edges": dedges}})
+    if del_ids:
+        stmts.append({"statement": _NODE_DEL, "parameters": {"ids": list(set(del_ids))}})
+    if not stmts:
+        con.executemany("DELETE FROM outbox WHERE seq=?", [(s,) for s in seqs]); con.commit()
+        return {"ok": True, "pending": 0, "pushed": 0}
+    ok, err = _neo4j_call(stmts)
+    if not ok:
+        return {"ok": False, "error": err, "pending": len(seqs)}
+    con.executemany("DELETE FROM outbox WHERE seq=?", [(s,) for s in seqs]); con.commit()
+    return {"ok": True, "pending": 0,
+            "pushed": {"nodes": len(nodes), "edges": len(edges),
+                       "del_nodes": len(set(del_ids)), "del_edges": len(dedges)}}
+
+
+def _after_write(con, nodes=(), edges=(), del_nodes=(), del_edges=()):
+    """Queue changes for neo4j and (unless suppressed) push immediately."""
+    for nid in nodes:
+        _enqueue(con, "node", nid)
+    for e in edges:
+        _enqueue(con, "edge", EDGE_SEP.join(e))
+    for nid in del_nodes:
+        _enqueue(con, "del_node", nid)
+    for e in del_edges:
+        _enqueue(con, "del_edge", EDGE_SEP.join(e))
+    con.commit()
+    if os.environ.get("WORK_BRAIN_NO_AUTOSYNC"):
+        return None
+    return _flush(con)
 
 
 def _node_dict(row) -> dict:
@@ -192,16 +365,18 @@ def cmd_add_node(args):
     con = connect()
     nid = args.id or _gen_id(con, args.type, args.title)
     ts = now()
+    realm = getattr(args, "realm", None) or DEFAULT_REALM
     con.execute(
-        "INSERT INTO nodes(id,type,title,body,props,status,due,created,updated)"
-        " VALUES(?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO nodes(id,type,title,body,props,status,due,realm,created,updated)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?)",
         (nid, args.type, args.title, args.body or "",
          json.dumps(_parse_props(args.props)), args.status or "",
-         args.due or "", ts, ts),
+         args.due or "", realm, ts, ts),
     )
     con.commit()
+    sync = _after_write(con, nodes=[nid])
     row = con.execute("SELECT * FROM nodes WHERE id=?", (nid,)).fetchone()
-    out({"ok": True, "node": _node_dict(row)})
+    out({"ok": True, "node": _node_dict(row), "sync": sync})
 
 
 def cmd_update_node(args):
@@ -222,15 +397,17 @@ def cmd_update_node(args):
         (title, body, json.dumps(props), status, due, now(), args.id),
     )
     con.commit()
+    sync = _after_write(con, nodes=[args.id])
     row = con.execute("SELECT * FROM nodes WHERE id=?", (args.id,)).fetchone()
-    out({"ok": True, "node": _node_dict(row)})
+    out({"ok": True, "node": _node_dict(row), "sync": sync})
 
 
 def cmd_del_node(args):
     con = connect()
     cur = con.execute("DELETE FROM nodes WHERE id=?", (args.id,))
     con.commit()
-    out({"ok": cur.rowcount > 0, "deleted": args.id})
+    sync = _after_write(con, del_nodes=[args.id])
+    out({"ok": cur.rowcount > 0, "deleted": args.id, "sync": sync})
 
 
 def cmd_add_edge(args):
@@ -246,7 +423,9 @@ def cmd_add_edge(args):
         con.commit()
     except Exception:
         pass  # UNIQUE dup -> treat as idempotent
-    out({"ok": True, "edge": {"src": args.src, "dst": args.dst, "rel": args.rel}})
+    sync = _after_write(con, edges=[(args.src, args.dst, args.rel)])
+    out({"ok": True, "edge": {"src": args.src, "dst": args.dst, "rel": args.rel},
+         "sync": sync})
 
 
 def cmd_del_edge(args):
@@ -256,7 +435,8 @@ def cmd_del_edge(args):
         (args.src, args.dst, args.rel),
     )
     con.commit()
-    out({"ok": cur.rowcount > 0})
+    sync = _after_write(con, del_edges=[(args.src, args.dst, args.rel)])
+    out({"ok": cur.rowcount > 0, "sync": sync})
 
 
 def _edges_of(con, nid):
@@ -462,8 +642,9 @@ def cmd_complete(args):
     con.execute("UPDATE nodes SET status=?, props=?, updated=? WHERE id=?",
                 ("done", json.dumps(props), now(), args.id))
     con.commit()
+    sync = _after_write(con, nodes=[args.id])
     row = con.execute("SELECT * FROM nodes WHERE id=?", (args.id,)).fetchone()
-    out({"ok": True, "archived": True, "node": _node_dict(row)})
+    out({"ok": True, "archived": True, "node": _node_dict(row), "sync": sync})
 
 
 def cmd_done(args):
@@ -523,6 +704,7 @@ def cmd_add_skill(args):
             (node_id, "skill", args.title, node_body, json.dumps(props),
              "active", "", ts, ts))
     con.commit()
+    sync = _after_write(con, nodes=[node_id])
 
     wrote_file = False
     if not args.no_file:
@@ -579,6 +761,7 @@ def cmd_use_skill(args):
     con.execute("UPDATE nodes SET props=?, updated=? WHERE id=?",
                 (json.dumps(p), now(), args.id))
     con.commit()
+    _after_write(con, nodes=[args.id])
     row = con.execute("SELECT * FROM nodes WHERE id=?", (args.id,)).fetchone()
     out({"ok": True, "skill": _node_dict(row)})
 
@@ -626,8 +809,9 @@ def cmd_set_state(args):
     con.execute("UPDATE nodes SET status=?, props=?, updated=? WHERE id=?",
                 (status, json.dumps(p), now(), args.id))
     con.commit()
+    sync = _after_write(con, nodes=[args.id])
     row = con.execute("SELECT * FROM nodes WHERE id=?", (args.id,)).fetchone()
-    out({"ok": True, "node": _node_dict(row)})
+    out({"ok": True, "node": _node_dict(row), "sync": sync})
 
 
 def cmd_open_loops(args):
@@ -668,6 +852,31 @@ def cmd_open_loops(args):
 # ---------------------------------------------------------------------------
 # arg parsing
 # ---------------------------------------------------------------------------
+def cmd_flush(args):
+    con = connect()
+    pending = con.execute("SELECT COUNT(*) c FROM outbox").fetchone()["c"]
+    res = _flush(con)
+    res["was_pending"] = pending
+    out(res)
+
+
+def cmd_neo4j_status(args):
+    con = connect()
+    cfg = _neo4j_cfg()
+    pending = con.execute("SELECT COUNT(*) c FROM outbox").fetchone()["c"]
+    out({"ok": True, "configured": bool(cfg["url"] and cfg["password"]),
+         "url": cfg["url"], "up": _neo4j_up(), "pending_ops": pending})
+
+
+def cmd_sections(args):
+    con = connect()
+    rows = con.execute(
+        "SELECT COALESCE(NULLIF(realm,''),?) AS realm, COUNT(*) c "
+        "FROM nodes GROUP BY realm ORDER BY c DESC", (DEFAULT_REALM,)).fetchall()
+    out({"ok": True, "default": DEFAULT_REALM,
+         "sections": {r["realm"]: r["c"] for r in rows}})
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="graph", description="work-brain graph engine")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -680,6 +889,11 @@ def build_parser():
     a.add_argument("--title", required=True)
     a.add_argument("--body"); a.add_argument("--props")
     a.add_argument("--status"); a.add_argument("--due"); a.add_argument("--id")
+    a.add_argument("--realm", help="section: optibus | personal | ... (default $WORK_BRAIN_REALM or optibus)")
+
+    a = sub.add_parser("flush").set_defaults(func=cmd_flush)
+    sub.add_parser("neo4j-status").set_defaults(func=cmd_neo4j_status)
+    sub.add_parser("sections").set_defaults(func=cmd_sections)
 
     a = sub.add_parser("update-node"); a.set_defaults(func=cmd_update_node)
     a.add_argument("--id", required=True)

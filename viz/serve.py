@@ -26,7 +26,7 @@ import graph  # noqa: E402  (the engine — single source of truth for the DB)
 INDEX = HERE / "index.html"
 
 
-def graph_payload() -> dict:
+def _sqlite_payload() -> dict:
     con = graph.connect()
     node_rows = con.execute("SELECT * FROM nodes").fetchall()
     edge_rows = con.execute("SELECT src, dst, rel FROM edges").fetchall()
@@ -54,10 +54,72 @@ def graph_payload() -> dict:
         "nodes": nodes, "edges": edges,
         "meta": {"nodes": len(nodes), "edges": len(edges),
                  "by_type": by_type, "generated": graph.now(),
-                 "db": str(graph.db_path())},
+                 "source": "sqlite (local)", "db": str(graph.db_path())},
         # cheap change token so the client only re-lays-out when something moved
-        "version": f"{len(nodes)}-{len(edges)}-{max((n['props'].get('updated_at','') for n in nodes), default='')}",
+        "version": f"sqlite-{len(nodes)}-{len(edges)}-{max((n['props'].get('updated_at','') for n in nodes), default='')}",
     }
+
+
+def _neo4j_payload():
+    """Fetch the graph from the neo4j master. Returns None if not configured /
+    unreachable, so the caller can fall back to the local SQLite mirror."""
+    import base64
+    import urllib.request
+    cfg = graph._neo4j_cfg()
+    if not (cfg["url"] and cfg["password"]):
+        return None
+    endpoint = cfg["url"].rstrip("/") + f"/db/{cfg['db']}/tx/commit"
+    auth = base64.b64encode(f"{cfg['user']}:{cfg['password']}".encode()).decode()
+    body = json.dumps({"statements": [
+        {"statement": "MATCH (n:Node) RETURN n"},
+        {"statement": "MATCH (a:Node)-[r:REL]->(b:Node) RETURN a.id, b.id, r.rel"},
+    ]}).encode()
+    req = urllib.request.Request(endpoint, data=body, headers={
+        "Content-Type": "application/json", "Accept": "application/json",
+        "Authorization": f"Basic {auth}"})
+    try:
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read())
+        if data.get("errors"):
+            return None
+        node_rows = data["results"][0]["data"]
+        edge_rows = data["results"][1]["data"]
+    except Exception:
+        return None
+
+    CORE = {"id", "type", "title", "body", "status", "due", "created", "updated"}
+    degree = {}
+    edges = []
+    for d in edge_rows:
+        s, dst, rel = d["row"]
+        edges.append({"src": s, "dst": dst, "rel": rel})
+        degree[s] = degree.get(s, 0) + 1
+        degree[dst] = degree.get(dst, 0) + 1
+    nodes, by_type, by_realm = [], {}, {}
+    for d in node_rows:
+        p = d["row"][0] or {}
+        nid = p.get("id")
+        realm = p.get("realm", "")
+        props = {k: v for k, v in p.items() if k not in CORE}
+        nodes.append({"id": nid, "type": p.get("type", ""), "title": p.get("title", ""),
+                      "status": p.get("status", ""), "due": p.get("due", ""),
+                      "body": p.get("body", ""), "props": props,
+                      "degree": degree.get(nid, 0)})
+        by_type[p.get("type", "")] = by_type.get(p.get("type", ""), 0) + 1
+        by_realm[realm] = by_realm.get(realm, 0) + 1
+    return {
+        "nodes": nodes, "edges": edges,
+        "meta": {"nodes": len(nodes), "edges": len(edges), "by_type": by_type,
+                 "by_realm": by_realm, "generated": graph.now(),
+                 "source": f"neo4j ({cfg['url']})"},
+        "version": f"neo4j-{len(nodes)}-{len(edges)}",
+    }
+
+
+def graph_payload() -> dict:
+    """Prefer the neo4j master; fall back to the local SQLite mirror if neo4j is
+    unreachable so the map still works offline."""
+    return _neo4j_payload() or _sqlite_payload()
 
 
 class Handler(BaseHTTPRequestHandler):

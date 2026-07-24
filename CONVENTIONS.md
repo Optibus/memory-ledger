@@ -159,6 +159,23 @@ still awaiting action, and it stays open until closed.
 - **Track new loops** as they appear (a PR to move, an email/message to answer)
   as `pr`/`email`/`message` nodes with a `props.state`, so they can't slip.
 
+## 2d. Storage: neo4j master + local mirror + sections
+
+The unified **master store is neo4j** (Gabriel's home graph; config in
+`~/.work_brain/neo4j.json`). Every mutation writes to the local SQLite mirror
+(durable, offline, fast reads) **and** is pushed to neo4j; if neo4j is down the
+change is queued in an `outbox` and **drains automatically** on the next
+successful write or an explicit `flush`. neo4j is the source of truth; SQLite is
+the resilience cache.
+- `neo4j-status` — configured / up / pending-ops · `flush` — drain the queue.
+- `$WORK_BRAIN_NO_AUTOSYNC=1` queues without per-op push (for heavy batch loads;
+  `flush` afterwards) · `scripts/brain_sync.py` does a full bulk reconcile.
+- The visualizer (`viz/serve.py`) reads from neo4j, falling back to SQLite if down.
+
+**Sections (realms):** every node has a `realm` — the section it belongs to:
+`optibus` (work; the default) and `personal` (add others as needed). Set with
+`add-node --realm <section>` or `$WORK_BRAIN_REALM`; `sections` lists the counts.
+
 ## 3. Vocabulary
 
 **Node types:** `person`, `task`, `subtask`, `requirement`, `decision`,
