@@ -57,19 +57,60 @@
   .rel .r{color:var(--muted);font-style:italic}
   #hint{bottom:12px;left:12px;color:var(--muted);padding:6px 10px;font-size:11px}
   #err{bottom:12px;right:12px;color:#f85149;padding:6px 10px;display:none}
+
+  /* ---- mode switcher (Map / Dashboard) ---- */
+  #modebar{top:12px;left:50%;transform:translateX(-50%);display:flex;gap:4px;
+    padding:4px;z-index:20}
+  #modebar button{border:0;background:transparent;color:var(--muted);cursor:pointer;
+    border-radius:7px;padding:6px 14px;font-size:13px;font-weight:600}
+  #modebar button.active{background:var(--accent);color:#0d1117}
+
+  /* ---- dashboard tab ---- */
+  body.mode-dash{overflow:auto}
+  body.mode-dash #canvas,body.mode-dash .map-only{display:none}
+  body.mode-map #dash{display:none}
+  #dash{max-width:840px;margin:0 auto;padding:64px 16px 60px}
+  #dnav{display:flex;gap:6px;overflow-x:auto;padding:6px 0 14px;position:sticky;top:0;
+    background:var(--bg);z-index:2}
+  #dnav button{white-space:nowrap;border:1px solid var(--border);background:var(--panel);
+    color:var(--muted);border-radius:999px;padding:6px 13px;font-size:13px;cursor:pointer}
+  #dnav button.active{background:var(--accent);color:#0d1117;border-color:var(--accent)}
+  #dctl{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}
+  #dctl label{font-size:12px;color:var(--muted);display:flex;gap:5px;align-items:center}
+  #dctl input,#dctl select{background:#0d1117;color:var(--fg);border:1px solid var(--border);
+    border-radius:7px;padding:5px 8px;font-size:13px}
+  #dmeta{color:var(--muted);font-size:12.5px;margin:0 0 12px}
+  .dcard{background:var(--panel);border:1px solid var(--border);border-radius:11px;
+    padding:11px 13px;margin-bottom:9px}
+  .dcard .dt{font-weight:600;margin-bottom:6px;word-break:break-word}
+  .dchips{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .dchip{background:#0d1117;color:var(--muted);border:1px solid var(--border);
+    border-radius:6px;padding:2px 7px;font-size:11.5px;font-variant-numeric:tabular-nums}
+  .dchip.due{color:var(--fg);font-weight:600}
+  .dchip.over{color:#f85149;border-color:#f85149}
+  .dchip.st-done,.dchip.st-closed,.dchip.st-merged,.dchip.st-answered{color:#3fb950}
+  .dchip.st-blocked,.dchip.st-waiting{color:#f0883e}
+  .dwait{color:var(--muted);font-size:12.5px;margin-top:6px}
+  .dwait b{color:var(--fg);font-weight:500}
+  .dempty{color:var(--muted);text-align:center;padding:44px 0}
 </style>
 </head>
-<body>
+<body class="mode-map">
 <canvas id="canvas"></canvas>
 
-<div id="top" class="panel">
+<div id="modebar" class="panel">
+  <button data-mode="map" class="active">🗺 Map</button>
+  <button data-mode="dash">📋 Dashboard</button>
+</div>
+
+<div id="top" class="panel map-only">
   <span class="title">🧠 work-<b>brain</b></span>
   <input id="search" placeholder="search nodes… (title, type, id)">
   <span id="stats">—</span>
   <span class="live"><span class="dot"></span><span id="livetxt">live</span></span>
 </div>
 
-<div id="legend" class="panel">
+<div id="legend" class="panel map-only">
   <h4>Node types</h4>
   <div id="chips"></div>
   <div class="toggle">
@@ -77,9 +118,17 @@
   </div>
 </div>
 
-<div id="detail" class="panel"></div>
-<div id="hint" class="panel">scroll = zoom · drag bg = pan · drag node = pin · click = inspect · dbl-click bg = reset</div>
-<div id="err" class="panel"></div>
+<div id="detail" class="panel map-only"></div>
+<div id="hint" class="panel map-only">scroll = zoom · drag bg = pan · drag node = pin · click = inspect · dbl-click bg = reset</div>
+<div id="err" class="panel map-only"></div>
+
+<!-- Dashboard tab: the off-token query views (today / tomorrow / week / agenda / closed / range) -->
+<div id="dash">
+  <div id="dnav"></div>
+  <div id="dctl"></div>
+  <p id="dmeta"></p>
+  <div id="dlist"></div>
+</div>
 
 <script>
 const COLORS = {
@@ -192,6 +241,7 @@ let selNeighbors=new Set();
 
 // ---- render ----
 function draw(){
+  if(mode!=='map'){ requestAnimationFrame(draw); return; }  // pause physics off-tab
   step();
   ctx.clearRect(0,0,W,H);
   const focus = selected||hover;
@@ -336,6 +386,96 @@ function buildChips(byType){
 }
 document.getElementById('search').addEventListener('input',e=>query=e.target.value.trim());
 document.getElementById('hideDone').addEventListener('change',e=>{hideDone=e.target.checked;alpha=Math.max(alpha,.3);});
+
+// ---- mode switch (Map <-> Dashboard) ----
+let mode='map';
+function setMode(m){
+  mode=m;
+  document.body.className='mode-'+m;
+  document.querySelectorAll('#modebar button').forEach(b=>
+    b.classList.toggle('active', b.dataset.mode===m));
+  if(m==='map'){ alpha=Math.max(alpha,.5); }          // reheat physics on return
+  else { Dash.show(); }                                // (re)load current view
+}
+document.querySelectorAll('#modebar button').forEach(b=>
+  b.onclick=()=>setMode(b.dataset.mode));
+
+// ---- dashboard tab (scoped so nothing collides with the map globals) ----
+const Dash = (function(){
+  const VIEWS=["agenda","today","tomorrow","week","closed","range"];
+  const st={ view:"agenda", from:"", to:"", status:"any", since_days:7 };
+  const $=s=>document.querySelector(s);
+  const mk=(t,c,txt)=>{const e=document.createElement(t); if(c)e.className=c;
+    if(txt!=null)e.textContent=txt; return e;};
+  const isoAdd=d=>{const x=new Date();x.setDate(x.getDate()+d);return x.toISOString().slice(0,10);};
+
+  function tabs(){
+    const nav=$("#dnav"); nav.innerHTML="";
+    VIEWS.forEach(v=>{ const b=mk("button",v===st.view?"active":null,v);
+      b.onclick=()=>{ st.view=v; tabs(); ctl(); load(); }; nav.appendChild(b); });
+  }
+  function ctl(){
+    const c=$("#dctl"); c.innerHTML="";
+    if(st.view==="range"){
+      if(!st.from) st.from=isoAdd(0);
+      if(!st.to) st.to=isoAdd(14);
+      c.appendChild(dateBox("from")); c.appendChild(dateBox("to"));
+      const sel=mk("select"); ["any","open","done"].forEach(o=>{const op=mk("option",null,o);
+        op.value=o; if(o===st.status)op.selected=true; sel.appendChild(op);});
+      sel.onchange=e=>{ st.status=e.target.value; load(); };
+      const l=mk("label"); l.appendChild(mk("span",null,"status")); l.appendChild(sel); c.appendChild(l);
+    } else if(st.view==="closed"){
+      const inp=mk("input"); inp.type="number"; inp.min=1; inp.value=st.since_days; inp.style.width="64px";
+      inp.onchange=e=>{ st.since_days=+e.target.value||7; load(); };
+      const l=mk("label"); l.appendChild(mk("span",null,"since (days)")); l.appendChild(inp); c.appendChild(l);
+    }
+  }
+  function dateBox(key){
+    const inp=mk("input"); inp.type="date"; inp.value=st[key];
+    inp.onchange=e=>{ st[key]=e.target.value; load(); };
+    const l=mk("label"); l.appendChild(mk("span",null,key)); l.appendChild(inp); return l;
+  }
+  function qs(){
+    const p=new URLSearchParams();
+    if(st.view==="range"){ p.set("from",st.from); p.set("to",st.to); p.set("status",st.status); }
+    if(st.view==="closed") p.set("since_days",st.since_days);
+    const s=p.toString(); return s?("?"+s):"";
+  }
+  async function load(){
+    const list=$("#dlist"), meta=$("#dmeta");
+    meta.textContent="loading…"; list.innerHTML="";
+    try{
+      const r=await fetch("/api/"+st.view+qs()); const d=await r.json();
+      if(!d.ok){ meta.innerHTML='<span style="color:#f85149">'+(d.error||"error")+'</span>'; return; }
+      meta.textContent=d.title+" — "+d.count+" item"+(d.count===1?"":"s");
+      if(!d.results.length){ list.appendChild(mk("div","dempty","Nothing here. Clear head. ✨")); return; }
+      const today=isoAdd(0);
+      d.results.forEach(row=>list.appendChild(card(row,today)));
+    }catch(e){ meta.innerHTML='<span style="color:#f85149">can\'t reach server ('+e+')</span>'; }
+  }
+  function card(row,today){
+    const c=mk("div","dcard"); c.appendChild(mk("div","dt",row.title||"(untitled)"));
+    const chips=mk("div","dchips");
+    if(row.due_local && row.due_local!=="--"){
+      const over=row.due_local<today;
+      chips.appendChild(mk("span","dchip due"+(over?" over":""),"⏱ "+row.due_local));
+    }
+    if(row.type) chips.appendChild(mk("span","dchip",row.type));
+    if(row.status) chips.appendChild(mk("span","dchip st-"+row.status,row.status));
+    if(row.realm) chips.appendChild(mk("span","dchip",row.realm));
+    c.appendChild(chips);
+    if(row.waiting_on){ const w=mk("div","dwait"); w.innerHTML="waiting on: <b></b>";
+      w.querySelector("b").textContent=row.waiting_on; c.appendChild(w); }
+    return c;
+  }
+  let built=false, timer=null;
+  function show(){
+    if(!built){ tabs(); ctl(); built=true; }
+    load();
+    clearInterval(timer); timer=setInterval(()=>{ if(mode==='dash') load(); }, 120000);
+  }
+  return { show };
+})();
 
 // ---- go ----
 load(); setInterval(load, 2000); requestAnimationFrame(draw);

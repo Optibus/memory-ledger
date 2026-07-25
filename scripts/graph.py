@@ -392,9 +392,10 @@ def cmd_update_node(args):
     props = cur["props"]
     if args.props is not None:
         props = {**props, **_parse_props(args.props)}
+    realm = args.realm if getattr(args, "realm", None) else (cur.get("realm") or DEFAULT_REALM)
     con.execute(
-        "UPDATE nodes SET title=?,body=?,props=?,status=?,due=?,updated=? WHERE id=?",
-        (title, body, json.dumps(props), status, due, now(), args.id),
+        "UPDATE nodes SET title=?,body=?,props=?,status=?,due=?,realm=?,updated=? WHERE id=?",
+        (title, body, json.dumps(props), status, due, realm, now(), args.id),
     )
     con.commit()
     sync = _after_write(con, nodes=[args.id])
@@ -706,8 +707,11 @@ def cmd_add_skill(args):
     con.commit()
     sync = _after_write(con, nodes=[node_id])
 
+    # Node-first: a learned process lives in the DB (portable, synced everywhere).
+    # A markdown file is written ONLY when explicitly asked for (--with-file) — the
+    # DB is the source of truth, the file is just an optional local export.
     wrote_file = False
-    if not args.no_file:
+    if args.with_file:
         skill_path.parent.mkdir(parents=True, exist_ok=True)
         skill_path.write_text(_SKILL_TEMPLATE.format(
             name=name, title=args.title, when=when or "(describe when to use)",
@@ -715,7 +719,7 @@ def cmd_add_skill(args):
         wrote_file = True
 
     row = con.execute("SELECT * FROM nodes WHERE id=?", (node_id,)).fetchone()
-    out({"ok": True, "skill": _node_dict(row),
+    out({"ok": True, "skill": _node_dict(row), "stored": "db",
          "skill_file": str(skill_path) if wrote_file else None})
 
 
@@ -735,14 +739,122 @@ def cmd_match_skills(args):
             "SELECT n.* FROM nodes_fts f JOIN nodes n ON n.rowid=f.rowid"
             " WHERE nodes_fts MATCH ? AND n.type='skill' ORDER BY rank",
             (terms,)).fetchall() if terms else []
+        results = [_node_dict(r) for r in rows]  # already in FTS relevance order
+        # Rank by RELEVANCE first (FTS order), with reinforcement as a bounded
+        # booster: each prior use nudges a skill up, capped, so a strongly-learned
+        # skill edges ahead of equally-relevant peers but a weak match can never
+        # outrank a strong one. (Before: pure usage sort buried the best match.)
+        WEIGHT, CAP = 0.5, 6
+        for i, r in enumerate(results):
+            uses = int(r["props"].get("usage_count", 0) or 0)
+            r["_score"] = i - min(uses, CAP) * WEIGHT
+        results.sort(key=lambda r: r["_score"])
+        for r in results:
+            r.pop("_score", None)
     else:
+        # no cue -> nothing to be relevant to; surface the most-reinforced skills
         rows = con.execute(
             "SELECT * FROM nodes WHERE type='skill' ORDER BY updated DESC").fetchall()
-    results = [_node_dict(r) for r in rows]
-    # stronger (more-used) skills first among matches
-    results.sort(key=lambda r: r["props"].get("usage_count", 0), reverse=True)
+        results = [_node_dict(r) for r in rows]
+        results.sort(key=lambda r: r["props"].get("usage_count", 0), reverse=True)
     out({"ok": True, "count": len(results),
          "results": results[: args.limit]})
+
+
+def _plugin_skills_dir() -> Path:
+    """The plugin's authored skills live beside the engine (../skills)."""
+    return Path(__file__).resolve().parent.parent / "skills"
+
+
+def _parse_frontmatter(text: str):
+    """Split a `---`-delimited YAML-ish frontmatter block from the body. Returns
+    (meta, body). Values are single-line `key: value` pairs (enough for skills)."""
+    meta, body = {}, text
+    m = re.match(r"^---\s*\n(.*?)\n---\s*\n?(.*)$", text, re.DOTALL)
+    if m:
+        for line in m.group(1).splitlines():
+            if ":" in line and not line.lstrip().startswith("#"):
+                k, v = line.split(":", 1)
+                meta[k.strip()] = v.strip()
+        body = m.group(2)
+    return meta, body
+
+
+def _extract_triggers(meta: dict, body: str) -> str:
+    """Best-effort 'when to use' cue for a skill: an explicit When-to-use line,
+    else a 'Use ...' clause in the description, else the whole description."""
+    m = re.search(r"(?im)^\**\s*when to use[^\n:]*:\**\s*(.+)$", body)
+    if m and m.group(1).strip():
+        return m.group(1).strip()
+    m = re.search(r"(?im)^\s*##+\s*when to use\s*\n+(.+?)(?:\n\s*\n|\Z)", body, re.DOTALL)
+    if m and m.group(1).strip():
+        return " ".join(m.group(1).split())
+    desc = meta.get("description", "")
+    m = re.search(r"(Use (?:for|when|this)[^.]*\.)", desc)
+    return (m.group(1) if m else desc).strip()
+
+
+def _ingest_skill_file(con, path: Path, kind: str, realm: str):
+    """Upsert one SKILL.md as a `skill` node — triggers + full procedure land in
+    the DB (portable, synced), so the skill is no longer isolated in a file."""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    meta, body = _parse_frontmatter(text)
+    name = slugify(meta.get("name") or path.parent.name or path.stem)
+    title = meta.get("name") or name
+    triggers = _extract_triggers(meta, body)
+    node_id = f"skill_{name}"
+    node_body = f"WHEN TO USE: {triggers}\n\n{body.strip()}"
+    ts = now()
+    existing = con.execute("SELECT * FROM nodes WHERE id=?", (node_id,)).fetchone()
+    if existing:
+        cur = _node_dict(existing)
+        props = {**cur["props"], "triggers": triggers, "kind": kind,
+                 "source_path": str(path), "description": meta.get("description", ""),
+                 "ingested_at": ts}
+        con.execute("UPDATE nodes SET title=?, body=?, props=?, realm=?, updated=? WHERE id=?",
+                    (title, node_body, json.dumps(props),
+                     cur.get("realm") or realm, ts, node_id))
+        action = "updated"
+    else:
+        props = {"triggers": triggers, "kind": kind, "source_path": str(path),
+                 "description": meta.get("description", ""), "usage_count": 0,
+                 "confidence": 1.0, "learned_at": ts, "ingested_at": ts}
+        con.execute(
+            "INSERT INTO nodes(id,type,title,body,props,status,due,realm,created,updated)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (node_id, "skill", title, node_body, json.dumps(props),
+             "active", "", realm, ts, ts))
+        action = "created"
+    return node_id, action
+
+
+def cmd_ingest_skills(args):
+    """Pull markdown skills into the brain as nodes so processes live in the DB
+    (and sync everywhere), not as isolated files. Idempotent: re-run any time to
+    refresh. Scans --dir (repeatable); defaults to the plugin skills + the
+    runtime learned_skills tree."""
+    con = connect()
+    dirs = [Path(d).expanduser() for d in (args.dir or [])]
+    if not dirs:
+        dirs = [_plugin_skills_dir(), learned_skills_dir()]
+    kind_for = {str(_plugin_skills_dir()): "plugin",
+                str(learned_skills_dir()): "learned"}
+    results, touched = [], []
+    for d in dirs:
+        if not d.exists():
+            continue
+        kind = kind_for.get(str(d), args.kind or "plugin")
+        for path in sorted(d.rglob("SKILL.md")) + (
+                sorted(d.rglob("*.md")) if args.all_md else []):
+            if path.name != "SKILL.md" and not args.all_md:
+                continue
+            nid, action = _ingest_skill_file(con, path, kind, args.realm)
+            touched.append(nid)
+            results.append({"id": nid, "action": action, "kind": kind,
+                            "path": str(path)})
+    con.commit()
+    sync = _after_write(con, nodes=touched) if touched else None
+    out({"ok": True, "count": len(results), "ingested": results, "sync": sync})
 
 
 def cmd_use_skill(args):
@@ -898,7 +1010,7 @@ def build_parser():
     a = sub.add_parser("update-node"); a.set_defaults(func=cmd_update_node)
     a.add_argument("--id", required=True)
     a.add_argument("--title"); a.add_argument("--body"); a.add_argument("--props")
-    a.add_argument("--status"); a.add_argument("--due")
+    a.add_argument("--status"); a.add_argument("--due"); a.add_argument("--realm")
 
     a = sub.add_parser("del-node"); a.set_defaults(func=cmd_del_node)
     a.add_argument("--id", required=True)
@@ -937,7 +1049,20 @@ def build_parser():
     a.add_argument("--title", required=True)
     a.add_argument("--when", help="trigger conditions / when to use this skill")
     a.add_argument("--body", help="the procedure / steps")
-    a.add_argument("--id"); a.add_argument("--no-file", action="store_true")
+    a.add_argument("--id")
+    a.add_argument("--with-file", action="store_true",
+                   help="also export a local SKILL.md (default: DB-only, the source of truth)")
+    a.add_argument("--no-file", action="store_true",
+                   help="(deprecated no-op — DB-only is now the default)")
+
+    a = sub.add_parser("ingest-skills"); a.set_defaults(func=cmd_ingest_skills)
+    a.add_argument("--dir", action="append",
+                   help="skill dir to scan (repeatable); default: plugin skills + learned_skills")
+    a.add_argument("--realm", default="shared",
+                   help="section for new skill nodes (default shared — process applies everywhere)")
+    a.add_argument("--kind", help="label for skills from a custom --dir (default plugin)")
+    a.add_argument("--all-md", action="store_true",
+                   help="also ingest non-SKILL.md markdown files in the dirs")
 
     a = sub.add_parser("match-skills"); a.set_defaults(func=cmd_match_skills)
     a.add_argument("query", nargs="?", default="")

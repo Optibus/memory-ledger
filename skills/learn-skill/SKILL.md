@@ -5,10 +5,12 @@ description: The neuroplasticity skill — teach the brain a new, reusable abili
 
 # learn-skill
 
-This is how the brain grows. A learned skill is a procedure written to
-`~/.work_brain/learned_skills/<slug>/SKILL.md`, plus a `skill` node in the graph
-whose triggers let the brain recognise when to use it again — including in a
-different project than the one it was learned in.
+This is how the brain grows. A learned skill is a `skill` **node in the graph**
+— its triggers and its full procedure live in the DB and sync everywhere (neo4j
+master + local mirror), so the brain can recognise when to use it again in any
+project, on any machine, from the phone. **The DB is the source of truth — no
+markdown file is written** (skills used to be lone `.md` files, which isolated
+them to one machine; they're nodes now).
 
 Read `${CLAUDE_PLUGIN_ROOT}/CONVENTIONS.md` once per session first.
 
@@ -31,7 +33,9 @@ worked).
      --when "<trigger situations>" \
      --body "<numbered steps>"
    ```
-   This writes the `SKILL.md` and the `skill` node.
+   This stores the skill as a **node in the brain** (DB-first, synced
+   everywhere). Add `--with-file` only if you also want a throwaway local
+   `SKILL.md` export — you rarely do.
 5. **Connect it** into the graph so learning transfers: `add-edge` it
    `learned-from` the task/note that taught it, `applies-to` the relevant
    project/task type, `relates-to` sibling skills.
@@ -42,8 +46,14 @@ At the **start** of handling a request, check whether the brain already knows ho
 ```
 python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" match-skills "<the situation>"
 ```
-If a skill matches, **read its `SKILL.md`** (`props.path` on the node) and follow
-it instead of improvising. This is the whole point — reuse, don't rebuild.
+Matching ranks by **relevance first**, with reinforcement (usage) as a bounded
+booster. If a skill matches, **read its procedure from the node**
+(`get-node --id <skill-id>` — the steps are in the node body) and follow it
+instead of improvising. This is the whole point — reuse, don't rebuild.
+
+> **Bring existing markdown skills into the brain:** run
+> `graph.py ingest-skills` once — it scans the plugin `skills/` + any
+> `learned_skills/` and upserts each as a node (idempotent; re-run to refresh).
 
 ## C. REINFORCE after it fires
 

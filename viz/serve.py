@@ -22,6 +22,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "scripts"))
 import graph  # noqa: E402  (the engine — single source of truth for the DB)
+import brain_query  # noqa: E402  (the off-token query layer — powers the dashboard tab)
 
 INDEX = HERE / "index.html"
 
@@ -133,7 +134,9 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
-        path = self.path.split("?", 1)[0]
+        from urllib.parse import urlparse, parse_qs
+        parsed = urlparse(self.path)
+        path = parsed.path
         try:
             if path in ("/", "/index.html"):
                 self._send(200, INDEX.read_text(encoding="utf-8"),
@@ -141,11 +144,39 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/graph":
                 self._send(200, json.dumps(graph_payload()),
                            "application/json")
+            elif path == "/api/views":
+                self._send(200, json.dumps({"ok": True, "views": brain_query.VIEWS}),
+                           "application/json")
+            elif path.startswith("/api/"):   # dashboard views: /api/<view>?params
+                self._dashboard(path[len("/api/"):], parse_qs(parsed.query))
             else:
                 self._send(404, json.dumps({"error": "not found"}),
                            "application/json")
         except Exception as e:  # keep the server alive, report to client
             self._send(500, json.dumps({"error": str(e)}), "application/json")
+
+    # the off-token dashboard views, reusing the exact CLI query layer
+    def _dashboard(self, view, qs):
+        if view not in brain_query.VIEWS:
+            self._send(404, json.dumps({"ok": False, "error": f"unknown view: {view}"}),
+                       "application/json")
+            return
+        alias = {"from": "date_from", "to": "date_to"}
+        allowed = {"date_from", "date_to", "status", "since_days", "tz", "backend"}
+        # default to 'auto' so the dashboard reflects the SAME store as the map
+        # (neo4j master when reachable, local sqlite mirror when offline)
+        opts = {"backend": "auto"}
+        for k, v in qs.items():
+            k = alias.get(k, k)
+            val = v[0] if v else ""
+            if k in allowed and val != "":
+                opts[k] = int(val) if (k == "since_days" and val.isdigit()) else val
+        try:
+            self._send(200, json.dumps(brain_query.run_json(view, **opts)),
+                       "application/json")
+        except Exception as e:
+            self._send(400, json.dumps({"ok": False, "error": str(e)}),
+                       "application/json")
 
     def log_message(self, *_):  # quiet
         pass
