@@ -67,7 +67,8 @@
 
   /* ---- dashboard tab ---- */
   body.mode-dash{overflow:auto}
-  body.mode-dash #canvas,body.mode-dash .map-only{display:none}
+  /* #detail.show is (1,1,0) and would beat a two-class hide — name the id here too */
+  body.mode-dash #canvas,body.mode-dash .map-only,body.mode-dash #detail{display:none}
   body.mode-map #dash{display:none}
   #dash{max-width:840px;margin:0 auto;padding:64px 16px 60px}
   #dnav{display:flex;gap:6px;overflow-x:auto;padding:6px 0 14px;position:sticky;top:0;
