@@ -27,7 +27,18 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/brain-capture.sh",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/capture_prompt.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/capture_answer.py\"",
             "timeout": 10
           }
         ]

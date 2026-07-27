@@ -1,0 +1,13 @@
+{
+  "name": "work-brain",
+  "owner": {
+    "name": "Gabriel Nori"
+  },
+  "plugins": [
+    {
+      "name": "work-brain",
+      "source": "./",
+      "description": "An external working memory: a graph brain (SQLite mirror + optional neo4j master) with skills for tasks/reminders/calendar/email/Slack/Jira, always-on token-free capture, and a live map + dashboard. Drive it in any language from Slack, Claude Code, or the Claude app."
+    }
+  ]
+}

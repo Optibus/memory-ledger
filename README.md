@@ -5,6 +5,9 @@ plus a set of skills you drive in plain language (any language), from **Slack,
 Claude Code, or the Claude app**. You talk; it remembers, breaks work into tiny
 next-steps, sets real alarms, and reaches your other tools.
 
+> **Install:** see [INSTALL.md](INSTALL.md) — `/plugin marketplace add` this repo,
+> `/plugin install work-brain@work-brain`, then `mkdir -p ~/.work_brain`.
+
 ## The idea
 
 Everything you tell it becomes a **node** in a graph (a person, task,
@@ -55,12 +58,15 @@ first. Learnings are global, so a skill learned in one project applies in anothe
 
 These are enforced in `CONVENTIONS.md`, which every skill reads first.
 
-**Always-on capture.** When the brain is enabled, a plugin `UserPromptSubmit`
-hook (`hooks/brain-capture.sh`) fires on every prompt in every session and
-injects the standing rule: *recall relevant context before answering, and
-persist the interaction as graph data afterwards* — even a simple answered
-question becomes a recallable node. Disable it by removing/renaming the brain
-home (`~/.work_brain`); the hook then no-ops.
+**Always-on capture — token-free.** When the brain is enabled, plugin hooks
+persist every interaction in pure Python/SQL (no model, no tokens): a
+`UserPromptSubmit` hook (`hooks/capture_prompt.py`) stores each prompt and
+auto-creates tasks for explicit to-dos; a `Stop` hook (`hooks/capture_answer.py`)
+stores a summary of the answer, linked to its question. So a simple answered
+question becomes a recallable node on its own — and you recall it for free via
+`graph.py search` / `brain_query.py`, never spending tokens to "remember".
+Disable it by removing/renaming the brain home (`~/.work_brain`); the hooks then
+no-op.
 
 ## Skills
 

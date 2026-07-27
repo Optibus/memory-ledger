@@ -7,13 +7,18 @@ Every work-brain skill reads this once per session before acting. It defines
 
 ## 0. Always-on capture — the offload rule (non-negotiable)
 
-When the brain is enabled, **every interaction must leave brain data** — even a
+When the brain is enabled, **every interaction leaves brain data** — even a
 simple answered question. The whole point is to offload working memory to the
-machine so questions and decisions are recallable later. A `UserPromptSubmit`
-hook (`hooks/brain-capture.sh`) reasserts this rule every turn, in every session.
+machine so questions and decisions are recallable later. This baseline is
+**automatic and token-free**: a `UserPromptSubmit` hook
+(`hooks/capture_prompt.py`) stores each prompt (and auto-creates tasks for
+explicit to-dos), and a `Stop` hook (`hooks/capture_answer.py`) stores a summary
+of the answer — all in pure Python/SQL, no model, no tokens. You don't need to
+re-store the turn; add richer nodes/links only for things the heuristics miss.
 
-- **Recall first.** Before answering, `match-skills` / `search` the graph so you
-  build on prior context instead of starting cold.
+- **Recall first.** Before answering, `match-skills` / `search` the graph (or the
+  free `brain_query.py` views) so you build on prior context instead of starting
+  cold.
 - **Capture after.** Persist what matters as **≥1 node** via `scripts/graph.py`:
   answered question → a `note` (the question + the answer); a choice → a
   `decision` (`part-of hub_process`); a to-do → a `task`; a new
