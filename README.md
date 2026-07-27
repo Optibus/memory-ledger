@@ -161,8 +161,8 @@ A dependency-free local server serves one page with **two tabs**:
 - **Map** — the live force-directed graph: zoom/pan, search, type filters, and
   click-to-inspect showing every connection and its direction. Polls the DB so
   changes appear in real time.
-- **Dashboard** — the `brain_query.py` views (agenda / today / tomorrow / week /
-  closed / range) as cards, over the same store.
+- **Dashboard** — the `brain_query.py` views (agenda / open / today / tomorrow /
+  week / closed / range) as cards, over the same store.
 
 ```bash
 python3 viz/serve.py            # opens http://127.0.0.1:8770/ in your browser

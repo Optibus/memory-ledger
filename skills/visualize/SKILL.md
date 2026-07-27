@@ -1,6 +1,6 @@
 ---
 name: visualize
-description: Open the live brain UI in the browser — one local server, two tabs: a force-directed Map of every node/edge/relation (zoom/pan, search, type filters, click-to-inspect) and a token-free Dashboard of the date views (agenda/today/tomorrow/week/closed/range). Use for "show me the graph", "visualize my brain/memory", "open the map/dashboard", "see the connections", "what's due". Auto-refreshes as the graph changes.
+description: Open the live brain UI in the browser — one local server, two tabs: a force-directed Map of every node/edge/relation (zoom/pan, search, type filters, click-to-inspect) and a token-free Dashboard of the date views (agenda/open/today/tomorrow/week/closed/range). Use for "show me the graph", "visualize my brain/memory", "open the map/dashboard", "see the connections", "what's due". Auto-refreshes as the graph changes.
 ---
 
 # visualize
@@ -42,7 +42,7 @@ python3 "$CLAUDE_PLUGIN_ROOT/viz/serve.py" --no-open &
 
 ## The Dashboard tab
 Switch to **📋 Dashboard** (top toggle) for the token-free date views as cards:
-**agenda · today · tomorrow · week · closed · range** (range has date pickers +
+**agenda · open · today · tomorrow · week · closed · range** (range has date pickers +
 open/done filter; closed has a since-days control). Each card shows due date
 (overdue in red), type, status, realm, and `waiting on:`. This is the
 `brain_query.py` layer over HTTP — no model, no tokens.
