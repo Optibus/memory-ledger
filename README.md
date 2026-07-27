@@ -66,7 +66,7 @@ persist every interaction in pure Python/SQL: a `UserPromptSubmit` hook
 (`hooks/capture_prompt.py`) stores each prompt and auto-creates tasks for explicit
 to-dos; a `Stop` hook (`hooks/capture_answer.py`) stores a summary of the answer,
 linked to its question. Deciding and storing cost **zero** tokens — it is regex and
-SQL. Two of the hooks do inject a short status line into the conversation (193 chars
+SQL. Two of the hooks do inject a short status line into the conversation (197 chars
 per prompt, an ~850-char open-loops brief at session start; the `Stop` hook injects
 nothing), which measured **0.01% of a real session — about half a cent**. Effectively
 free, not literally zero.

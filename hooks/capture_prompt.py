@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
-"""UserPromptSubmit hook — capture the QUESTION, token-free.
+"""UserPromptSubmit hook — capture the QUESTION with no model call.
 
 Fires on every user prompt in every session where the brain is enabled. Stores
-the prompt directly in the graph (Python/SQL, no model, no tokens) as a `capture`
+the prompt directly in the graph (Python/SQL, no model call) as a `capture`
 node, and dynamically creates `task` nodes for any explicit to-dos it contains,
 linked back to the turn. Recall stays free — the data is in the DB for
-graph.py / brain_query.py to read without spending tokens.
+graph.py / brain_query.py to read without a model call.
+
+NOTE: storing costs nothing, but the `additionalContext` printed below DOES enter
+the conversation (~200 chars per prompt). Measured at ~0.01% of a session's
+tokens; keep this string short. See CONVENTIONS §0.
 
 stdin: Claude Code JSON incl. `prompt`, `session_id`, `cwd`.
 stdout: optional {"additionalContext": "..."} — kept tiny on purpose.
@@ -58,7 +62,7 @@ def main():
     except Exception:
         return  # never break the session
 
-    note = ("[second-brain] Turn auto-captured to the brain (Python/SQL, no tokens)"
+    note = ("[second-brain] Turn auto-captured to the brain (Python/SQL, no model call)"
             + (f"; {made} task(s) created" if made else "")
             + ". Recall is free via scripts/brain_query.py / graph.py search — "
               "don't spend tokens re-storing this turn.")

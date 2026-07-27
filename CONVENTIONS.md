@@ -23,7 +23,7 @@ text that lands in the conversation — command output you read, and the short
 
 | Hook | Injected into context |
 |---|---|
-| `UserPromptSubmit` | **193 chars**, on every prompt |
+| `UserPromptSubmit` | **197 chars**, on every prompt |
 | `SessionStart` | **~850 chars** (open-loops brief, capped at 6 loops so it does not grow with the graph) |
 | `Stop` | **nothing** |
 

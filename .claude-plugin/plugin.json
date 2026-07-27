@@ -1,7 +1,7 @@
 {
   "name": "second-brain",
   "description": "A graph-linked local memory + skills (remember, recall, tasks with micro-steps, reminders/alarms, calendar, email, Slack, Jira, web search, delegation, writing style) built as an external working memory for a busy brain. Talk to it in any language via Slack or chat; it routes your message to the right skill, reaches connected machines (Calendar, Gmail, Slack, Jira), and keeps the memory graph up to date. Works in both Claude Code and the Claude app.",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "author": {
     "name": "Gabriel Nori"
   }

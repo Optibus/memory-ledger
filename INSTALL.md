@@ -103,7 +103,7 @@ Once enabled, hooks run in **pure Python/SQL — no model call**:
   to its question.
 
 So every interaction is remembered without a single model call. Two of the hooks do
-add a short line to the conversation — 193 chars per prompt and an ~850-char
+add a short line to the conversation — 197 chars per prompt and an ~850-char
 open-loops brief per session start (`Stop` adds nothing) — which measured **0.01% of
 a real session**. Recall itself runs outside the conversation and costs nothing:
 
