@@ -257,6 +257,12 @@ wording around each mention to pick the relation: *"blocked by PR #7366"* →
 or uncheck**, and your override survives further typing. It is a suggestion
 engine, not an oracle — the user always has the last word.
 
+**The UI never writes a value you did not change.** The card's assignee input,
+status select and due chip all compare against the value they rendered and skip
+the `POST` when it is unchanged — a change handler on a pre-filled field can fire
+on a bare focus+blur, and a no-op write would churn `updated` and the neo4j sync
+for nothing.
+
 **Writes are unauthenticated.** They are bound to `127.0.0.1` by default. If you
 expose the UI (`--host 0.0.0.0` for phone access), pass **`--no-write`**: every
 `POST` then returns 403 and the UI hides its editing controls (`/api/meta`

@@ -696,7 +696,9 @@ const Dash = (function(){
     if(row.due_local && row.due_local!=="--") inp.value=row.due_local;
     chip.replaceWith(inp); inp.focus(); if(inp.showPicker){ try{inp.showPicker()}catch(e){} }
     let done=false;
+    const wasDue=(row.due_local && row.due_local!=="--")?row.due_local:"";
     const commit=async()=>{ if(done)return; done=true;
+      if((inp.value||"")===wasDue){ load(); return; }   // unchanged -> never write
       const v=inp.value, due=v?(v+"T12:00:00"):"";
       try{ await fetch("/api/set-due",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({id:row.id,due})}); }catch(e){}
@@ -760,14 +762,23 @@ const Dash = (function(){
       const o=mk("option",null,d.status||"—"); o.value=d.status||""; o.selected=true;
       st.insertBefore(o,st.firstChild);
     }
+    const stWas=d.status||"";
     st.onchange=async()=>{
+      if(st.value===stWas) return;
       const r=await post("/api/set-status",{id:d.id,status:st.value});
       if(r.ok){ load(); redraw(); } else { note.className="dnote err"; note.textContent=r.error; }
     };
     bar.appendChild(st);
-    const asg=mk("input"); asg.type="text"; asg.value=(d.props&&d.props.assignee)||"";
+    const asg=mk("input"); asg.type="text";
+    // Guard: only write when the value ACTUALLY differs from what we rendered.
+    // A change handler on a pre-filled input otherwise fires on any focus+blur
+    // (autofill, a stray click, a re-render) and would silently reassign a task
+    // the user never touched.
+    const asgWas=(d.props&&d.props.assignee)||"";
+    asg.value=asgWas;
     asg.placeholder="assignee"; asg.setAttribute("list","asglist");
     asg.onchange=async()=>{
+      if(asg.value.trim()===asgWas.trim()) return;
       const r=await post("/api/set-assignee",{id:d.id,assignee:asg.value.trim()});
       if(r.ok){ refreshAssignees(); load(); } else { note.className="dnote err";
         note.textContent=r.error; }
