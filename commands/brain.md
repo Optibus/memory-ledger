@@ -20,8 +20,8 @@ a busy brain. The person just said:
 2. **Detect the language** and reply in it.
 3. **Check what the brain already knows how to do.** Before improvising, run
    `python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" match-skills "<the request>"`.
-   If a learned skill matches, **read its `SKILL.md`** (`props.path`) and follow
-   it; `use-skill --id` to reinforce it afterwards. (Neuroplasticity — CONVENTIONS §2b.)
+   If a skill matches, **read its procedure from the node body** (`get-node --id`)
+   and follow it; `use-skill --id` to reinforce it afterwards. (Neuroplasticity — CONVENTIONS §2b.)
 4. **Interpret intent** and route to the matching skill(s) via the Skill tool.
    A message can carry several intents — handle each:
    - to-do / deadline → `add-task`      · fact/decision/person → `remember`

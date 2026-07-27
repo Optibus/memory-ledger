@@ -19,12 +19,13 @@ re-store the turn; add richer nodes/links only for things the heuristics miss.
 - **Recall first.** Before answering, `match-skills` / `search` the graph (or the
   free `brain_query.py` views) so you build on prior context instead of starting
   cold.
-- **Capture after.** Persist what matters as **≥1 node** via `scripts/graph.py`:
-  answered question → a `note` (the question + the answer); a choice → a
-  `decision` (`part-of hub_process`); a to-do → a `task`; a new
-  person/project/ticket/channel → its node.
-- **Dedupe + link.** `search` before creating; link it (`about` / `relates-to` /
-  `assigned-to` / `part-of`) and commit the `~/.work_brain` git.
+- **The raw turn is already captured — for free.** The hooks stored the prompt,
+  a summary of the answer, and any obvious to-dos in Python/SQL. Do **not** spend
+  tokens re-storing the turn.
+- **Enrich what the heuristics can't infer.** Add the *semantic* nodes on top: a
+  choice → a `decision` (`part-of hub_process`); a new person/project/ticket/
+  channel → its node; a durable, reference-worthy answer → a `note`. `search`
+  first to dedupe, then link (`about` / `relates-to` / `assigned-to` / `part-of`).
 - **Skip only pure chit-chat.** Everything substantive becomes recallable memory.
 
 ## 1. How to respond — the focus contract (non-negotiable)
@@ -78,10 +79,11 @@ brain. It is never committed. The home holds:
 
 ```
 ~/.work_brain/
-  graph.db            the memory graph (single portable file)
-  learned_skills/     runtime-learned skills, one folder per skill (SKILL.md)
+  graph.db            the memory graph (single portable file) — skills live here too, as nodes
+  learned_skills/     OPTIONAL local SKILL.md exports (only if add-skill --with-file); not the source of truth
   exports/            export-memory output
-  (configs, routines, definitions live here too)
+  neo4j.json          optional neo4j master config (secret — never commit)
+  (routines, definitions live here too)
 ```
 
 Path resolution: `$WORK_BRAIN_DB` (explicit file) → `$WORK_BRAIN_HOME/graph.db`
@@ -105,8 +107,9 @@ Every command prints JSON to stdout. Commands:
 | `neighbors --id ID [--rel REL] [--depth N]` | Walk the graph out to depth N. |
 | `complete --id ID [--note ...]` | Mark a task **done** — archives it (kept forever, hidden from active views), stamps `completed_at`. Never delete finished work; complete it. |
 | `done [--limit N]` | The done archive — everything completed. |
-| `add-skill --name slug --title T [--when triggers] [--body steps] [--no-file]` | **Learn a skill at runtime** — writes `learned_skills/<slug>/SKILL.md` and a `skill` node whose triggers make it findable. |
-| `match-skills "situation" [--limit N]` | Find learned skills whose triggers overlap the situation (associative recall, most-reinforced first). |
+| `add-skill --name slug --title T [--when triggers] [--body steps] [--with-file]` | **Learn a skill at runtime** — stores a `skill` node (triggers + full procedure in the DB, synced everywhere). **Node-first**: a local `SKILL.md` is written only with `--with-file`. |
+| `ingest-skills [--dir D]... [--realm R]` | Pull existing markdown skills (plugin `skills/` + `learned_skills/`) into the DB as `skill` nodes (idempotent; re-run to refresh). |
+| `match-skills "situation" [--limit N]` | Find skills matching the situation — ranked by **relevance first**, with reinforcement (usage) as a bounded booster. Read the procedure from the node body (`get-node`). |
 | `use-skill --id ID` | **Reinforce** a skill after it fires (usage_count↑, confidence↑, last_used stamped). |
 | `stats` | Counts by type. |
 | `export --format json\|md\|both [--out DIR]` | Dump the whole graph to files. |
@@ -126,13 +129,16 @@ The brain grows. When you notice a **repeatable procedure** — something the us
 did, taught, or asked for that will recur — capture it as a learned skill so the
 brain can reuse it later, in any project:
 
-1. **Learn:** `add-skill` writes `learned_skills/<slug>/SKILL.md` (the procedure)
-   and a `skill` node whose `--when` triggers describe the situations it fits.
+1. **Learn:** `add-skill` stores a `skill` **node in the DB** (triggers + full
+   procedure in the body, synced everywhere) — no file unless you pass
+   `--with-file`. Skills are nodes, not isolated markdown. Existing markdown
+   skills are pulled in with `ingest-skills`.
 2. **Recall:** at the start of handling a request, run `match-skills "<the
-   user's situation>"`. If a skill matches, **read its SKILL.md** (path is in the
-   node's `props.path`) and follow it instead of improvising.
+   user's situation>"` (ranked by relevance, reinforcement as a booster). If a
+   skill matches, **read its procedure from the node body** (`get-node --id`) and
+   follow it instead of improvising.
 3. **Reinforce:** after a learned skill fires successfully, `use-skill --id` to
-   strengthen it — frequently-useful skills float to the top of future matches.
+   strengthen it — frequently-useful skills edge up among equally-relevant matches.
 4. **Connect:** link skills into the graph — `applies-to` a task/project type,
    `learned-from` the task/note that taught it, `relates-to` sibling skills — so
    learnings transfer across situations, not just the one they came from.
@@ -181,6 +187,22 @@ the resilience cache.
 `optibus` (work; the default) and `personal` (add others as needed). Set with
 `add-node --realm <section>` or `$WORK_BRAIN_REALM`; `sections` lists the counts.
 
+## 2e. Token-free reads (`brain_query.py`)
+
+Everyday "what's on my plate" reads don't need the model. `scripts/brain_query.py`
+answers the common date views in pure SQL — **no tokens** — as a text table
+(read it directly) or `--json` (for the UI/phone backend):
+
+```
+python3 scripts/brain_query.py agenda      # overdue + today + tomorrow
+python3 scripts/brain_query.py today | tomorrow | week | closed [--since-days N]
+python3 scripts/brain_query.py range --from YYYY-MM-DD --to YYYY-MM-DD [--status open|done|any]
+```
+
+Prefer it (or `graph.py search` / `open-loops`) over asking the model to recall —
+recall is free. `--backend sqlite|neo4j|auto`, local-tz buckets via `--tz` /
+`$WORK_BRAIN_TZ`. The dashboard tab of `viz/serve.py` is this same layer over HTTP.
+
 ## 3. Vocabulary
 
 **Node types:** `person`, `task`, `subtask`, `requirement`, `decision`,
@@ -206,3 +228,31 @@ turning "tomorrow 9am" into an ISO time.
 
 **Props** is a free JSON dict for anything that isn't a first-class column:
 `slack`, `tz`, `email`, `jira_key`, `url`, `estimate_min`, `energy`, etc.
+
+---
+
+## 4. Keep docs in sync — update them on every behavior change (non-negotiable)
+
+Docs and behavior **ship together**. Any change to how the system works updates
+the docs in the *same* change — never "later". A change that alters behavior
+without matching doc updates is **incomplete**.
+
+**A "behavior change" means any of:**
+- a new / changed / removed `graph.py` command or flag, or a changed default;
+- a new / renamed / removed skill (`skills/*/SKILL.md`) or command (`commands/*`);
+- a hook change (`hooks/`) — what fires, when, or what it stores;
+- a new or changed script / endpoint (`brain_query.py`, `viz/serve.py`, sync);
+- a change to storage, sync, realms, vocabulary (node types, edges, states), or
+  the install/enable flow.
+
+**Then update every doc that describes it, in the same commit:**
+- `CONVENTIONS.md` (this file) — the commands table, vocabulary, and workflow
+  rules. This is the source of truth every skill reads; it must never lie.
+- `README.md` — the overview, skills table, engine/usage examples.
+- `INSTALL.md` — if install, enable, hooks, or config changed.
+- the relevant `skills/*/SKILL.md` and `commands/brain.md` — if their flow changed.
+
+**How:** after editing the engine/hooks/scripts, `grep` the docs for the old
+name/flag/behavior and fix **every** mention (don't leave a stale example). If a
+default changed, update the example that shows it. Verify commands/flags shown in
+docs actually exist (`graph.py <cmd> --help`). Then commit code + docs together.

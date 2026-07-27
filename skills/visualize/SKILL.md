@@ -1,12 +1,14 @@
 ---
 name: visualize
-description: Open a live, interactive map of the brain in the browser — a force-directed graph of every node, edge, and relation, with zoom/pan, search, type filters, and click-to-inspect showing where each connection comes from. Use for "show me the graph", "visualize my brain/memory", "open the map", "see the connections". Auto-refreshes as the graph changes.
+description: Open the live brain UI in the browser — one local server, two tabs: a force-directed Map of every node/edge/relation (zoom/pan, search, type filters, click-to-inspect) and a token-free Dashboard of the date views (agenda/today/tomorrow/week/closed/range). Use for "show me the graph", "visualize my brain/memory", "open the map/dashboard", "see the connections", "what's due". Auto-refreshes as the graph changes.
 ---
 
 # visualize
 
-Launch the graph visualizer — a dependency-free local web server that renders
-the live brain.
+Launch the brain UI — a dependency-free local web server serving one page with
+two tabs: the **Map** (live graph) and the **Dashboard** (the `brain_query.py`
+date views, token-free). Both read the same store (neo4j when reachable, else the
+local SQLite mirror).
 
 Read `${CLAUDE_PLUGIN_ROOT}/CONVENTIONS.md` once per session first (for the DB
 location; the server reads the same brain).
@@ -38,7 +40,15 @@ python3 "$CLAUDE_PLUGIN_ROOT/viz/serve.py" --no-open &
 - **Live** — the page polls every ~2s, so anything a skill writes to the graph
   appears without a reload (watch the green "live" dot).
 
+## The Dashboard tab
+Switch to **📋 Dashboard** (top toggle) for the token-free date views as cards:
+**agenda · today · tomorrow · week · closed · range** (range has date pickers +
+open/done filter; closed has a since-days control). Each card shows due date
+(overdue in red), type, status, realm, and `waiting on:`. This is the
+`brain_query.py` layer over HTTP — no model, no tokens.
+
 ## Notes
-- The server binds to 127.0.0.1 only (local). No data leaves the machine.
+- The server binds to 127.0.0.1 only by default. Use `--host 0.0.0.0` (behind a
+  tunnel) to reach it from your phone on the LAN.
 - Colours are per node type (see the legend); node size grows with connection count.
 - If the port is busy, pass a different `--port`.

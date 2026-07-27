@@ -24,10 +24,11 @@ it's never committed:
 
 ```
 ~/.work_brain/
-  graph.db            the memory graph (one portable file)
-  learned_skills/     skills the brain grew at runtime (one folder + SKILL.md each)
+  graph.db            the memory graph — nodes, edges, AND skills (all live here)
+  learned_skills/     optional local SKILL.md exports (only if add-skill --with-file)
   exports/            export-memory output
-  (configs, routines, definitions live here too)
+  neo4j.json          optional neo4j master config (secret — never commit)
+  (routines, definitions live here too)
 ```
 
 **Finished work is archived, never deleted** — `complete` a task and it moves to
@@ -43,10 +44,12 @@ work + personal life, filterable (`sections`, `add-node --realm`). The
 visualizer reads from neo4j too.
 
 **The brain grows (neuroplasticity).** When a repeatable procedure shows up, it
-`learn`s a new skill — writing it to `learned_skills/` and recording *when to use
-it*. Next time a matching situation appears, it recalls the skill (associative
-match on the triggers), follows it, and `reinforce`s it so proven skills surface
-first. Learnings are global, so a skill learned in one project applies in another.
+`learn`s a new skill — stored **as a node in the graph** (triggers + procedure in
+the DB, synced everywhere; not an isolated file). Next time a matching situation
+appears, it recalls the skill (ranked by relevance, reinforcement as a booster),
+follows it, and `reinforce`s it so proven skills surface first. Learnings are
+global, so a skill learned in one project applies in another. (`ingest-skills`
+pulls any existing markdown skills into the DB as nodes.)
 
 ## Designed around four needs
 
@@ -79,7 +82,7 @@ no-op.
 | `complete-task` | Mark a task done → move to the archive (never delete). |
 | `follow-up` | Surface every open loop (tasks, PRs, emails, messages) and drive it toward closed. |
 | `learn-skill` | Grow a new skill at runtime, recall it, reinforce it (neuroplasticity). |
-| `visualize` | Open a live, interactive map of the whole graph in the browser. |
+| `visualize` | Open the live brain UI in the browser — graph **map** + query **dashboard** (two tabs). |
 | `remind` | Set a real alarm (scheduled routine) that DMs you on Slack. |
 | `calendar` | Read/create Google Calendar events; time-block tasks. |
 | `read-email` | Read & triage Gmail; turn action items into tasks. |
@@ -112,32 +115,58 @@ See `CONVENTIONS.md` §2.
 
 ```bash
 python3 scripts/graph.py complete --id <id> --note "shipped"   # archive, don't delete
-python3 scripts/graph.py add-skill --name triage-x --title "..." --when "..." --body "..."
-python3 scripts/graph.py match-skills "a situation"            # associative recall
+python3 scripts/graph.py add-skill --name triage-x --title "..." --when "..." --body "..."  # node-first (--with-file for a local .md)
+python3 scripts/graph.py ingest-skills                         # pull markdown skills into the DB as nodes
+python3 scripts/graph.py match-skills "a situation"            # recall: relevance-ranked, reinforcement-boosted
 python3 scripts/graph.py use-skill --id skill_triage-x         # reinforce
 ```
 
+## Token-free views (`brain_query.py`)
+
+Everyday reads don't need the model. `scripts/brain_query.py` answers the common
+date views in pure SQL — **no tokens** — as a text table or `--json`:
+
+```bash
+python3 scripts/brain_query.py agenda      # overdue + today + tomorrow
+python3 scripts/brain_query.py week        # next 7 days (+ overdue)
+python3 scripts/brain_query.py closed --since-days 7
+python3 scripts/brain_query.py range --from 2026-07-20 --to 2026-07-31 --status open
+```
+
+Local-tz buckets via `--tz` / `$WORK_BRAIN_TZ`; `--backend sqlite|neo4j|auto`.
+Recall stays free — reach for this (or `graph.py search` / `open-loops`) instead
+of asking the model to remember.
+
 ## Visualize the brain
 
-A dependency-free local server renders the live graph — force-directed layout,
-zoom/pan, search, type filters, and click-to-inspect showing every connection
-and its direction. It polls the DB so changes appear in real time.
+A dependency-free local server serves one page with **two tabs**:
+
+- **Map** — the live force-directed graph: zoom/pan, search, type filters, and
+  click-to-inspect showing every connection and its direction. Polls the DB so
+  changes appear in real time.
+- **Dashboard** — the `brain_query.py` views (agenda / today / tomorrow / week /
+  closed / range) as cards, over the same store.
 
 ```bash
 python3 viz/serve.py            # opens http://127.0.0.1:8770/ in your browser
-python3 viz/serve.py --no-open --port 8771 &   # background, custom port
+python3 viz/serve.py --no-open --host 0.0.0.0 --port 8770 &   # reachable on LAN / phone
 ```
 
-Binds to localhost only — nothing leaves the machine.
+Reads neo4j when reachable, else the SQLite mirror. Binds to localhost by default;
+use `--host 0.0.0.0` (behind a tunnel) to reach it from your phone. Read-only.
 
 ## Install
 
-**Claude Code** — add as a plugin (the folder with `.claude-plugin/plugin.json`).
-Then talk to it with `/brain ...` or invoke skills by name.
+See **[INSTALL.md](INSTALL.md)** for the full flow. In short:
 
-**Claude app** — upload the skill folders as Agent Skills. The same graph
-engine runs in the sandbox; keep memory portable via `~/.work_brain/` or a
-connected persistent location.
+**Claude Code** — install as a plugin (marketplace add this repo →
+`/plugin install work-brain@work-brain`), then `mkdir -p ~/.work_brain`. Enabling
+at user level makes it active in every session. Talk to it with `/brain ...` or
+invoke skills by name.
+
+**Claude app** — upload the skill folders as Agent Skills. The same graph engine
+runs in the sandbox; keep memory portable via `~/.work_brain/` or a connected
+persistent location.
 
 ## Connected machines
 
