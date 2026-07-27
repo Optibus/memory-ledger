@@ -203,6 +203,14 @@ Prefer it (or `graph.py search` / `open-loops`) over asking the model to recall 
 recall is free. `--backend sqlite|neo4j|auto`, local-tz buckets via `--tz` /
 `$WORK_BRAIN_TZ`. The dashboard tab of `viz/serve.py` is this same layer over HTTP.
 
+**`--mine` — only what the owner must act on.** Any view takes `--mine` (the
+dashboard has a "🙋 Mine · needs action" toggle → `?mine=1`) to drop everything
+that isn't the owner's live action: tasks assigned to someone else, tasks
+`delegated` away (e.g. to ai-delegator), and tasks parked `waiting`/`blocked`.
+Owner identity is `$WORK_BRAIN_OWNER` (default `Gabriel`); a task with **no**
+`assignee` counts as the owner's. So **set `assignee` when a task belongs to
+someone else** (or is delegated) — otherwise it shows up as yours.
+
 ## 3. Vocabulary
 
 **Node types:** `person`, `task`, `subtask`, `requirement`, `decision`,
@@ -228,6 +236,11 @@ turning "tomorrow 9am" into an ISO time.
 
 **Props** is a free JSON dict for anything that isn't a first-class column:
 `slack`, `tz`, `email`, `jira_key`, `url`, `estimate_min`, `energy`, etc.
+- **`assignee`** — who owns a task. Omit for the owner's own tasks (unset = owner,
+  `$WORK_BRAIN_OWNER`); set it to a name when the task belongs to someone else, so
+  the dashboard's `--mine` filter can exclude it.
+- **`delegated`** — set (e.g. `ai-delegator:pr-review`) when the work is handed off;
+  also excluded from `--mine`. Pair with `waiting_on`.
 
 ---
 

@@ -131,8 +131,13 @@ python3 scripts/brain_query.py agenda      # overdue + today + tomorrow
 python3 scripts/brain_query.py week        # next 7 days (+ overdue)
 python3 scripts/brain_query.py closed --since-days 7
 python3 scripts/brain_query.py range --from 2026-07-20 --to 2026-07-31 --status open
+python3 scripts/brain_query.py agenda --mine   # only what YOU must act on
 ```
 
+Add **`--mine`** to any view (dashboard: the "🙋 Mine · needs action" toggle) to
+drop tasks assigned to someone else, delegated away, or parked waiting/blocked —
+leaving only the owner's live actions (`$WORK_BRAIN_OWNER`, default `Gabriel`;
+tasks with no `assignee` count as the owner's).
 Local-tz buckets via `--tz` / `$WORK_BRAIN_TZ`; `--backend sqlite|neo4j|auto`.
 Recall stays free — reach for this (or `graph.py search` / `open-loops`) instead
 of asking the model to remember.

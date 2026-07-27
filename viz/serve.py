@@ -162,15 +162,21 @@ class Handler(BaseHTTPRequestHandler):
                        "application/json")
             return
         alias = {"from": "date_from", "to": "date_to"}
-        allowed = {"date_from", "date_to", "status", "since_days", "tz", "backend"}
+        allowed = {"date_from", "date_to", "status", "since_days", "tz", "backend", "mine"}
         # default to 'auto' so the dashboard reflects the SAME store as the map
         # (neo4j master when reachable, local sqlite mirror when offline)
         opts = {"backend": "auto"}
         for k, v in qs.items():
             k = alias.get(k, k)
             val = v[0] if v else ""
-            if k in allowed and val != "":
-                opts[k] = int(val) if (k == "since_days" and val.isdigit()) else val
+            if k not in allowed or val == "":
+                continue
+            if k == "since_days" and val.isdigit():
+                opts[k] = int(val)
+            elif k == "mine":
+                opts[k] = val not in ("0", "false", "no")
+            else:
+                opts[k] = val
         try:
             self._send(200, json.dumps(brain_query.run_json(view, **opts)),
                        "application/json")

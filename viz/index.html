@@ -79,6 +79,10 @@
   #dctl label{font-size:12px;color:var(--muted);display:flex;gap:5px;align-items:center}
   #dctl input,#dctl select{background:#0d1117;color:var(--fg);border:1px solid var(--border);
     border-radius:7px;padding:5px 8px;font-size:13px}
+  .minebtn{border:1px solid var(--border);background:var(--panel);color:var(--muted);
+    border-radius:999px;padding:5px 12px;font-size:13px;cursor:pointer}
+  .minebtn.active{background:var(--accent);color:#0d1117;border-color:var(--accent);font-weight:600}
+  .dchip.deleg{color:#bc8cff;border-color:#bc8cff}
   #dmeta{color:var(--muted);font-size:12.5px;margin:0 0 12px}
   .dcard{background:var(--panel);border:1px solid var(--border);border-radius:11px;
     padding:11px 13px;margin-bottom:9px}
@@ -403,7 +407,7 @@ document.querySelectorAll('#modebar button').forEach(b=>
 // ---- dashboard tab (scoped so nothing collides with the map globals) ----
 const Dash = (function(){
   const VIEWS=["agenda","today","tomorrow","week","closed","range"];
-  const st={ view:"agenda", from:"", to:"", status:"any", since_days:7 };
+  const st={ view:"agenda", from:"", to:"", status:"any", since_days:7, mine:false };
   const $=s=>document.querySelector(s);
   const mk=(t,c,txt)=>{const e=document.createElement(t); if(c)e.className=c;
     if(txt!=null)e.textContent=txt; return e;};
@@ -416,6 +420,10 @@ const Dash = (function(){
   }
   function ctl(){
     const c=$("#dctl"); c.innerHTML="";
+    // always-present "mine / needs action" toggle
+    const mine=mk("button","minebtn"+(st.mine?" active":""),"🙋 Mine · needs action");
+    mine.onclick=()=>{ st.mine=!st.mine; ctl(); load(); };
+    c.appendChild(mine);
     if(st.view==="range"){
       if(!st.from) st.from=isoAdd(0);
       if(!st.to) st.to=isoAdd(14);
@@ -439,6 +447,7 @@ const Dash = (function(){
     const p=new URLSearchParams();
     if(st.view==="range"){ p.set("from",st.from); p.set("to",st.to); p.set("status",st.status); }
     if(st.view==="closed") p.set("since_days",st.since_days);
+    if(st.mine) p.set("mine","1");
     const s=p.toString(); return s?("?"+s):"";
   }
   async function load(){
@@ -463,6 +472,7 @@ const Dash = (function(){
     if(row.type) chips.appendChild(mk("span","dchip",row.type));
     if(row.status) chips.appendChild(mk("span","dchip st-"+row.status,row.status));
     if(row.realm) chips.appendChild(mk("span","dchip",row.realm));
+    if(row.delegated) chips.appendChild(mk("span","dchip deleg","➦ "+row.delegated));
     c.appendChild(chips);
     if(row.waiting_on){ const w=mk("div","dwait"); w.innerHTML="waiting on: <b></b>";
       w.querySelector("b").textContent=row.waiting_on; c.appendChild(w); }

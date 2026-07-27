@@ -12,6 +12,7 @@ stdout: optional {"additionalContext": "..."} — kept tiny on purpose.
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -38,11 +39,15 @@ def main():
             con, "capture", C.title_of(prompt), body=prompt[:4000],
             props={"role": "user", "session_id": sid, "cwd": cwd,
                    "captured_at": C.graph.now()})
-        # dynamically spin up tasks + links for explicit to-dos in the prompt
+        # dynamically spin up tasks + links for explicit to-dos in the prompt.
+        # Captured to-dos are the OWNER's own (assignee set) so the dashboard's
+        # "mine / needs action" filter surfaces them.
         made = 0
+        owner = os.environ.get("WORK_BRAIN_OWNER", "Gabriel")
         for title in C.detect_tasks(prompt):
             tid = C.insert_node(con, "task", title, status="open",
-                                props={"source": "auto-capture", "session_id": sid})
+                                props={"source": "auto-capture", "session_id": sid,
+                                       "assignee": owner})
             C.insert_edge(con, tid, turn, "captured-from")
             made += 1
         C.flush_async()

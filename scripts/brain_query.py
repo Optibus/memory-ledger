@@ -128,6 +128,29 @@ def _is_closed(d: dict) -> bool:
     return status in graph.CLOSED_STATES or state in graph.CLOSED_STATES
 
 
+# who "me" is — the brain owner. Tasks with no assignee default to the owner.
+OWNER = os.environ.get("WORK_BRAIN_OWNER", "Gabriel")
+# a task is NOT waiting on me if it's in one of these holding states
+_PARKED_STATES = {"waiting", "blocked", "delegated", "needs-review"}
+
+
+def is_mine_actionable(d: dict, owner: str = OWNER) -> bool:
+    """True if this is something the OWNER needs to act on now: assigned to them
+    (or unassigned → theirs by default), not delegated away, and not parked
+    waiting on someone/something else."""
+    props = d.get("props") or {}
+    assignee = str(props.get("assignee", "")).strip().lower()
+    o = owner.lower()
+    mine = assignee in ("", o, "me", "self") or o in assignee or "gabriel" in assignee
+    if not mine:
+        return False
+    if props.get("delegated"):
+        return False
+    if str(props.get("state", "")).lower() in _PARKED_STATES:
+        return False
+    return True
+
+
 def _closed_at(d: dict) -> datetime | None:
     """When a closed item was closed — completed_at if recorded, else updated."""
     p = d.get("props") or {}
@@ -227,22 +250,29 @@ def render_text(title: str, rows: list[dict], tz) -> str:
 
 def _slim(d: dict, tz) -> dict:
     """The fields a UI/phone client needs — small on purpose (cheap payloads)."""
+    props = d.get("props") or {}
     return {"id": d.get("id"), "type": d.get("type"), "title": d.get("title"),
             "status": d.get("status"), "realm": d.get("realm"),
             "due": d.get("due") or "", "due_local": _due_cell(d, tz),
-            "waiting_on": (d.get("props") or {}).get("waiting_on", "")}
+            "waiting_on": props.get("waiting_on", ""),
+            "assignee": props.get("assignee", "") or OWNER,
+            "delegated": props.get("delegated", ""),
+            "mine": is_mine_actionable(d)}
 
 
 VIEWS = ["today", "tomorrow", "week", "agenda", "closed", "range"]
 
 
 def compute(view, *, date_from=None, date_to=None, status="any",
-            since_days=7, tz=None, backend="sqlite"):
+            since_days=7, tz=None, backend="sqlite", mine=False):
     """Run a view and return (title, rows, tz, ref). The single entry point both
-    the CLI and the web/phone server call — no query logic lives anywhere else."""
+    the CLI and the web/phone server call — no query logic lives anywhere else.
+    `mine=True` keeps only tasks the owner needs to act on (see is_mine_actionable)."""
     tzinfo = _local_tz(tz)
     ref = datetime.now(tzinfo).date()
     nodes = _fetch(backend)
+    if mine:
+        nodes = [n for n in nodes if is_mine_actionable(n)]
 
     if view == "today":
         return f"Due today ({ref})", view_today(nodes, tzinfo, ref), tzinfo, ref
@@ -269,6 +299,8 @@ def compute(view, *, date_from=None, date_to=None, status="any",
 def run_json(view, **opts) -> dict:
     """The JSON contract the web UI + phone backend consume (slim payloads)."""
     title, rows, tz, ref = compute(view, **opts)
+    if opts.get("mine"):
+        title += "  · mine"
     return {"ok": True, "view": view, "title": title, "ref": ref.isoformat(),
             "count": len(rows), "results": [_slim(d, tz) for d in rows]}
 
@@ -289,6 +321,9 @@ def main(argv=None):
     p.add_argument("--tz", help="IANA tz for day buckets (default $WORK_BRAIN_TZ / system)")
     p.add_argument("--backend", choices=["sqlite", "neo4j", "auto"], default="sqlite",
                    help="where to read (default sqlite mirror; neo4j = master over HTTP)")
+    p.add_argument("--mine", action="store_true",
+                   help="only tasks the owner ($WORK_BRAIN_OWNER) needs to act on "
+                        "(assigned to me, not delegated, not parked waiting)")
     p.add_argument("--json", action="store_true", help="emit JSON (for UI/phone backend)")
     args = p.parse_args(argv)
 
@@ -296,9 +331,11 @@ def main(argv=None):
         title, rows, tz, ref = compute(
             args.view, date_from=args.date_from, date_to=args.date_to,
             status=args.status, since_days=args.since_days, tz=args.tz,
-            backend=args.backend)
+            backend=args.backend, mine=args.mine)
     except ValueError as e:
         p.error(str(e))
+    if args.mine:
+        title += "  · mine"
 
     if args.json:
         json.dump({"ok": True, "view": args.view, "title": title,
