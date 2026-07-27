@@ -147,6 +147,13 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/views":
                 self._send(200, json.dumps({"ok": True, "views": brain_query.VIEWS}),
                            "application/json")
+            elif path == "/api/assignees":
+                self._send(200, json.dumps({"ok": True,
+                           "assignees": brain_query.assignees("auto")}), "application/json")
+            elif path == "/api/node":   # full node + edges, for the expand view
+                nid = (parse_qs(parsed.query).get("id") or [""])[0]
+                self._send(200, json.dumps(brain_query.node_detail(nid)),
+                           "application/json")
             elif path.startswith("/api/"):   # dashboard views: /api/<view>?params
                 self._dashboard(path[len("/api/"):], parse_qs(parsed.query))
             else:
@@ -162,7 +169,8 @@ class Handler(BaseHTTPRequestHandler):
                        "application/json")
             return
         alias = {"from": "date_from", "to": "date_to"}
-        allowed = {"date_from", "date_to", "status", "since_days", "tz", "backend", "mine"}
+        allowed = {"date_from", "date_to", "status", "since_days", "tz", "backend",
+                   "mine", "assignee"}
         # default to 'auto' so the dashboard reflects the SAME store as the map
         # (neo4j master when reachable, local sqlite mirror when offline)
         opts = {"backend": "auto"}

@@ -139,6 +139,47 @@ def detect_tasks(text: str) -> list[str]:
     return out[:5]
 
 
+def known_people(con):
+    """First names + full names of `person` nodes, for assignee inference."""
+    names = set()
+    try:
+        for r in con.execute("SELECT title FROM nodes WHERE type='person'").fetchall():
+            t = (r["title"] or "").strip()
+            if t:
+                names.add(t.lower())
+                names.add(t.split()[0].lower())
+    except Exception:
+        pass
+    return names
+
+
+_FIRST_PERSON = re.compile(
+    r"(?i)\b(remind me|i need to|i have to|i've got to|i should|i must|i'?ll|i want to|my )\b")
+_OTHER_CUE = re.compile(
+    r"(?i)\b(?:ask|tell|ping|nudge|chase|remind|delegate to|hand off to|"
+    r"follow[- ]?up with|get)\s+([a-z][a-z]+)")
+
+
+def infer_assignee(text: str, owner: str, people) -> str:
+    """Best-effort, token-free: is this to-do the OWNER's action, someone else's,
+    or unknown? Returns the owner, a person's name, or '' (leave unassigned — do
+    NOT assume it's the owner's)."""
+    t = text or ""
+    m = _OTHER_CUE.search(t)
+    if m:
+        name = m.group(1).lower()
+        if name in ("me", "myself", "self"):
+            return owner
+        if not people or name in people:
+            return name.capitalize()
+    for p in sorted(people, key=len, reverse=True):
+        if re.search(r"(?i)\b" + re.escape(p) + r"\s+(needs to|should|will|has to|is going to|to)\b", t):
+            return p.split()[0].capitalize()
+    if _FIRST_PERSON.search(t):
+        return owner
+    return ""  # unknown — leave it unassigned rather than defaulting to the owner
+
+
 def summarize(text: str, limit: int = 300) -> str:
     """Extractive, token-free summary of an answer: drop fenced code blocks, take
     the opening sentences up to `limit` chars. Good enough to recall 'what was

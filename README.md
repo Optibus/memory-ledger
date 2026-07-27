@@ -137,7 +137,12 @@ python3 scripts/brain_query.py agenda --mine   # only what YOU must act on
 Add **`--mine`** to any view (dashboard: the "🙋 Mine · needs action" toggle) to
 drop tasks assigned to someone else, delegated away, or parked waiting/blocked —
 leaving only the owner's live actions (`$WORK_BRAIN_OWNER`, default `Gabriel`;
-tasks with no `assignee` count as the owner's).
+unassigned counts as the owner's). Or filter by exact owner with
+**`--assignee me|unassigned|<name>`** (dashboard: one toggle chip per assignee).
+Rows carry **blocked_by / blocks / related** flags from the graph edges (the
+dashboard shows 🔒/⛓/🔗 badges), and dashboard cards **expand on click** to show
+the node's full body + linked neighbors (`/api/node`). Captured to-dos get their
+**assignee inferred** (mine / a named person / left unassigned — never blindly "me").
 Local-tz buckets via `--tz` / `$WORK_BRAIN_TZ`; `--backend sqlite|neo4j|auto`.
 Recall stays free — reach for this (or `graph.py search` / `open-loops`) instead
 of asking the model to remember.

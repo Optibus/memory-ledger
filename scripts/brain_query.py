@@ -134,21 +134,55 @@ OWNER = os.environ.get("WORK_BRAIN_OWNER", "Gabriel")
 _PARKED_STATES = {"waiting", "blocked", "delegated", "needs-review"}
 
 
-def is_mine_actionable(d: dict, owner: str = OWNER) -> bool:
-    """True if this is something the OWNER needs to act on now: assigned to them
-    (or unassigned → theirs by default), not delegated away, and not parked
-    waiting on someone/something else."""
-    props = d.get("props") or {}
-    assignee = str(props.get("assignee", "")).strip().lower()
+def norm_assignee(raw: str, owner: str = OWNER) -> str:
+    """Normalize an assignee to a stable token for filtering/grouping:
+    '' -> 'unassigned'; the owner / me / gabriel -> 'me'; else the lowercased name."""
+    a = (raw or "").strip()
+    if a == "":
+        return "unassigned"
     o = owner.lower()
-    mine = assignee in ("", o, "me", "self") or o in assignee or "gabriel" in assignee
-    if not mine:
+    if a.lower() in (o, "me", "self") or "gabriel" in a.lower():
+        return "me"
+    return a.lower()
+
+
+def is_mine_actionable(d: dict, owner: str = OWNER) -> bool:
+    """True if this is something the OWNER needs to act on now: mine or unassigned,
+    not delegated away, and not parked waiting on someone/something else."""
+    props = d.get("props") or {}
+    if norm_assignee(props.get("assignee", ""), owner) not in ("me", "unassigned"):
         return False
     if props.get("delegated"):
         return False
     if str(props.get("state", "")).lower() in _PARKED_STATES:
         return False
     return True
+
+
+# edge relations that surface as dashboard flags
+def _load_edges():
+    con = graph.connect()
+    rows = con.execute("SELECT src, dst, rel FROM edges").fetchall()
+    con.close()
+    return [(r["src"], r["dst"], r["rel"]) for r in rows]
+
+
+def _relations(all_nodes, edges):
+    """id -> {blocked_by:[titles], blocks:[titles], related:[titles]} from the graph."""
+    title = {n["id"]: (n.get("title") or n["id"]) for n in all_nodes}
+    rel = {}
+
+    def add(nid, key, other):
+        rel.setdefault(nid, {"blocked_by": [], "blocks": [], "related": []})[key].append(
+            title.get(other, other))
+    for s, dst, r in edges:
+        if r in ("blocked-by", "depends-on"):
+            add(s, "blocked_by", dst); add(dst, "blocks", s)
+        elif r == "blocks":
+            add(s, "blocks", dst); add(dst, "blocked_by", s)
+        elif r == "relates-to":
+            add(s, "related", dst); add(dst, "related", s)
+    return rel
 
 
 def _closed_at(d: dict) -> datetime | None:
@@ -251,49 +285,100 @@ def render_text(title: str, rows: list[dict], tz) -> str:
 def _slim(d: dict, tz) -> dict:
     """The fields a UI/phone client needs — small on purpose (cheap payloads)."""
     props = d.get("props") or {}
+    rel = d.get("_rel") or {}
     return {"id": d.get("id"), "type": d.get("type"), "title": d.get("title"),
             "status": d.get("status"), "realm": d.get("realm"),
             "due": d.get("due") or "", "due_local": _due_cell(d, tz),
             "waiting_on": props.get("waiting_on", ""),
-            "assignee": props.get("assignee", "") or OWNER,
+            "assignee": norm_assignee(props.get("assignee", "")),
             "delegated": props.get("delegated", ""),
-            "mine": is_mine_actionable(d)}
+            "mine": is_mine_actionable(d),
+            "blocked_by": rel.get("blocked_by", []),
+            "blocks": rel.get("blocks", []),
+            "related": rel.get("related", [])}
+
+
+def node_detail(node_id: str) -> dict:
+    """Full node + its edges (named neighbors, with direction) — for the expand
+    view. Read straight from the local mirror; token-free."""
+    con = graph.connect()
+    row = con.execute("SELECT * FROM nodes WHERE id=?", (node_id,)).fetchone()
+    if not row:
+        return {"ok": False, "error": f"no node {node_id}"}
+    d = graph._node_dict(row)
+    edges = []
+    for e in graph._edges_of(con, node_id):
+        if e["src"] == node_id:
+            edges.append({"dir": "out", "rel": e["rel"], "id": e["dst"],
+                          "title": e.get("dst_title", e["dst"]), "type": e.get("dst_type", "")})
+        else:
+            edges.append({"dir": "in", "rel": e["rel"], "id": e["src"],
+                          "title": e.get("src_title", e["src"]), "type": e.get("src_type", "")})
+    con.close()
+    return {"ok": True, "id": d["id"], "type": d["type"], "title": d["title"],
+            "status": d["status"], "due": d["due"], "realm": d.get("realm", ""),
+            "body": d["body"], "props": d["props"], "edges": edges}
+
+
+def assignees(backend="sqlite") -> dict:
+    """Distinct assignee tokens across tasks (+counts) — powers the UI dropdown."""
+    counts = {}
+    for n in _fetch(backend):
+        if n.get("type") not in ("task", "subtask"):
+            continue
+        if _is_closed(n):
+            continue
+        a = norm_assignee((n.get("props") or {}).get("assignee", ""))
+        counts[a] = counts.get(a, 0) + 1
+    return counts
 
 
 VIEWS = ["today", "tomorrow", "week", "agenda", "closed", "range"]
 
 
 def compute(view, *, date_from=None, date_to=None, status="any",
-            since_days=7, tz=None, backend="sqlite", mine=False):
+            since_days=7, tz=None, backend="sqlite", mine=False, assignee=None):
     """Run a view and return (title, rows, tz, ref). The single entry point both
     the CLI and the web/phone server call — no query logic lives anywhere else.
-    `mine=True` keeps only tasks the owner needs to act on (see is_mine_actionable)."""
+    `mine=True` keeps only tasks the owner needs to act on; `assignee` (comma list
+    of normalized tokens: me / unassigned / <name>) filters by owner. Rows are
+    annotated with blocked_by / blocks / related from the graph edges."""
     tzinfo = _local_tz(tz)
     ref = datetime.now(tzinfo).date()
-    nodes = _fetch(backend)
+    all_nodes = _fetch(backend)
+    nodes = all_nodes
     if mine:
         nodes = [n for n in nodes if is_mine_actionable(n)]
+    if assignee:
+        wanted = {w.strip().lower() for w in assignee.split(",") if w.strip()}
+        nodes = [n for n in nodes
+                 if norm_assignee((n.get("props") or {}).get("assignee", "")) in wanted]
 
     if view == "today":
-        return f"Due today ({ref})", view_today(nodes, tzinfo, ref), tzinfo, ref
-    if view == "tomorrow":
+        title, rows = f"Due today ({ref})", view_today(nodes, tzinfo, ref)
+    elif view == "tomorrow":
         t = ref + timedelta(days=1)
-        return f"Due tomorrow ({t})", view_tomorrow(nodes, tzinfo, ref), tzinfo, ref
-    if view == "week":
-        return "Due within 7 days (+ overdue)", view_week(nodes, tzinfo, ref), tzinfo, ref
-    if view == "agenda":
-        return ("Agenda — overdue + today + tomorrow",
-                view_agenda(nodes, tzinfo, ref), tzinfo, ref)
-    if view == "closed":
-        return (f"Closed in the last {since_days} day(s)",
-                view_closed(nodes, tzinfo, ref, since_days), tzinfo, ref)
-    if view == "range":
+        title, rows = f"Due tomorrow ({t})", view_tomorrow(nodes, tzinfo, ref)
+    elif view == "week":
+        title, rows = "Due within 7 days (+ overdue)", view_week(nodes, tzinfo, ref)
+    elif view == "agenda":
+        title, rows = "Agenda — overdue + today + tomorrow", view_agenda(nodes, tzinfo, ref)
+    elif view == "closed":
+        title, rows = (f"Closed in the last {since_days} day(s)",
+                       view_closed(nodes, tzinfo, ref, since_days))
+    elif view == "range":
         if not (date_from and date_to):
             raise ValueError("range needs date_from and date_to (YYYY-MM-DD)")
         lo, hi = date.fromisoformat(date_from), date.fromisoformat(date_to)
-        return (f"{lo}..{hi}  (status={status})",
-                view_range(nodes, tzinfo, lo, hi, status), tzinfo, ref)
-    raise ValueError(f"unknown view: {view}")
+        title, rows = (f"{lo}..{hi}  (status={status})",
+                       view_range(nodes, tzinfo, lo, hi, status))
+    else:
+        raise ValueError(f"unknown view: {view}")
+
+    rel = _relations(all_nodes, _load_edges())
+    for r in rows:
+        r["_rel"] = rel.get(r["id"], {})
+    return title, rows, tzinfo, ref
 
 
 def run_json(view, **opts) -> dict:
@@ -324,6 +409,8 @@ def main(argv=None):
     p.add_argument("--mine", action="store_true",
                    help="only tasks the owner ($WORK_BRAIN_OWNER) needs to act on "
                         "(assigned to me, not delegated, not parked waiting)")
+    p.add_argument("--assignee",
+                   help="comma list of assignee tokens to keep: me | unassigned | <name>")
     p.add_argument("--json", action="store_true", help="emit JSON (for UI/phone backend)")
     args = p.parse_args(argv)
 
@@ -331,11 +418,13 @@ def main(argv=None):
         title, rows, tz, ref = compute(
             args.view, date_from=args.date_from, date_to=args.date_to,
             status=args.status, since_days=args.since_days, tz=args.tz,
-            backend=args.backend, mine=args.mine)
+            backend=args.backend, mine=args.mine, assignee=args.assignee)
     except ValueError as e:
         p.error(str(e))
     if args.mine:
         title += "  · mine"
+    if args.assignee:
+        title += f"  · {args.assignee}"
 
     if args.json:
         json.dump({"ok": True, "view": args.view, "title": title,

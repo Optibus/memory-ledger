@@ -83,6 +83,16 @@
     border-radius:999px;padding:5px 12px;font-size:13px;cursor:pointer}
   .minebtn.active{background:var(--accent);color:#0d1117;border-color:var(--accent);font-weight:600}
   .dchip.deleg{color:#bc8cff;border-color:#bc8cff}
+  .dchip.asgc{color:#58a6ff;border-color:#58a6ff}
+  .dchip.blk{color:#f85149;border-color:#f85149}
+  .dchip.blks{color:#f0883e;border-color:#f0883e}
+  .dchip.rel{color:#39c5cf;border-color:#39c5cf}
+  .minebtn.asg{opacity:.9}
+  .ddetail{margin-top:9px;padding-top:9px;border-top:1px solid var(--border)}
+  .dbody{white-space:pre-wrap;color:#c9d1d9;background:#0d1117;border:1px solid var(--border);
+    border-radius:7px;padding:9px;font-size:12.5px;max-height:220px;overflow:auto;margin-bottom:8px}
+  .drelh{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px}
+  .drelrow{font-size:12.5px;color:var(--fg);padding:2px 0;font-family:ui-monospace,monospace}
   #dmeta{color:var(--muted);font-size:12.5px;margin:0 0 12px}
   .dcard{background:var(--panel);border:1px solid var(--border);border-radius:11px;
     padding:11px 13px;margin-bottom:9px}
@@ -407,7 +417,8 @@ document.querySelectorAll('#modebar button').forEach(b=>
 // ---- dashboard tab (scoped so nothing collides with the map globals) ----
 const Dash = (function(){
   const VIEWS=["agenda","today","tomorrow","week","closed","range"];
-  const st={ view:"agenda", from:"", to:"", status:"any", since_days:7, mine:false };
+  const st={ view:"agenda", from:"", to:"", status:"any", since_days:7, mine:false, assignees:[] };
+  let ASSIGNEES={};   // token -> count, for the assignee filter chips
   const $=s=>document.querySelector(s);
   const mk=(t,c,txt)=>{const e=document.createElement(t); if(c)e.className=c;
     if(txt!=null)e.textContent=txt; return e;};
@@ -424,6 +435,13 @@ const Dash = (function(){
     const mine=mk("button","minebtn"+(st.mine?" active":""),"🙋 Mine · needs action");
     mine.onclick=()=>{ st.mine=!st.mine; ctl(); load(); };
     c.appendChild(mine);
+    // assignee filter chips (multi-select)
+    Object.keys(ASSIGNEES).sort().forEach(a=>{
+      const on=st.assignees.includes(a);
+      const b=mk("button","minebtn asg"+(on?" active":""), a+" ("+ASSIGNEES[a]+")");
+      b.onclick=()=>{ st.assignees=on?st.assignees.filter(x=>x!==a):st.assignees.concat([a]); ctl(); load(); };
+      c.appendChild(b);
+    });
     if(st.view==="range"){
       if(!st.from) st.from=isoAdd(0);
       if(!st.to) st.to=isoAdd(14);
@@ -448,6 +466,7 @@ const Dash = (function(){
     if(st.view==="range"){ p.set("from",st.from); p.set("to",st.to); p.set("status",st.status); }
     if(st.view==="closed") p.set("since_days",st.since_days);
     if(st.mine) p.set("mine","1");
+    if(st.assignees.length) p.set("assignee", st.assignees.join(","));
     const s=p.toString(); return s?("?"+s):"";
   }
   async function load(){
@@ -463,7 +482,8 @@ const Dash = (function(){
     }catch(e){ meta.innerHTML='<span style="color:#f85149">can\'t reach server ('+e+')</span>'; }
   }
   function card(row,today){
-    const c=mk("div","dcard"); c.appendChild(mk("div","dt",row.title||"(untitled)"));
+    const c=mk("div","dcard");
+    const head=mk("div","dt","▸ "+(row.title||"(untitled)")); c.appendChild(head);
     const chips=mk("div","dchips");
     if(row.due_local && row.due_local!=="--"){
       const over=row.due_local<today;
@@ -471,16 +491,50 @@ const Dash = (function(){
     }
     if(row.type) chips.appendChild(mk("span","dchip",row.type));
     if(row.status) chips.appendChild(mk("span","dchip st-"+row.status,row.status));
+    if(row.assignee) chips.appendChild(mk("span","dchip asgc","👤 "+row.assignee));
     if(row.realm) chips.appendChild(mk("span","dchip",row.realm));
     if(row.delegated) chips.appendChild(mk("span","dchip deleg","➦ "+row.delegated));
+    if(row.blocked_by && row.blocked_by.length) chips.appendChild(mk("span","dchip blk","🔒 blocked ×"+row.blocked_by.length));
+    if(row.blocks && row.blocks.length) chips.appendChild(mk("span","dchip blks","⛓ blocks ×"+row.blocks.length));
+    if(row.related && row.related.length) chips.appendChild(mk("span","dchip rel","🔗 "+row.related.length));
     c.appendChild(chips);
     if(row.waiting_on){ const w=mk("div","dwait"); w.innerHTML="waiting on: <b></b>";
       w.querySelector("b").textContent=row.waiting_on; c.appendChild(w); }
+    const det=mk("div","ddetail"); det.style.display="none"; c.appendChild(det);
+    let loaded=false;
+    head.style.cursor="pointer";
+    head.onclick=async()=>{
+      const open=det.style.display==="none";
+      det.style.display=open?"block":"none";
+      head.textContent=(open?"▾ ":"▸ ")+(row.title||"(untitled)");
+      if(open && !loaded){ loaded=true; det.textContent="loading…"; await expand(row.id,det); }
+    };
     return c;
   }
+  async function expand(id,det){
+    try{
+      const r=await fetch("/api/node?id="+encodeURIComponent(id)); const d=await r.json();
+      if(!d.ok){ det.textContent=d.error||"error"; return; }
+      det.innerHTML="";
+      if(d.body){ const b=mk("div","dbody",d.body); det.appendChild(b); }
+      if(d.edges && d.edges.length){
+        const rel=mk("div","drel");
+        d.edges.forEach(e=>{
+          const line=mk("div","drelrow");
+          line.textContent=(e.dir==="out"?"→ ":"← ")+e.rel+": "+e.title+"  ("+e.type+")";
+          rel.appendChild(line);
+        });
+        det.appendChild(mk("div","drelh","Related ("+d.edges.length+")"));
+        det.appendChild(rel);
+      } else { det.appendChild(mk("div","drelh","No links")); }
+    }catch(e){ det.textContent="can't load ("+e+")"; }
+  }
   let built=false, timer=null;
-  function show(){
-    if(!built){ tabs(); ctl(); built=true; }
+  async function show(){
+    if(!built){
+      try{ const r=await fetch("/api/assignees"); const d=await r.json(); if(d.ok) ASSIGNEES=d.assignees||{}; }catch(e){}
+      tabs(); ctl(); built=true;
+    }
     load();
     clearInterval(timer); timer=setInterval(()=>{ if(mode==='dash') load(); }, 120000);
   }

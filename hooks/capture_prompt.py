@@ -40,14 +40,18 @@ def main():
             props={"role": "user", "session_id": sid, "cwd": cwd,
                    "captured_at": C.graph.now()})
         # dynamically spin up tasks + links for explicit to-dos in the prompt.
-        # Captured to-dos are the OWNER's own (assignee set) so the dashboard's
-        # "mine / needs action" filter surfaces them.
+        # Infer the assignee (mine / someone else / unknown) instead of assuming
+        # it's the owner's — so the dashboard's assignee filter is meaningful and
+        # someone-else's ingested to-dos don't masquerade as the owner's action.
         made = 0
         owner = os.environ.get("WORK_BRAIN_OWNER", "Gabriel")
+        people = C.known_people(con)
         for title in C.detect_tasks(prompt):
-            tid = C.insert_node(con, "task", title, status="open",
-                                props={"source": "auto-capture", "session_id": sid,
-                                       "assignee": owner})
+            who = C.infer_assignee(title, owner, people) or C.infer_assignee(prompt, owner, people)
+            props = {"source": "auto-capture", "session_id": sid}
+            if who:
+                props["assignee"] = who
+            tid = C.insert_node(con, "task", title, status="open", props=props)
             C.insert_edge(con, tid, turn, "captured-from")
             made += 1
         C.flush_async()

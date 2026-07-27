@@ -204,12 +204,21 @@ recall is free. `--backend sqlite|neo4j|auto`, local-tz buckets via `--tz` /
 `$WORK_BRAIN_TZ`. The dashboard tab of `viz/serve.py` is this same layer over HTTP.
 
 **`--mine` — only what the owner must act on.** Any view takes `--mine` (the
-dashboard has a "🙋 Mine · needs action" toggle → `?mine=1`) to drop everything
-that isn't the owner's live action: tasks assigned to someone else, tasks
-`delegated` away (e.g. to ai-delegator), and tasks parked `waiting`/`blocked`.
-Owner identity is `$WORK_BRAIN_OWNER` (default `Gabriel`); a task with **no**
-`assignee` counts as the owner's. So **set `assignee` when a task belongs to
-someone else** (or is delegated) — otherwise it shows up as yours.
+dashboard's "🙋 Mine · needs action" toggle → `?mine=1`) to drop everything that
+isn't the owner's live action: tasks assigned to someone else, `delegated` tasks,
+and tasks parked `waiting`/`blocked`. Owner = `$WORK_BRAIN_OWNER` (default
+`Gabriel`); **`--mine` counts unassigned as the owner's** (broad "my plate" view).
+
+**`--assignee me|unassigned|<name>[,…]`** — exact grouping (the dashboard renders
+one toggle chip per distinct assignee, from `/api/assignees`). Distinct from
+`--mine`: `assignee=me` matches only tasks *explicitly* the owner's, not
+unassigned ones.
+
+**Relation flags + expand.** Each row carries `blocked_by` / `blocks` / `related`
+(derived from `blocked-by`/`depends-on`/`blocks`/`relates-to` edges) so the
+dashboard flags 🔒 blocked / ⛓ blocks / 🔗 related without the model. `/api/node?id=`
+returns a node's full body + named neighbors for the click-to-expand card. All
+token-free.
 
 ## 3. Vocabulary
 
@@ -236,9 +245,11 @@ turning "tomorrow 9am" into an ISO time.
 
 **Props** is a free JSON dict for anything that isn't a first-class column:
 `slack`, `tz`, `email`, `jira_key`, `url`, `estimate_min`, `energy`, etc.
-- **`assignee`** — who owns a task. Omit for the owner's own tasks (unset = owner,
-  `$WORK_BRAIN_OWNER`); set it to a name when the task belongs to someone else, so
-  the dashboard's `--mine` filter can exclude it.
+- **`assignee`** — who owns a task. The capture hook **infers** it (first-person
+  cue → owner; "ask/chase/<Name> to…" → that person; otherwise left unset — it does
+  NOT assume the owner). Set it explicitly when you know: a name for someone else's
+  work, `Gabriel` for the owner's. Unset = unknown (still counts under `--mine`,
+  but shows as `unassigned` in the assignee filter).
 - **`delegated`** — set (e.g. `ai-delegator:pr-review`) when the work is handed off;
   also excluded from `--mine`. Pair with `waiting_on`.
 
