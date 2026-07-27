@@ -10,11 +10,27 @@ Every second-brain skill reads this once per session before acting. It defines
 When the brain is enabled, **every interaction leaves brain data** — even a
 simple answered question. The whole point is to offload working memory to the
 machine so questions and decisions are recallable later. This baseline is
-**automatic and token-free**: a `UserPromptSubmit` hook
+**automatic and needs no model call**: a `UserPromptSubmit` hook
 (`hooks/capture_prompt.py`) stores each prompt (and auto-creates tasks for
 explicit to-dos), and a `Stop` hook (`hooks/capture_answer.py`) stores a summary
-of the answer — all in pure Python/SQL, no model, no tokens. You don't need to
-re-store the turn; add richer nodes/links only for things the heuristics miss.
+of the answer — all in pure Python/SQL. You don't need to re-store the turn; add
+richer nodes/links only for things the heuristics miss.
+
+**What "token-free" means here — precisely.** No skill, hook or query ever spends
+tokens *deciding* or *storing*: that work is regex + SQL. What does cost tokens is
+text that lands in the conversation — command output you read, and the short
+`additionalContext` two hooks inject. Measured 2026-07-27:
+
+| Hook | Injected into context |
+|---|---|
+| `UserPromptSubmit` | **193 chars**, on every prompt |
+| `SessionStart` | **~850 chars** (open-loops brief, capped at 6 loops so it does not grow with the graph) |
+| `Stop` | **nothing** |
+
+In a real 17-prompt session that was ~1,000 new tokens — **0.01% of the session,
+about half a cent** — and it likely pays for itself, since the injected line tells
+the model not to re-store the turn and to recall through the free paths instead.
+So: effectively free, **not literally zero**. Say "no model call" when you mean it.
 
 - **Recall first.** Before answering, `match-skills` / `search` the graph (or the
   free `brain_query.py` views) so you build on prior context instead of starting
@@ -191,7 +207,7 @@ the resilience cache.
 ## 2e. Token-free reads (`brain_query.py`)
 
 Everyday "what's on my plate" reads don't need the model. `scripts/brain_query.py`
-answers the common date views in pure SQL — **no tokens** — as a text table
+answers the common date views in pure SQL — **no model call** (§0) — as a text table
 (read it directly) or `--json` (for the UI/phone backend):
 
 ```

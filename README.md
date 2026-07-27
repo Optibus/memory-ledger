@@ -61,15 +61,20 @@ pulls any existing markdown skills into the DB as nodes.)
 
 These are enforced in `CONVENTIONS.md`, which every skill reads first.
 
-**Always-on capture — token-free.** When the brain is enabled, plugin hooks
-persist every interaction in pure Python/SQL (no model, no tokens): a
-`UserPromptSubmit` hook (`hooks/capture_prompt.py`) stores each prompt and
-auto-creates tasks for explicit to-dos; a `Stop` hook (`hooks/capture_answer.py`)
-stores a summary of the answer, linked to its question. So a simple answered
-question becomes a recallable node on its own — and you recall it for free via
-`graph.py search` / `brain_query.py`, never spending tokens to "remember".
-Disable it by removing/renaming the brain home (`~/.second_brain`); the hooks then
-no-op.
+**Always-on capture — no model call.** When the brain is enabled, plugin hooks
+persist every interaction in pure Python/SQL: a `UserPromptSubmit` hook
+(`hooks/capture_prompt.py`) stores each prompt and auto-creates tasks for explicit
+to-dos; a `Stop` hook (`hooks/capture_answer.py`) stores a summary of the answer,
+linked to its question. Deciding and storing cost **zero** tokens — it is regex and
+SQL. Two of the hooks do inject a short status line into the conversation (193 chars
+per prompt, an ~850-char open-loops brief at session start; the `Stop` hook injects
+nothing), which measured **0.01% of a real session — about half a cent**. Effectively
+free, not literally zero.
+
+So a simple answered question becomes a recallable node on its own, and you get it
+back by running `graph.py search` / `brain_query.py` — those run outside the
+conversation, so recall itself costs nothing. Disable the whole thing by
+removing/renaming the brain home (`~/.second_brain`); the hooks then no-op.
 
 ## Skills
 
@@ -126,7 +131,9 @@ python3 scripts/graph.py use-skill --id skill_triage-x         # reinforce
 ## Token-free views (`brain_query.py`)
 
 Everyday reads don't need the model. `scripts/brain_query.py` answers the common
-date views in pure SQL — **no tokens** — as a text table or `--json`:
+date views in pure SQL — **no model call** — as a text table or `--json`. Run it in a
+terminal and it costs nothing at all; run it from a session and you pay only for the
+rows you read back:
 
 ```bash
 python3 scripts/brain_query.py agenda      # overdue + today + tomorrow

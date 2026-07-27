@@ -91,9 +91,9 @@ one brain across machines, point it at a neo4j server — create `~/.second_brai
 SQLite immediately and sync to neo4j through an offline outbox; reads prefer the
 master when it's reachable. **Keep this file out of the repo — it holds a secret.**
 
-## 3. What turns on automatically (token-free)
+## 3. What turns on automatically (no model call)
 
-Once enabled, hooks run in **pure Python/SQL — no model, no tokens**:
+Once enabled, hooks run in **pure Python/SQL — no model call**:
 
 - **SessionStart** → injects a brief of your open loops (`open_loops_brief.py`).
 - **UserPromptSubmit** → `capture_prompt.py` stores each prompt as a `capture` node
@@ -102,8 +102,10 @@ Once enabled, hooks run in **pure Python/SQL — no model, no tokens**:
 - **Stop** → `capture_answer.py` stores an extractive summary of the answer, linked
   to its question.
 
-So every interaction is remembered without spending tokens, and you recall it the
-same way — free:
+So every interaction is remembered without a single model call. Two of the hooks do
+add a short line to the conversation — 193 chars per prompt and an ~850-char
+open-loops brief per session start (`Stop` adds nothing) — which measured **0.01% of
+a real session**. Recall itself runs outside the conversation and costs nothing:
 
 ```
 python3 scripts/brain_query.py agenda          # today/tomorrow/week/closed/range
