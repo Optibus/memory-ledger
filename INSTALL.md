@@ -71,6 +71,10 @@ python3 ~/dev/second-brain/scripts/graph.py init
   `$SECOND_BRAIN_DB`).
 - Set your timezone once so date views bucket correctly, e.g. in your shell rc:
   `export SECOND_BRAIN_TZ="America/Sao_Paulo"`.
+- `$SECOND_BRAIN_*` is the **only** config prefix, and `~/.second_brain` the only
+  default home. Since v0.1.1 there is no fallback to the pre-rebrand `WORK_BRAIN_*`
+  vars or `~/.work_brain` home — if you still have an old home dir, move it to
+  `~/.second_brain` yourself; it will not be picked up.
 
 To **disable** the brain anywhere, unset/rename that dir — the hooks detect it and
 go quiet.
