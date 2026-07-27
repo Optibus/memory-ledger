@@ -119,6 +119,8 @@ Every command prints JSON to stdout. Commands:
 | `del-edge --src ID --dst ID --rel REL` | Remove a link. |
 | `search "text" [--type T] [--limit N]` | Full-text search over title+body (prefix-matched). |
 | `suggest-links "text" [--limit N] [--exclude ID]` | **Link recognition** — which known nodes this text mentions, and the relation its wording implies (`blocked by X` → `blocked-by`). Pure regex + a node scan: no model, no tokens. Powers the web UI's live suggestions as you type. |
+| `recall "cue" [--limit N] [--depth 2] [--budget CHARS]` | **Associative recall — prefer this over `search`.** Seeds on full-text, spreads activation across edges, modulates by memory strength, returns a SLIM ranked payload inside a char budget. One call replaces `search` + `neighbors` and costs ~40% fewer chars. |
+| `consolidate [--day D] [--older-than N]` | Roll a day's `capture` nodes into one digest note. **Non-destructive** — every capture is kept and linked; the digest is what recall surfaces. |
 | `list [--type T] [--status S] [--due-before ISO] [--all] [--limit N]` | Filtered list. **Hides the done/cancelled archive by default** — pass `--all` or `--status done` to see it. |
 | `due [--within-days N]` | Tasks/reminders due within N days (flags `overdue`). |
 | `neighbors --id ID [--rel REL] [--depth N]` | Walk the graph out to depth N. |
@@ -283,6 +285,46 @@ for nothing.
 expose the UI (`--host 0.0.0.0` for phone access), pass **`--no-write`**: every
 `POST` then returns 403 and the UI hides its editing controls (`/api/meta`
 reports `writable: false`).
+
+## 2g. Memory dynamics — how recall behaves like memory
+
+Three properties, all pure SQL/regex (recall stays model-free):
+
+**Strength + decay.** Every node carries `access_count` / `last_accessed` /
+`strength` (0–1). **Reading reinforces** — `recall` and `match-skills` bump the
+nodes they return. Strength decays with disuse on a ~21-day half-life, so a note
+used weekly outranks one written once and never reopened. Nothing is ever deleted;
+a faded memory just stops winning the ranking. A node accessed 3× reads 0.56 fresh,
+0.28 after three untouched weeks, 0.00 after six months.
+
+**Spreading activation.** `recall` seeds on FTS, then spreads across edges to
+`--depth` (default 2), summing convergent paths so independent evidence adds up.
+Two dampers keep it honest:
+- **fan-out normalisation** — a node divides activation among its neighbours
+  instead of giving each a full share. Without it the owner's `person` node (~80
+  edges) collects activation from every seed and re-broadcasts it, and a query for
+  a ticket comes back as a list of people.
+- **ubiquity penalty** — an *associated* hit is divided by `log2(1+degree)`. A node
+  wired to everything answers every query and distinguishes none. Lexical matches
+  are exempt; they earned their rank.
+Cue words are stopword-filtered (English + pt-BR), since function words widen the
+sweep for nothing.
+
+**Hebbian wiring.** Co-activated nodes get a weighted `relates-to` edge — but only
+after the pair fires together **3 times** (tallied in the local `coactivation`
+table, which never syncs). One co-occurrence is a coincidence, not a pattern: an
+early version wired a shapefile ticket to the `export-memory` skill because both
+matched "export". Pairs already joined by any relation are skipped, and
+`skill`/`channel`/`person`/`capture` never auto-wire — those are hubs, or they get
+linked by intent (§2b).
+
+**Why this is also a token optimisation.** Better ranking means fewer results are
+needed, and payloads carry a snippet instead of a whole body. Measured on the real
+graph: `match-skills` **7,449 → 682 chars (−91%)** — and §3 mandates it on every
+routed request — while a context lookup drops **41%**. About **2,000 tokens saved
+per routed request**. `match-skills` returns cue-sized rows now; read the full
+procedure with `get-node --id` for the one skill you actually pick (`--full`
+restores the old payload).
 
 ## 3. Vocabulary
 

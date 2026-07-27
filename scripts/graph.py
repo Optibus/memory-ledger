@@ -162,6 +162,12 @@ def _ensure_schema(con) -> None:
     con.execute(
         "CREATE TABLE IF NOT EXISTS outbox ("
         "seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, ref TEXT, created TEXT)")
+    # Hebbian tally: how often two nodes have co-activated in recall. Local only —
+    # it never syncs, and an EDGE is only created once a pair repeats (see
+    # HEBBIAN_THRESHOLD), so a single lexical coincidence cannot wire the graph.
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS coactivation ("
+        "a TEXT, b TEXT, n INTEGER DEFAULT 0, last TEXT, PRIMARY KEY(a,b))")
     con.commit()
 
 
@@ -711,8 +717,24 @@ def cmd_match_skills(args):
             "SELECT * FROM nodes WHERE type='skill' ORDER BY updated DESC").fetchall()
         results = [_node_dict(r) for r in rows]
         results.sort(key=lambda r: r["props"].get("usage_count", 0), reverse=True)
-    out({"ok": True, "count": len(results),
-         "results": results[: args.limit]})
+    results = results[: args.limit]
+    # TOKEN COST: this runs on EVERY routed request (CONVENTIONS §3), and the full
+    # procedure bodies made it ~8.1k chars. The caller only needs to pick a skill
+    # here — it reads the procedure with `get-node --id` once it has. So return a
+    # cue-sized row by default; `--full` restores the old payload.
+    if not getattr(args, "full", False):
+        slim = []
+        for r in results:
+            p = r["props"]
+            slim.append({"id": r["id"], "title": r["title"],
+                         "triggers": (p.get("triggers") or "")[:220],
+                         "uses": int(p.get("usage_count", 0) or 0),
+                         "strength": _strength(p),
+                         "read_procedure": f"get-node --id {r['id']}"})
+        results = slim
+    con2 = connect()
+    _touch(con2, [r["id"] for r in results])   # recognising a skill reinforces it
+    out({"ok": True, "count": len(results), "results": results})
 
 
 def _plugin_skills_dir() -> Path:
@@ -1088,6 +1110,355 @@ def api_unlink(con, src, dst, rel):
 
 
 # ---------------------------------------------------------------------------
+# memory dynamics — strength, decay, spreading activation, Hebbian wiring
+# ---------------------------------------------------------------------------
+# A brain does not keep every trace at equal weight, and it does not retrieve by
+# string match. Three properties we mirror here, all in pure SQL/regex (no model,
+# so recall stays free):
+#
+#   strength   every node carries access_count/last_accessed; strength RISES with
+#              use and DECAYS with disuse, so what has proven useful ranks first.
+#   activation recall seeds on full-text, then spreads across edges with distance
+#              decay — asking about a ticket also surfaces its PR, its blocker
+#              and the person it is assigned to.
+#   Hebbian    nodes that activate together get wired together, so the graph
+#              densifies itself instead of relying on manual linking.
+#
+# Everything below is also a TOKEN optimisation: better ranking means the caller
+# needs fewer results, and payloads are slimmed to a snippet instead of whole
+# bodies (see _slim). match-skills alone drops ~8.1k chars -> ~0.6k.
+
+ACTIVATION_DECAY = 0.45        # activation retained per edge hop
+ACTIVATION_DEPTH = 2           # how far activation spreads
+STRENGTH_HALF_LIFE = 21.0      # days for an untouched memory to halve
+RECALL_BUDGET = 1600           # default char budget for a recall payload
+SNIPPET = 150                  # chars of body context returned per hit
+HEBBIAN_TOP = 3                # how many co-activated nodes may wire together
+HEBBIAN_MAX_NEW = 2            # cap new edges per recall, so it never hairballs
+HEBBIAN_THRESHOLD = 3          # co-activations required before an edge forms
+# Hubs, and things that should be linked by intent rather than correlation:
+# a person/channel co-activates with everything, and skills carry deliberate
+# applies-to / learned-from edges (CONVENTIONS §2b).
+HEBBIAN_SKIP_TYPES = {"skill", "channel", "person", "capture"}
+
+
+def _days_since(iso: str) -> float:
+    if not iso:
+        return 999.0
+    try:
+        then = datetime.fromisoformat(iso)
+        if then.tzinfo is None:
+            then = then.replace(tzinfo=timezone.utc)
+        return max(0.0, (datetime.now(timezone.utc) - then).total_seconds() / 86400.0)
+    except Exception:
+        return 999.0
+
+
+def _strength(props: dict) -> float:
+    """0..1 memory strength. Repetition raises the ceiling, disuse decays toward
+    it — the forgetting curve, not a hard expiry. Nothing is ever deleted."""
+    uses = int(props.get("access_count", 0) or 0)
+    ceiling = min(1.0, 0.25 + 0.18 * (uses ** 0.5))
+    age = _days_since(props.get("last_accessed") or props.get("updated") or "")
+    return round(ceiling * (0.5 ** (age / STRENGTH_HALF_LIFE)), 4)
+
+
+def _touch(con, ids) -> None:
+    """Reinforce on READ — reading is what strengthens a memory. Deliberately
+    local-only: it does NOT enqueue a neo4j sync, because a read storm must not
+    become a write storm. Strength rides along on the node's next real write."""
+    ts = now()
+    for nid in set(i for i in ids if i):
+        row = con.execute("SELECT props FROM nodes WHERE id=?", (nid,)).fetchone()
+        if not row:
+            continue
+        try:
+            p = json.loads(row["props"] or "{}")
+        except Exception:
+            p = {}
+        p["access_count"] = int(p.get("access_count", 0) or 0) + 1
+        p["last_accessed"] = ts
+        p["strength"] = _strength(p)
+        con.execute("UPDATE nodes SET props=? WHERE id=?", (json.dumps(p), nid))
+    con.commit()
+
+
+def _excerpt(body: str, terms, width: int = SNIPPET) -> str:
+    """A snippet around the first matching term — not the whole body. This is
+    where most of the token saving comes from."""
+    body = re.sub(r"\s+", " ", body or "").strip()
+    if len(body) <= width:
+        return body
+    low = body.lower()
+    at = -1
+    for t in terms or []:
+        at = low.find(t.lower())
+        if at >= 0:
+            break
+    if at < 0:
+        return body[:width].rstrip() + "…"
+    start = max(0, at - width // 3)
+    return ("…" if start else "") + body[start:start + width].rstrip() + "…"
+
+
+def _slim(d: dict, terms=(), snippet=True) -> dict:
+    """Compact form of a node for machine reading: identity, state, and a snippet
+    — never the full body or the whole props blob."""
+    p = d.get("props") or {}
+    out_ = {"id": d["id"], "type": d["type"], "title": d["title"]}
+    for k in ("status", "due", "realm"):
+        if d.get(k):
+            out_[k] = d[k]
+    for k in ("priority", "assignee", "waiting_on", "delegated"):
+        if p.get(k):
+            out_[k] = p[k]
+    if snippet and d.get("body"):
+        out_["snippet"] = _excerpt(d["body"], terms)
+    return out_
+
+
+# Function words carry no cue value, and each one widens the activation sweep for
+# nothing. Bilingual because this brain is driven in English and pt-BR.
+_CUE_STOP = {
+    "the","and","for","was","were","are","did","does","what","when","who","why","how",
+    "with","from","that","this","these","those","have","has","had","will","would",
+    "can","could","should","about","into","over","you","your","yours","our","ours",
+    "his","her","its","their","them","they","not","but","any","all","some","more",
+    "just","only","then","than","also","been","being","get","got","let","ask","asked",
+    "que","com","para","por","dos","das","uma","uns","umas","nao","não","sim","meu",
+    "minha","seu","sua","dele","dela","isso","esse","essa","aquilo","como","quando",
+    "quem","onde","porque","porqu","tem","ter","tinha","fez","fazer","foi","era",
+    "pra","pro","nos","nas","aos","mais","mas","ele","ela","eles","elas","voce","você",
+}
+
+
+def _fts_terms(q: str):
+    words = [t for t in re.findall(r"\w+", (q or "").lower()) if len(t) > 2]
+    kept = [t for t in words if t not in _CUE_STOP]
+    return kept or words          # never end up with an empty cue
+
+
+def cmd_recall(args):
+    """Associative recall: seed on full-text, spread activation across edges,
+    modulate by memory strength, return a SLIM ranked payload inside a char
+    budget. One call replaces search + neighbors, and costs fewer tokens."""
+    con = connect()
+    q = args.query or ""
+    words = _fts_terms(q)
+    seeds = {}
+    if words:
+        terms = " OR ".join(f'"{w}"*' for w in words)
+        try:
+            rows = con.execute(
+                "SELECT n.* FROM nodes_fts f JOIN nodes n ON n.rowid=f.rowid"
+                " WHERE nodes_fts MATCH ? ORDER BY rank LIMIT 40", (terms,)).fetchall()
+        except Exception:
+            rows = []
+        for i, r in enumerate(rows):
+            seeds[r["id"]] = 1.0 / (1.0 + i)
+
+    # Spreading activation, summing convergent paths (evidence adds up).
+    #
+    # Activation is normalised by FAN-OUT: a node divides what it passes among its
+    # neighbours instead of handing each one a full share. Without this, hubs win
+    # everything — the owner's `person` node has ~80 edges, so it collects
+    # activation from every seed and then re-broadcasts it, and a query for a
+    # ticket comes back as a list of people. Dividing by degree keeps a hub's
+    # individual links weak while a sparse, specific link stays strong.
+    act = dict(seeds)
+    frontier = dict(seeds)
+    for _ in range(max(0, int(args.depth))):
+        nxt = {}
+        for nid, a in frontier.items():
+            nbrs = con.execute(
+                "SELECT dst AS other FROM edges WHERE src=?"
+                " UNION ALL SELECT src AS other FROM edges WHERE dst=?",
+                (nid, nid)).fetchall()
+            if not nbrs:
+                continue
+            share = a * ACTIVATION_DECAY / float(len(nbrs))
+            if share < 0.005:
+                continue
+            for e in nbrs:
+                nxt[e["other"]] = nxt.get(e["other"], 0.0) + share
+                act[e["other"]] = act.get(e["other"], 0.0) + share
+        frontier = nxt
+        if not frontier:
+            break
+    if not act:
+        out({"ok": True, "query": q, "count": 0, "results": []}); return
+
+    ids = list(act)
+    ph = ",".join("?" * len(ids))
+    nodes = {r["id"]: _node_dict(r) for r in
+             con.execute(f"SELECT * FROM nodes WHERE id IN ({ph})", ids).fetchall()}
+
+    # degree of everything we might return, for the ubiquity penalty below
+    deg = {r["id"]: r["n"] for r in con.execute(
+        f"SELECT id, (SELECT COUNT(*) FROM edges e WHERE e.src=nodes.id OR e.dst=nodes.id)"
+        f" AS n FROM nodes WHERE id IN ({ph})", ids).fetchall()}
+
+    import math
+    scored = []
+    for nid, a in act.items():
+        d = nodes.get(nid)
+        if not d:
+            continue
+        if d["type"] == "capture" and not args.include_captures:
+            continue          # the day's digest covers these (see `consolidate`)
+        if not args.all and (d.get("status") or "").lower() in DONE_STATUSES:
+            continue
+        s = _strength(d["props"])
+        score = a * (0.55 + 0.45 * s)
+        # A node linked to everything (the owner's own person node, a hub channel)
+        # is structurally uninformative — it answers every query and distinguishes
+        # none. Penalise ubiquity, but only when the node was merely ASSOCIATED;
+        # a lexical hit earned its rank.
+        if nid not in seeds:
+            score /= (1.0 + math.log2(1.0 + deg.get(nid, 0)))
+        row = _slim(d, words)
+        row["score"] = round(score, 4)
+        row["why"] = "matched" if nid in seeds else "associated"
+        scored.append((score, row))
+    scored.sort(key=lambda x: -x[0])
+
+    results, used = [], 0
+    for _, row in scored:
+        cost = len(json.dumps(row, ensure_ascii=False))
+        if len(results) >= int(args.limit) or (used + cost) > int(args.budget):
+            break
+        results.append(row); used += cost
+
+    top = [r["id"] for r in results]
+    _touch(con, top)                                  # reading reinforces
+    wired = _hebbian(con, top) if args.wire else []
+    out({"ok": True, "query": q, "count": len(results), "payload_chars": used,
+         "activated": len(act), "wired": wired, "results": results})
+
+
+def _hebbian(con, ids) -> list:
+    """Fire together, wire together — but only after a pattern REPEATS.
+
+    Each recall tallies co-activation; an edge appears only once a pair has fired
+    together HEBBIAN_THRESHOLD times. That is closer to real potentiation than
+    wiring on first co-occurrence, and it stops lexical coincidences (a ticket
+    about "export" briefly co-activating the export-memory skill) from becoming
+    permanent structure. Skills, channels and people are excluded: they are hubs,
+    or they get linked deliberately (CONVENTIONS §2b), not by correlation.
+    """
+    made = []
+    if len(ids) < 2:
+        return made
+    types = {}
+    ph = ",".join("?" * len(ids))
+    for r in con.execute(f"SELECT id,type FROM nodes WHERE id IN ({ph})", ids):
+        types[r["id"]] = r["type"]
+    top = [i for i in ids[:HEBBIAN_TOP]
+           if i and types.get(i) not in HEBBIAN_SKIP_TYPES]
+    ts = now()
+    for x, y in [(p, q) for i, p in enumerate(top) for q in top[i + 1:]]:
+        a, b = sorted((x, y))
+        con.execute(
+            "INSERT INTO coactivation(a,b,n,last) VALUES(?,?,1,?)"
+            " ON CONFLICT(a,b) DO UPDATE SET n=n+1, last=excluded.last", (a, b, ts))
+        n = con.execute("SELECT n FROM coactivation WHERE a=? AND b=?",
+                        (a, b)).fetchone()["n"]
+        # Note the parenthesisation: AND binds tighter than OR, so the pair test
+        # must be grouped or the rel filter only applies to one direction.
+        existing = con.execute(
+            "SELECT rel, props FROM edges"
+            " WHERE ((src=? AND dst=?) OR (src=? AND dst=?))", (a, b, b, a)).fetchall()
+        if existing:
+            # Already associated by ANY relation (has-pr, blocks, part-of…) — the
+            # association exists, so do not pile a redundant relates-to on top.
+            # If it is our own Hebbian edge, keep its weight current.
+            for e in existing:
+                if e["rel"] != "relates-to":
+                    continue
+                try:
+                    pr = json.loads(e["props"] or "{}")
+                except Exception:
+                    pr = {}
+                if pr.get("hebbian"):
+                    pr["weight"] = n
+                    pr["last_fired"] = ts
+                    con.execute(
+                        "UPDATE edges SET props=? WHERE rel='relates-to'"
+                        " AND ((src=? AND dst=?) OR (src=? AND dst=?))",
+                        (json.dumps(pr), a, b, b, a))
+            continue
+        if n < HEBBIAN_THRESHOLD or len(made) >= HEBBIAN_MAX_NEW:
+            continue                                    # not yet a pattern
+        try:
+            con.execute(
+                "INSERT INTO edges(src,dst,rel,props,created) VALUES(?,?,?,?,?)",
+                (a, b, "relates-to",
+                 json.dumps({"hebbian": True, "weight": n, "last_fired": ts}), ts))
+            made.append({"src": a, "dst": b, "rel": "relates-to", "after": n})
+        except Exception:
+            pass
+    con.commit()
+    if made:
+        _after_write(con, edges=[(m["src"], m["dst"], m["rel"]) for m in made])
+    return made
+
+
+def cmd_consolidate(args):
+    """Sleep-style consolidation: episodic captures -> one semantic digest per
+    day, linked back to the originals. NON-DESTRUCTIVE — every capture is kept;
+    the digest is what recall surfaces, so reads get cheaper without losing raw
+    detail (CONVENTIONS §2a)."""
+    con = connect()
+    where, params = "type='capture'", []
+    if args.day:
+        where += " AND substr(created,1,10)=?"; params.append(args.day)
+    elif args.older_than is not None:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=int(args.older_than))
+                  ).date().isoformat()
+        where += " AND substr(created,1,10)<=?"; params.append(cutoff)
+    rows = con.execute(
+        f"SELECT * FROM nodes WHERE {where} ORDER BY created", params).fetchall()
+    if not rows:
+        out({"ok": True, "digests": [], "note": "no captures matched"}); return
+
+    by_day = {}
+    for r in rows:
+        by_day.setdefault(r["created"][:10], []).append(_node_dict(r))
+
+    digests = []
+    for day, caps in sorted(by_day.items()):
+        asked = [c for c in caps if (c["props"].get("role") == "user")]
+        lines = []
+        for c in asked:
+            t = re.sub(r"\s+", " ", c["title"]).strip()
+            lines.append(f"- {t[:110]}")
+        did = f"note_digest_{day}"
+        body = (f"Digest of {len(caps)} captures on {day} "
+                f"({len(asked)} prompts). Originals kept and linked.\n\n"
+                + "\n".join(lines[:40]))
+        props = {"kind": "capture-digest", "day": day, "captures": len(caps),
+                 "prompts": len(asked), "consolidated_at": now()}
+        if con.execute("SELECT 1 FROM nodes WHERE id=?", (did,)).fetchone():
+            api_update_node(con, did, title=f"Digest — {day}", body=body,
+                            props_patch=props)
+        else:
+            api_create_node(con, "note", f"Digest — {day}", body, props,
+                            realm=DEFAULT_REALM, node_id=did)
+        linked = 0
+        for c in caps:
+            api_link(con, did, c["id"], "part-of")
+            cp = dict(c["props"]); cp["consolidated_into"] = did
+            con.execute("UPDATE nodes SET props=? WHERE id=?",
+                        (json.dumps(cp), c["id"]))
+            linked += 1
+        con.commit()
+        digests.append({"id": did, "day": day, "captures": linked,
+                        "kept_originals": True})
+    _after_write(con, nodes=[d["id"] for d in digests])
+    out({"ok": True, "digests": digests, "destructive": False})
+
+
+# ---------------------------------------------------------------------------
 # state awareness / open loops
 # ---------------------------------------------------------------------------
 # A node is an OPEN LOOP until its state says otherwise. State persists (stays
@@ -1235,6 +1606,25 @@ def build_parser():
     a.add_argument("--src", required=True); a.add_argument("--dst", required=True)
     a.add_argument("--rel", required=True)
 
+    a = sub.add_parser("recall"); a.set_defaults(func=cmd_recall)
+    a.add_argument("query", nargs="?", default="")
+    a.add_argument("--limit", type=int, default=8)
+    a.add_argument("--depth", type=int, default=ACTIVATION_DEPTH,
+                   help="how far activation spreads across edges (default 2)")
+    a.add_argument("--budget", type=int, default=RECALL_BUDGET,
+                   help="max chars of payload to return (token guard)")
+    a.add_argument("--all", action="store_true", help="include done/cancelled")
+    a.add_argument("--include-captures", action="store_true",
+                   help="include raw capture nodes (normally the digest covers them)")
+    a.add_argument("--no-wire", dest="wire", action="store_false",
+                   help="do not create Hebbian co-activation edges")
+    a.set_defaults(wire=True)
+
+    a = sub.add_parser("consolidate"); a.set_defaults(func=cmd_consolidate)
+    a.add_argument("--day", help="YYYY-MM-DD (default: every day with captures)")
+    a.add_argument("--older-than", type=int, dest="older_than",
+                   help="only days at least N days old")
+
     a = sub.add_parser("suggest-links"); a.set_defaults(func=cmd_suggest_links)
     a.add_argument("text", help="free text to scan for mentions of known nodes")
     a.add_argument("--limit", type=int, default=8)
@@ -1281,6 +1671,8 @@ def build_parser():
     a = sub.add_parser("match-skills"); a.set_defaults(func=cmd_match_skills)
     a.add_argument("query", nargs="?", default="")
     a.add_argument("--limit", type=int, default=5)
+    a.add_argument("--full", action="store_true",
+                   help="return full skill bodies (default: cue-sized rows)")
 
     a = sub.add_parser("use-skill"); a.set_defaults(func=cmd_use_skill)
     a.add_argument("--id", required=True)

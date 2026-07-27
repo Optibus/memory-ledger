@@ -110,6 +110,7 @@ traversal, due-date queries, export). Skills call it; you can too:
 
 ```bash
 python3 scripts/graph.py add-node --type task --title "Ship report" --due 2026-07-23T09:00:00+00:00
+python3 scripts/graph.py recall "report"        # associative: matches + what they connect to
 python3 scripts/graph.py search "report"
 python3 scripts/graph.py due --within-days 7
 python3 scripts/graph.py neighbors --id <node-id> --depth 2
@@ -127,6 +128,20 @@ python3 scripts/graph.py ingest-skills                         # pull markdown s
 python3 scripts/graph.py match-skills "a situation"            # recall: relevance-ranked, reinforcement-boosted
 python3 scripts/graph.py use-skill --id skill_triage-x         # reinforce
 ```
+
+## Recall behaves like memory
+
+`recall` is the retrieval path — prefer it over `search`. It seeds on full-text,
+spreads activation across edges (so asking about a ticket also surfaces its PR, its
+blocker and its owner), and ranks by **memory strength**: reading reinforces, disuse
+decays on a ~21-day half-life. Nodes that co-activate **3 times** get wired together
+automatically, so the graph densifies from use instead of manual linking. Raw
+`capture` nodes are covered by a daily digest (`consolidate`, non-destructive), so
+recall surfaces one summary instead of forty log entries.
+
+It is also the cheap path: `match-skills` shrank **7,449 → 682 chars (−91%)** and a
+context lookup **−41%** — roughly **2,000 tokens saved per routed request**. See
+CONVENTIONS §2g.
 
 ## Token-free views (`brain_query.py`)
 
