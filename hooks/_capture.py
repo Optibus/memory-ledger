@@ -155,24 +155,31 @@ def known_people(con):
 
 _FIRST_PERSON = re.compile(
     r"(?i)\b(remind me|i need to|i have to|i've got to|i should|i must|i'?ll|i want to|my )\b")
-_OTHER_CUE = re.compile(
-    r"(?i)\b(?:ask|tell|ping|nudge|chase|remind|delegate to|hand off to|"
+# The OWNER is the actor here (they act ON the named person) — so these are the
+# OWNER's tasks; the named person is the TARGET, not the assignee.
+_OWNER_ACTION = re.compile(
+    r"(?i)\b(ask|tell|ping|nudge|chase|remind|call|email|message|reply to|"
     r"follow[- ]?up with|get)\s+([a-z][a-z]+)")
+# The named person is the actor here → the task is theirs.
+_ASSIGN_OTHER = re.compile(r"(?i)\b(?:delegate to|hand off to|assign to)\s+([a-z][a-z]+)")
 
 
 def infer_assignee(text: str, owner: str, people) -> str:
     """Best-effort, token-free: is this to-do the OWNER's action, someone else's,
     or unknown? Returns the owner, a person's name, or '' (leave unassigned — do
-    NOT assume it's the owner's)."""
+    NOT assume it's the owner's). NOTE: "ask/chase/remind <Name>" is the OWNER's
+    task (they do the asking); the person is the target, not the assignee."""
     t = text or ""
-    m = _OTHER_CUE.search(t)
+    m = _ASSIGN_OTHER.search(t)          # explicitly handed to someone
     if m:
         name = m.group(1).lower()
         if name in ("me", "myself", "self"):
             return owner
         if not people or name in people:
             return name.capitalize()
-    for p in sorted(people, key=len, reverse=True):
+    if _OWNER_ACTION.search(t):           # owner acts ON someone → owner's task
+        return owner
+    for p in sorted(people, key=len, reverse=True):   # "<Name> will/should/needs to…"
         if re.search(r"(?i)\b" + re.escape(p) + r"\s+(needs to|should|will|has to|is going to|to)\b", t):
             return p.split()[0].capitalize()
     if _FIRST_PERSON.search(t):

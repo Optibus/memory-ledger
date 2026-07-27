@@ -245,11 +245,15 @@ turning "tomorrow 9am" into an ISO time.
 
 **Props** is a free JSON dict for anything that isn't a first-class column:
 `slack`, `tz`, `email`, `jira_key`, `url`, `estimate_min`, `energy`, etc.
-- **`assignee`** — who owns a task. The capture hook **infers** it (first-person
-  cue → owner; "ask/chase/<Name> to…" → that person; otherwise left unset — it does
-  NOT assume the owner). Set it explicitly when you know: a name for someone else's
-  work, `Gabriel` for the owner's. Unset = unknown (still counts under `--mine`,
-  but shows as `unassigned` in the assignee filter).
+- **`assignee`** — who owns a task (the actor). The capture hook **infers** it:
+  first-person → owner; **"ask/chase/remind/ping <Name>" → the OWNER** (they do the
+  asking; the person is the *target*, not the assignee); "delegate to <Name>" or
+  "<Name> will/should/needs to…" → that person; otherwise left unset (NOT assumed
+  the owner's). Set it explicitly when you know. Unset = unknown (still counts under
+  `--mine`, shows as `unassigned` in the assignee filter).
+  **Ingestion may use the model** to judge the assignee (tokens OK when capturing
+  notes/emails/threads); **querying stays token-free** — the hook heuristic above
+  is the no-model fallback.
 - **`delegated`** — set (e.g. `ai-delegator:pr-review`) when the work is handed off;
   also excluded from `--mine`. Pair with `waiting_on`.
 
