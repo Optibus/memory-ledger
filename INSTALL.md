@@ -95,7 +95,14 @@ master when it's reachable. **Keep this file out of the repo — it holds a secr
 
 Once enabled, hooks run in **pure Python/SQL — no model call**:
 
-- **SessionStart** → injects a brief of your open loops (`open_loops_brief.py`).
+- **SessionStart** → injects a brief of your open loops (`open_loops_brief.py`),
+  and **once a day** kicks off consolidation in the background: closed days'
+  captures are folded into digest notes (originals kept). Detached, so it never
+  delays the session; disable with `SECOND_BRAIN_NO_CONSOLIDATE=1`. It runs here
+  rather than as a scheduled cloud routine because the brain is a local file — a
+  cloud routine cannot read it. If you want it to run even on days you never open
+  Claude Code, add a launchd agent calling
+  `graph.py consolidate --older-than 1`.
 - **UserPromptSubmit** → `capture_prompt.py` stores each prompt as a `capture` node
   and auto-creates `task` nodes for explicit to-dos ("remind me…", "todo:", "follow
   up…"), linked back to the turn.

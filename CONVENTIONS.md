@@ -310,6 +310,15 @@ Two dampers keep it honest:
 Cue words are stopword-filtered (English + pt-BR), since function words widen the
 sweep for nothing.
 
+**Daily consolidation runs itself.** The `SessionStart` hook fires
+`consolidate --older-than 1` **once per day, detached** — closed days get folded
+into digests while today's captures stay raw until the day ends. It lives in the
+hook, not in a cloud routine, because the brain is a LOCAL file that a cloud
+routine cannot reach; session start is the one moment we know we are on the machine
+that owns the graph. Guarded by a `~/.second_brain/.last_consolidate` stamp, never
+blocks the session, and is safe to interrupt (non-destructive, so the next session
+just picks it up). Opt out with `$SECOND_BRAIN_NO_CONSOLIDATE`.
+
 **Hebbian wiring.** Co-activated nodes get a weighted `relates-to` edge — but only
 after the pair fires together **3 times** (tallied in the local `coactivation`
 table, which never syncs). One co-occurrence is a coincidence, not a pattern: an

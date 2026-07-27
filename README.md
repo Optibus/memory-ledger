@@ -137,7 +137,9 @@ blocker and its owner), and ranks by **memory strength**: reading reinforces, di
 decays on a ~21-day half-life. Nodes that co-activate **3 times** get wired together
 automatically, so the graph densifies from use instead of manual linking. Raw
 `capture` nodes are covered by a daily digest (`consolidate`, non-destructive), so
-recall surfaces one summary instead of forty log entries.
+recall surfaces one summary instead of forty log entries — and that digest happens
+**automatically**: the session-start hook runs it once a day in the background,
+folding closed days while today stays raw.
 
 It is also the cheap path: `match-skills` shrank **7,449 → 682 chars (−91%)** and a
 context lookup **−41%** — roughly **2,000 tokens saved per routed request**. See
