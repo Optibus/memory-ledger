@@ -7,7 +7,7 @@ driver needed). Idempotent: MERGE on id, so re-running just updates.
 
 Config (endpoint + creds) is read from the PRIVATE brain home, never the repo:
   ~/.second_brain/neo4j.json  ->  {"url": "...", "db": "neo4j", "user": "...", "password": "..."}
-or env: SECOND_BRAIN_NEO4J_URL / _DB / _USER / _PASSWORD (legacy WORK_BRAIN_* still works).
+or env: SECOND_BRAIN_NEO4J_URL / _DB / _USER / _PASSWORD.
 
 Usage:
   python3 scripts/brain_sync.py --dry-run     # show what would be sent, push nothing
@@ -37,10 +37,10 @@ def load_cfg() -> dict:
     if f.exists():
         cfg = json.loads(f.read_text())
     return {
-        "url": os.environ.get("SECOND_BRAIN_NEO4J_URL") or os.environ.get("WORK_BRAIN_NEO4J_URL", cfg.get("url", "")),
-        "db": os.environ.get("SECOND_BRAIN_NEO4J_DB") or os.environ.get("WORK_BRAIN_NEO4J_DB", cfg.get("db", "neo4j")),
-        "user": os.environ.get("SECOND_BRAIN_NEO4J_USER") or os.environ.get("WORK_BRAIN_NEO4J_USER", cfg.get("user", "neo4j")),
-        "password": os.environ.get("SECOND_BRAIN_NEO4J_PASSWORD") or os.environ.get("WORK_BRAIN_NEO4J_PASSWORD", cfg.get("password", "")),
+        "url": os.environ.get("SECOND_BRAIN_NEO4J_URL", cfg.get("url", "")),
+        "db": os.environ.get("SECOND_BRAIN_NEO4J_DB", cfg.get("db", "neo4j")),
+        "user": os.environ.get("SECOND_BRAIN_NEO4J_USER", cfg.get("user", "neo4j")),
+        "password": os.environ.get("SECOND_BRAIN_NEO4J_PASSWORD", cfg.get("password", "")),
     }
 
 

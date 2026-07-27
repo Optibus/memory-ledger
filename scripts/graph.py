@@ -26,10 +26,8 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 def _env(name: str, default: str = "") -> str:
-    """Config env lookup: prefer SECOND_BRAIN_<name>, fall back to the legacy
-    WORK_BRAIN_<name> (back-compat after the rename), else the default."""
-    return (os.environ.get("SECOND_BRAIN_" + name)
-            or os.environ.get("WORK_BRAIN_" + name) or default)
+    """Config env lookup: SECOND_BRAIN_<name>, else the default."""
+    return os.environ.get("SECOND_BRAIN_" + name) or default
 
 
 # Default section (realm) for new nodes; override with $SECOND_BRAIN_REALM or --realm.
@@ -63,16 +61,11 @@ def home_dir() -> Path:
     """The brain's home — a single global directory OUTSIDE any repo, so every
     project on the machine shares one brain (memory, learned skills, configs,
     routines, definitions). Override with $SECOND_BRAIN_HOME. Default:
-    ~/.second_brain, falling back to the legacy ~/.work_brain if that's the only
-    one present (so an un-migrated brain still loads)."""
+    ~/.second_brain."""
     env = _env("HOME")
     if env:
         return Path(env).expanduser()
-    new = Path.home() / ".second_brain"
-    legacy = Path.home() / ".work_brain"
-    if not new.exists() and legacy.exists():
-        return legacy
-    return new
+    return Path.home() / ".second_brain"
 
 
 def db_path() -> Path:

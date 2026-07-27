@@ -29,7 +29,7 @@ Read `${CLAUDE_PLUGIN_ROOT}/CONVENTIONS.md` once per session first.
    > `python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" update-node --id <reminder id> --status done`
    > (skip the status update if it is a recurring reminder).
 
-   Give the routine a clear name like `wb-remind-<slug>`. For recurring
+   Give the routine a clear name like `sb-remind-<slug>`. For recurring
    reminders pass the cron expression; for one-offs schedule the single run.
 4. **Confirm** in one line: what will fire, when (in their local time), and
    where it'll land. e.g. `Alarm set: I'll DM you "⏰ Standup" at 8:45 every

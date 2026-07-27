@@ -83,7 +83,7 @@ one brain across machines, point it at a neo4j server — create `~/.second_brai
 ```json
 { "url": "http://your-neo4j-host:7474", "db": "neo4j", "user": "neo4j", "password": "…" }
 ```
-(or the env vars `SECOND_BRAIN_NEO4J_URL / _DB / _USER / _PASSWORD`; the legacy `WORK_BRAIN_*` names still work). Writes go to
+(or the env vars `SECOND_BRAIN_NEO4J_URL / _DB / _USER / _PASSWORD`). Writes go to
 SQLite immediately and sync to neo4j through an offline outbox; reads prefer the
 master when it's reachable. **Keep this file out of the repo — it holds a secret.**
 

@@ -11,10 +11,8 @@ import sys
 import json
 import subprocess
 
-home = (os.environ.get("SECOND_BRAIN_HOME") or os.environ.get("WORK_BRAIN_HOME")
-        or (os.path.expanduser("~/.second_brain")
-            if os.path.isdir(os.path.expanduser("~/.second_brain"))
-            else os.path.expanduser("~/.work_brain")))
+home = (os.environ.get("SECOND_BRAIN_HOME")
+        or os.path.expanduser("~/.second_brain"))
 if not os.path.isdir(home):
     sys.exit(0)  # brain disabled -> silent
 
