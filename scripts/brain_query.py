@@ -147,10 +147,11 @@ def norm_assignee(raw: str, owner: str = OWNER) -> str:
 
 
 def is_mine_actionable(d: dict, owner: str = OWNER) -> bool:
-    """True if this is something the OWNER needs to act on now: mine or unassigned,
-    not delegated away, and not parked waiting on someone/something else."""
+    """True only if the OWNER must act on it NOW: assigned explicitly to the owner
+    (NOT unassigned, NOT someone else), not delegated away, and not parked
+    waiting/blocked. This is the strict 'my plate' definition."""
     props = d.get("props") or {}
-    if norm_assignee(props.get("assignee", ""), owner) not in ("me", "unassigned"):
+    if norm_assignee(props.get("assignee", ""), owner) != "me":
         return False
     if props.get("delegated"):
         return False
@@ -360,8 +361,14 @@ def compute(view, *, date_from=None, date_to=None, status="any",
         nodes = [n for n in nodes if is_mine_actionable(n)]
     if assignee:
         wanted = {w.strip().lower() for w in assignee.split(",") if w.strip()}
-        nodes = [n for n in nodes
-                 if norm_assignee((n.get("props") or {}).get("assignee", "")) in wanted]
+
+        def _amatch(n):
+            na = norm_assignee((n.get("props") or {}).get("assignee", ""))
+            if na not in wanted:
+                return False
+            # selecting "me" means MY actionable work, not every task tagged me
+            return is_mine_actionable(n) if na == "me" else True
+        nodes = [n for n in nodes if _amatch(n)]
 
     if view == "open":
         title, rows = "Open tasks (all, by due)", view_open(nodes, tzinfo)

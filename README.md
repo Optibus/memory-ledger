@@ -95,6 +95,8 @@ no-op.
 | `export-memory` | Dump the whole graph to Markdown / JSON. |
 
 Front door in Claude Code: **`/brain <anything>`** routes to all of the above.
+**`/plan-today`** picks up only *your* actionable tasks (token-free) and blocks
+them into your calendar's free windows, ending with one clear first action.
 
 ## The graph engine
 
@@ -140,10 +142,14 @@ drop tasks assigned to someone else, delegated away, or parked waiting/blocked �
 leaving only the owner's live actions (`$WORK_BRAIN_OWNER`, default `Gabriel`;
 unassigned counts as the owner's). Or filter by exact owner with
 **`--assignee me|unassigned|<name>`** (dashboard: one toggle chip per assignee).
-Rows carry **blocked_by / blocks / related** flags from the graph edges (the
-dashboard shows 🔒/⛓/🔗 badges), and dashboard cards **expand on click** to show
-the node's full body + linked neighbors (`/api/node`). Captured to-dos get their
-**assignee inferred** (mine / a named person / left unassigned — never blindly "me").
+`--mine` is **strict**: only tasks whose `assignee` is the owner (not unassigned,
+not someone else), and never delegated or parked waiting/blocked. Rows carry
+**blocked_by / blocks / related** flags from the graph edges (dashboard shows
+🔒/⛓/🔗 badges), cards **expand on click** for the full body + linked neighbors
+(`/api/node`), and you can **set a due date right in the dashboard** — click a
+card's date chip → date picker (writes token-free via `/api/set-due`). Captured
+to-dos get their **assignee inferred** (mine / a named person / unassigned — never
+blindly "me"; "ask/chase <Name>" stays *yours*).
 Local-tz buckets via `--tz` / `$WORK_BRAIN_TZ`; `--backend sqlite|neo4j|auto`.
 Recall stays free — reach for this (or `graph.py search` / `open-loops`) instead
 of asking the model to remember.

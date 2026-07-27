@@ -207,10 +207,11 @@ recall is free. `--backend sqlite|neo4j|auto`, local-tz buckets via `--tz` /
 `$WORK_BRAIN_TZ`. The dashboard tab of `viz/serve.py` is this same layer over HTTP.
 
 **`--mine` — only what the owner must act on.** Any view takes `--mine` (the
-dashboard's "🙋 Mine · needs action" toggle → `?mine=1`) to drop everything that
-isn't the owner's live action: tasks assigned to someone else, `delegated` tasks,
-and tasks parked `waiting`/`blocked`. Owner = `$WORK_BRAIN_OWNER` (default
-`Gabriel`); **`--mine` counts unassigned as the owner's** (broad "my plate" view).
+dashboard's "🙋 Mine · needs action" toggle → `?mine=1`) to keep ONLY the owner's
+live action: **strictly `assignee == owner`** (`$WORK_BRAIN_OWNER`, default
+`Gabriel`), NOT `unassigned` and NOT someone else's, and never `delegated` or
+parked `waiting`/`blocked`. Selecting the **`me`** assignee chip applies the same
+strict actionable rule (not "every task tagged me").
 
 **`--assignee me|unassigned|<name>[,…]`** — exact grouping (the dashboard renders
 one toggle chip per distinct assignee, from `/api/assignees`). Distinct from
@@ -222,6 +223,11 @@ unassigned ones.
 dashboard flags 🔒 blocked / ⛓ blocks / 🔗 related without the model. `/api/node?id=`
 returns a node's full body + named neighbors for the click-to-expand card. All
 token-free.
+
+**Edit due dates from the dashboard.** Click a card's date chip (shows "📅 not
+set" when empty) to open a date picker; it `POST`s `/api/set-due {id, due}` which
+writes the mirror + syncs neo4j — token-free planning, no model. The `plan-today`
+command (or `plan-my-day` skill) picks up today's `--mine` tasks and blocks them.
 
 ## 3. Vocabulary
 

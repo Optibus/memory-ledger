@@ -192,6 +192,42 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, json.dumps({"ok": False, "error": str(e)}),
                        "application/json")
 
+    # --- writes: set a task's due date from the web UI (token-free) ---
+    def do_POST(self):
+        from urllib.parse import urlparse
+        path = urlparse(self.path).path
+        try:
+            if path == "/api/set-due":
+                n = int(self.headers.get("Content-Length") or 0)
+                try:
+                    data = json.loads(self.rfile.read(n) or b"{}")
+                except Exception:
+                    data = {}
+                res = self._set_due(data.get("id", ""), data.get("due", ""))
+                self._send(200 if res.get("ok") else 400,
+                           json.dumps(res), "application/json")
+            else:
+                self._send(404, json.dumps({"ok": False, "error": "not found"}),
+                           "application/json")
+        except Exception as e:
+            self._send(500, json.dumps({"ok": False, "error": str(e)}),
+                       "application/json")
+
+    def _set_due(self, node_id, due):
+        if not node_id:
+            return {"ok": False, "error": "missing id"}
+        con = graph.connect()
+        if not con.execute("SELECT 1 FROM nodes WHERE id=?", (node_id,)).fetchone():
+            return {"ok": False, "error": f"no node {node_id}"}
+        con.execute("UPDATE nodes SET due=?, updated=? WHERE id=?",
+                    (due or "", graph.now(), node_id))
+        con.commit()
+        try:
+            graph._after_write(con, nodes=[node_id])   # mirror + sync to neo4j
+        except Exception:
+            pass
+        return {"ok": True, "id": node_id, "due": due or ""}
+
     def log_message(self, *_):  # quiet
         pass
 

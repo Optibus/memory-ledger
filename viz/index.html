@@ -87,6 +87,10 @@
   .dchip.blk{color:#f85149;border-color:#f85149}
   .dchip.blks{color:#f0883e;border-color:#f0883e}
   .dchip.rel{color:#39c5cf;border-color:#39c5cf}
+  .dchip.edit{cursor:pointer}
+  .dchip.edit:hover{border-color:var(--accent);color:var(--accent)}
+  .duepick{background:#0d1117;color:var(--fg);border:1px solid var(--accent);
+    border-radius:6px;padding:2px 6px;font-size:11.5px}
   .minebtn.asg{opacity:.9}
   .ddetail{margin-top:9px;padding-top:9px;border-top:1px solid var(--border)}
   .dbody{white-space:pre-wrap;color:#c9d1d9;background:#0d1117;border:1px solid var(--border);
@@ -485,9 +489,13 @@ const Dash = (function(){
     const c=mk("div","dcard");
     const head=mk("div","dt","▸ "+(row.title||"(untitled)")); c.appendChild(head);
     const chips=mk("div","dchips");
-    if(row.due_local && row.due_local!=="--"){
-      const over=row.due_local<today;
-      chips.appendChild(mk("span","dchip due"+(over?" over":""),"⏱ "+row.due_local));
+    {
+      const has=row.due_local && row.due_local!=="--";
+      const over=has && row.due_local<today;
+      const dc=mk("span","dchip due edit"+(over?" over":""), has?("⏱ "+row.due_local):"📅 not set");
+      dc.title="click to set/change due date";
+      dc.onclick=(ev)=>{ ev.stopPropagation(); pickDue(dc,row); };
+      chips.appendChild(dc);
     }
     if(row.type) chips.appendChild(mk("span","dchip",row.type));
     if(row.status) chips.appendChild(mk("span","dchip st-"+row.status,row.status));
@@ -510,6 +518,20 @@ const Dash = (function(){
       if(open && !loaded){ loaded=true; det.textContent="loading…"; await expand(row.id,det); }
     };
     return c;
+  }
+  function pickDue(chip,row){
+    const inp=mk("input"); inp.type="date"; inp.className="duepick";
+    if(row.due_local && row.due_local!=="--") inp.value=row.due_local;
+    chip.replaceWith(inp); inp.focus(); if(inp.showPicker){ try{inp.showPicker()}catch(e){} }
+    let done=false;
+    const commit=async()=>{ if(done)return; done=true;
+      const v=inp.value, due=v?(v+"T12:00:00"):"";
+      try{ await fetch("/api/set-due",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({id:row.id,due})}); }catch(e){}
+      load();
+    };
+    inp.onchange=commit;
+    inp.onblur=()=>{ if(!done) load(); };
   }
   async function expand(id,det){
     try{
