@@ -24,7 +24,7 @@ Read `${CLAUDE_PLUGIN_ROOT}/CONVENTIONS.md` once per session first.
    `CronCreate` tool under the hood) to create a routine that fires at the
    resolved time. The routine's prompt should be self-contained, e.g.:
 
-   > work-brain reminder firing. Use the `send-slack` skill to DM
+   > second-brain reminder firing. Use the `send-slack` skill to DM
    > `<slack target>`: "⏰ <message>". Then run
    > `python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" update-node --id <reminder id> --status done`
    > (skip the status update if it is a recurring reminder).

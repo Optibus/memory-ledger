@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""work-brain graph engine.
+"""second-brain graph engine.
 
 A tiny, dependency-free graph database over SQLite. Everything the plugin
 remembers is a NODE (a person, task, requirement, decision, note, writing
@@ -9,7 +9,7 @@ sample, reminder...) and everything that connects them is an EDGE
 Skills never touch SQL directly; they call these subcommands and read the
 JSON that comes back. Machine output is always JSON on stdout.
 
-DB location: $WORK_BRAIN_DB, else <plugin>/memory/graph.db
+DB location: $SECOND_BRAIN_DB, else <plugin>/memory/graph.db
 """
 
 from __future__ import annotations
@@ -25,8 +25,15 @@ import urllib.request
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-# Default section (realm) for new nodes; override with $WORK_BRAIN_REALM or --realm.
-DEFAULT_REALM = os.environ.get("WORK_BRAIN_REALM", "optibus")
+def _env(name: str, default: str = "") -> str:
+    """Config env lookup: prefer SECOND_BRAIN_<name>, fall back to the legacy
+    WORK_BRAIN_<name> (back-compat after the rename), else the default."""
+    return (os.environ.get("SECOND_BRAIN_" + name)
+            or os.environ.get("WORK_BRAIN_" + name) or default)
+
+
+# Default section (realm) for new nodes; override with $SECOND_BRAIN_REALM or --realm.
+DEFAULT_REALM = _env("REALM", "optibus")
 
 # ---------------------------------------------------------------------------
 # vocabulary (soft — not enforced, just documented + used for defaults)
@@ -55,18 +62,23 @@ def now() -> str:
 def home_dir() -> Path:
     """The brain's home — a single global directory OUTSIDE any repo, so every
     project on the machine shares one brain (memory, learned skills, configs,
-    routines, definitions). Override with $WORK_BRAIN_HOME. Default: ~/.work_brain
-    """
-    env = os.environ.get("WORK_BRAIN_HOME")
+    routines, definitions). Override with $SECOND_BRAIN_HOME. Default:
+    ~/.second_brain, falling back to the legacy ~/.work_brain if that's the only
+    one present (so an un-migrated brain still loads)."""
+    env = _env("HOME")
     if env:
         return Path(env).expanduser()
-    return Path.home() / ".work_brain"
+    new = Path.home() / ".second_brain"
+    legacy = Path.home() / ".work_brain"
+    if not new.exists() and legacy.exists():
+        return legacy
+    return new
 
 
 def db_path() -> Path:
-    """The graph database file. $WORK_BRAIN_DB overrides the exact file;
+    """The graph database file. $SECOND_BRAIN_DB overrides the exact file;
     otherwise it lives at <home>/graph.db."""
-    env = os.environ.get("WORK_BRAIN_DB")
+    env = _env("DB")
     if env:
         return Path(env).expanduser()
     return home_dir() / "graph.db"
@@ -177,10 +189,10 @@ def _neo4j_cfg() -> dict:
         except Exception:
             cfg = {}
     return {
-        "url": os.environ.get("WORK_BRAIN_NEO4J_URL", cfg.get("url", "")),
-        "db": os.environ.get("WORK_BRAIN_NEO4J_DB", cfg.get("db", "neo4j")),
-        "user": os.environ.get("WORK_BRAIN_NEO4J_USER", cfg.get("user", "neo4j")),
-        "password": os.environ.get("WORK_BRAIN_NEO4J_PASSWORD", cfg.get("password", "")),
+        "url": _env("NEO4J_URL", cfg.get("url", "")),
+        "db": _env("NEO4J_DB", cfg.get("db", "neo4j")),
+        "user": _env("NEO4J_USER", cfg.get("user", "neo4j")),
+        "password": _env("NEO4J_PASSWORD", cfg.get("password", "")),
     }
 
 
@@ -314,7 +326,7 @@ def _after_write(con, nodes=(), edges=(), del_nodes=(), del_edges=()):
     for e in del_edges:
         _enqueue(con, "del_edge", EDGE_SEP.join(e))
     con.commit()
-    if os.environ.get("WORK_BRAIN_NO_AUTOSYNC"):
+    if _env("NO_AUTOSYNC"):
         return None
     return _flush(con)
 
@@ -605,7 +617,7 @@ def cmd_export(args):
         for e in edges:
             adj.setdefault(e["src"], []).append((e["rel"], e["dst"]))
             adj.setdefault(e["dst"], []).append(("(" + e["rel"] + ")", e["src"]))
-        lines = ["# work-brain memory export", f"_generated {now()}_", ""]
+        lines = ["# second-brain memory export", f"_generated {now()}_", ""]
         for n in nodes:
             lines.append(f"## {n['title']}  `{n['id']}`")
             meta = [f"type: {n['type']}"]
@@ -671,7 +683,7 @@ description: {title}
 {body}
 
 ---
-_Learned skill — created at runtime by work-brain on {date}. The graph node
+_Learned skill — created at runtime by second-brain on {date}. The graph node
 `{node_id}` tracks how often it fires and reinforces the trigger over time._
 """
 
@@ -990,7 +1002,7 @@ def cmd_sections(args):
 
 
 def build_parser():
-    p = argparse.ArgumentParser(prog="graph", description="work-brain graph engine")
+    p = argparse.ArgumentParser(prog="graph", description="second-brain graph engine")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("init").set_defaults(func=cmd_init)
@@ -1001,7 +1013,7 @@ def build_parser():
     a.add_argument("--title", required=True)
     a.add_argument("--body"); a.add_argument("--props")
     a.add_argument("--status"); a.add_argument("--due"); a.add_argument("--id")
-    a.add_argument("--realm", help="section: optibus | personal | ... (default $WORK_BRAIN_REALM or optibus)")
+    a.add_argument("--realm", help="section: optibus | personal | ... (default $SECOND_BRAIN_REALM or optibus)")
 
     a = sub.add_parser("flush").set_defaults(func=cmd_flush)
     sub.add_parser("neo4j-status").set_defaults(func=cmd_neo4j_status)

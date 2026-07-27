@@ -1,6 +1,6 @@
-# work-brain — shared conventions
+# second-brain — shared conventions
 
-Every work-brain skill reads this once per session before acting. It defines
+Every second-brain skill reads this once per session before acting. It defines
 (1) how we talk to the person, (2) the memory graph API, (3) the vocabulary.
 
 ---
@@ -73,12 +73,12 @@ Storage is one SQLite file. Never write SQL yourself — always go through:
 python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" <command> [flags]
 ```
 
-**The brain is global and lives OUTSIDE any repo.** Its home is `~/.work_brain`
-(override with `$WORK_BRAIN_HOME`), so every project on the machine shares one
+**The brain is global and lives OUTSIDE any repo.** Its home is `~/.second_brain`
+(override with `$SECOND_BRAIN_HOME`), so every project on the machine shares one
 brain. It is never committed. The home holds:
 
 ```
-~/.work_brain/
+~/.second_brain/
   graph.db            the memory graph (single portable file) — skills live here too, as nodes
   learned_skills/     OPTIONAL local SKILL.md exports (only if add-skill --with-file); not the source of truth
   exports/            export-memory output
@@ -86,8 +86,8 @@ brain. It is never committed. The home holds:
   (routines, definitions live here too)
 ```
 
-Path resolution: `$WORK_BRAIN_DB` (explicit file) → `$WORK_BRAIN_HOME/graph.db`
-→ `~/.work_brain/graph.db`. Copying `graph.db` moves the whole brain; copying
+Path resolution: `$SECOND_BRAIN_DB` (explicit file) → `$SECOND_BRAIN_HOME/graph.db`
+→ `~/.second_brain/graph.db`. Copying `graph.db` moves the whole brain; copying
 the home dir moves brain + learned skills. This works identically in Claude Code
 and the Claude app.
 Every command prints JSON to stdout. Commands:
@@ -173,19 +173,19 @@ still awaiting action, and it stays open until closed.
 ## 2d. Storage: neo4j master + local mirror + sections
 
 The unified **master store is neo4j** (Gabriel's home graph; config in
-`~/.work_brain/neo4j.json`). Every mutation writes to the local SQLite mirror
+`~/.second_brain/neo4j.json`). Every mutation writes to the local SQLite mirror
 (durable, offline, fast reads) **and** is pushed to neo4j; if neo4j is down the
 change is queued in an `outbox` and **drains automatically** on the next
 successful write or an explicit `flush`. neo4j is the source of truth; SQLite is
 the resilience cache.
 - `neo4j-status` — configured / up / pending-ops · `flush` — drain the queue.
-- `$WORK_BRAIN_NO_AUTOSYNC=1` queues without per-op push (for heavy batch loads;
+- `$SECOND_BRAIN_NO_AUTOSYNC=1` queues without per-op push (for heavy batch loads;
   `flush` afterwards) · `scripts/brain_sync.py` does a full bulk reconcile.
 - The visualizer (`viz/serve.py`) reads from neo4j, falling back to SQLite if down.
 
 **Sections (realms):** every node has a `realm` — the section it belongs to:
 `optibus` (work; the default) and `personal` (add others as needed). Set with
-`add-node --realm <section>` or `$WORK_BRAIN_REALM`; `sections` lists the counts.
+`add-node --realm <section>` or `$SECOND_BRAIN_REALM`; `sections` lists the counts.
 
 ## 2e. Token-free reads (`brain_query.py`)
 
@@ -204,11 +204,11 @@ undated ones (e.g. another person's tasks) — it's the right view for the assig
 
 Prefer it (or `graph.py search` / `open-loops`) over asking the model to recall —
 recall is free. `--backend sqlite|neo4j|auto`, local-tz buckets via `--tz` /
-`$WORK_BRAIN_TZ`. The dashboard tab of `viz/serve.py` is this same layer over HTTP.
+`$SECOND_BRAIN_TZ`. The dashboard tab of `viz/serve.py` is this same layer over HTTP.
 
 **`--mine` — only what the owner must act on.** Any view takes `--mine` (the
 dashboard's "🙋 Mine · needs action" toggle → `?mine=1`) to keep ONLY the owner's
-live action: **strictly `assignee == owner`** (`$WORK_BRAIN_OWNER`, default
+live action: **strictly `assignee == owner`** (`$SECOND_BRAIN_OWNER`, default
 `Gabriel`), NOT `unassigned` and NOT someone else's, and never `delegated` or
 parked `waiting`/`blocked`. Selecting the **`me`** assignee chip applies the same
 strict actionable rule (not "every task tagged me").

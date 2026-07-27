@@ -44,7 +44,7 @@ def main():
         # it's the owner's — so the dashboard's assignee filter is meaningful and
         # someone-else's ingested to-dos don't masquerade as the owner's action.
         made = 0
-        owner = os.environ.get("WORK_BRAIN_OWNER", "Gabriel")
+        owner = C.graph._env("OWNER", "Gabriel")
         people = C.known_people(con)
         for title in C.detect_tasks(prompt):
             who = C.infer_assignee(title, owner, people) or C.infer_assignee(prompt, owner, people)
@@ -58,7 +58,7 @@ def main():
     except Exception:
         return  # never break the session
 
-    note = ("[work-brain] Turn auto-captured to the brain (Python/SQL, no tokens)"
+    note = ("[second-brain] Turn auto-captured to the brain (Python/SQL, no tokens)"
             + (f"; {made} task(s) created" if made else "")
             + ". Recall is free via scripts/brain_query.py / graph.py search — "
               "don't spend tokens re-storing this turn.")

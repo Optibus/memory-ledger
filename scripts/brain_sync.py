@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""brain-sync — push the local work-brain graph into a neo4j master.
+"""brain-sync — push the local second-brain graph into a neo4j master.
 
 Reads the local SQLite graph (via the graph engine) and upserts every node and
 edge into neo4j using its HTTP transactional Cypher endpoint (stdlib only — no
 driver needed). Idempotent: MERGE on id, so re-running just updates.
 
 Config (endpoint + creds) is read from the PRIVATE brain home, never the repo:
-  ~/.work_brain/neo4j.json  ->  {"url": "...", "db": "neo4j", "user": "...", "password": "..."}
-or env: WORK_BRAIN_NEO4J_URL / _DB / _USER / _PASSWORD.
+  ~/.second_brain/neo4j.json  ->  {"url": "...", "db": "neo4j", "user": "...", "password": "..."}
+or env: SECOND_BRAIN_NEO4J_URL / _DB / _USER / _PASSWORD (legacy WORK_BRAIN_* still works).
 
 Usage:
   python3 scripts/brain_sync.py --dry-run     # show what would be sent, push nothing
@@ -37,10 +37,10 @@ def load_cfg() -> dict:
     if f.exists():
         cfg = json.loads(f.read_text())
     return {
-        "url": os.environ.get("WORK_BRAIN_NEO4J_URL", cfg.get("url", "")),
-        "db": os.environ.get("WORK_BRAIN_NEO4J_DB", cfg.get("db", "neo4j")),
-        "user": os.environ.get("WORK_BRAIN_NEO4J_USER", cfg.get("user", "neo4j")),
-        "password": os.environ.get("WORK_BRAIN_NEO4J_PASSWORD", cfg.get("password", "")),
+        "url": os.environ.get("SECOND_BRAIN_NEO4J_URL") or os.environ.get("WORK_BRAIN_NEO4J_URL", cfg.get("url", "")),
+        "db": os.environ.get("SECOND_BRAIN_NEO4J_DB") or os.environ.get("WORK_BRAIN_NEO4J_DB", cfg.get("db", "neo4j")),
+        "user": os.environ.get("SECOND_BRAIN_NEO4J_USER") or os.environ.get("WORK_BRAIN_NEO4J_USER", cfg.get("user", "neo4j")),
+        "password": os.environ.get("SECOND_BRAIN_NEO4J_PASSWORD") or os.environ.get("WORK_BRAIN_NEO4J_PASSWORD", cfg.get("password", "")),
     }
 
 
@@ -104,8 +104,8 @@ def main():
         return
 
     if not cfg["url"] or not cfg["password"]:
-        print("ERROR: set url + password in ~/.work_brain/neo4j.json or env "
-              "(WORK_BRAIN_NEO4J_URL / _PASSWORD).", file=sys.stderr)
+        print("ERROR: set url + password in ~/.second_brain/neo4j.json or env "
+              "(SECOND_BRAIN_NEO4J_URL / _PASSWORD).", file=sys.stderr)
         sys.exit(2)
     if cfg["url"].startswith("http://"):
         print("WARNING: endpoint is plain HTTP — creds + data go in cleartext.",

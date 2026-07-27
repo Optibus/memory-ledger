@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""work-brain — open-loops SessionStart brief.
+"""second-brain — open-loops SessionStart brief.
 
 At the start of a session (when the brain is enabled), surface the open loops
 so the session opens knowing what's still hanging and can nudge the user to
@@ -11,7 +11,10 @@ import sys
 import json
 import subprocess
 
-home = os.environ.get("WORK_BRAIN_HOME") or os.path.expanduser("~/.work_brain")
+home = (os.environ.get("SECOND_BRAIN_HOME") or os.environ.get("WORK_BRAIN_HOME")
+        or (os.path.expanduser("~/.second_brain")
+            if os.path.isdir(os.path.expanduser("~/.second_brain"))
+            else os.path.expanduser("~/.work_brain")))
 if not os.path.isdir(home):
     sys.exit(0)  # brain disabled -> silent
 
@@ -30,7 +33,7 @@ except Exception:
 n = d.get("count", 0)
 if not n:
     print(json.dumps({"additionalContext":
-                      "[work-brain] State: no open loops — all clear."}))
+                      "[second-brain] State: no open loops — all clear."}))
     sys.exit(0)
 
 lines = []
@@ -45,7 +48,7 @@ for r in d.get("results", [])[:6]:
     lines.append(f"- {tag}{r.get('title', '')[:72]}{w}")
 
 msg = (
-    f"[work-brain] STATE — {n} open loops "
+    f"[second-brain] STATE — {n} open loops "
     f"({d.get('overdue', 0)} overdue, {d.get('stale', 0)} stale). They stay open "
     f"until closed; surface these and nudge the user to close the top ones ASAP "
     f"(open tasks, PRs to move, emails/messages to answer):\n"

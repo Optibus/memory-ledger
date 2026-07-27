@@ -1,11 +1,11 @@
 ---
 name: slack-inbox
-description: Read the person's Slack (a DM, a channel, a thread) and act on it — this is the Slack-as-input entrypoint. Use for "check my Slack", "what did X send me", "handle my DMs", or when the person is driving work-brain from Slack. Reads recent messages, figures out the intent of each, and routes it to the right work-brain skill.
+description: Read the person's Slack (a DM, a channel, a thread) and act on it — this is the Slack-as-input entrypoint. Use for "check my Slack", "what did X send me", "handle my DMs", or when the person is driving second-brain from Slack. Reads recent messages, figures out the intent of each, and routes it to the right second-brain skill.
 ---
 
 # slack-inbox
 
-Slack is the person's inbox to work-brain. This skill reads messages and turns
+Slack is the person's inbox to second-brain. This skill reads messages and turns
 each into the right action — so they can just talk, and the brain does the
 routing.
 
@@ -16,7 +16,7 @@ Read `${CLAUDE_PLUGIN_ROOT}/CONVENTIONS.md` once per session first.
 1. **Read** the relevant Slack source with the Slack MCP tools:
    `slack_read_channel`, `slack_read_thread`, or search
    (`slack_search_public_and_private`). Default to the person's DM with
-   themselves / the work-brain channel if they didn't specify.
+   themselves / the second-brain channel if they didn't specify.
 2. **For each message, classify intent** and route to the matching skill:
    - a thing to do / deadline → **add-task** (auto micro-steps)
    - "remind me / alarm" → **remind**

@@ -1,6 +1,6 @@
 ---
 name: remember
-description: Capture information into the work-brain memory graph — people, tasks, requirements, decisions, preferences, associations, context. Use whenever the person tells you something worth keeping, or when any other skill produces a fact worth persisting. This is the externalize-memory core; when in doubt, remember it.
+description: Capture information into the second-brain memory graph — people, tasks, requirements, decisions, preferences, associations, context. Use whenever the person tells you something worth keeping, or when any other skill produces a fact worth persisting. This is the externalize-memory core; when in doubt, remember it.
 ---
 
 # remember

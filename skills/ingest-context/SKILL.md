@@ -6,7 +6,7 @@ description: Ingest a piece of context into the memory graph — a Google Meet t
 # ingest-context
 
 Turn a raw blob of context (a call, a thread, an email, or pasted text) into
-connected memory the rest of work-brain can use.
+connected memory the rest of second-brain can use.
 
 Read `${CLAUDE_PLUGIN_ROOT}/CONVENTIONS.md` once per session first (graph API,
 vocabulary, response contract).
@@ -86,7 +86,7 @@ mailbox is gated. This applies to Jira, meeting, and any other emails.
 ## Notes
 - Always store **provenance** in props (source, url, date) so context is
   traceable.
-- Everything stays in the local brain (`~/.work_brain`); it's private.
+- Everything stays in the local brain (`~/.second_brain`); it's private.
 - This skill is what `read-email`, `slack-inbox`, and `/brain` hand off to when
   they detect ingestible context. When a meeting-transcript email arrives,
   ingest it automatically, then report.

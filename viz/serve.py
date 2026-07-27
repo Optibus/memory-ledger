@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""work-brain graph visualizer — a tiny, dependency-free local web server.
+"""second-brain graph visualizer — a tiny, dependency-free local web server.
 
-Reads the same brain the CLI uses (~/.work_brain/graph.db, or $WORK_BRAIN_DB /
-$WORK_BRAIN_HOME) and serves an interactive force-directed graph you can zoom,
+Reads the same brain the CLI uses (~/.second_brain/graph.db, or $SECOND_BRAIN_DB /
+$SECOND_BRAIN_HOME) and serves an interactive force-directed graph you can zoom,
 pan, filter, search, and click through. The page polls the API so edits made by
 any skill show up live.
 
@@ -242,7 +242,7 @@ def main():
     graph.connect().close()  # ensure the brain exists
     url = f"http://{args.host}:{args.port}/"
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
-    print(f"work-brain map → {url}")
+    print(f"second-brain map → {url}")
     print(f"  brain: {graph.db_path()}")
     print("  Ctrl-C to stop.")
     if not args.no_open:

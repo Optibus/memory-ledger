@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""work-brain — token-free capture helpers.
+"""second-brain — token-free capture helpers.
 
 Shared by the capture hooks (capture_prompt.py on UserPromptSubmit,
 capture_answer.py on Stop). Everything here is pure Python + SQL against the

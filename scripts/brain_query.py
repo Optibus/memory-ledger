@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""work-brain off-token query layer.
+"""second-brain off-token query layer.
 
 Read-only, dependency-free views over the brain that answer the everyday
 questions — *what's due today / tomorrow / this week*, *what did I close*,
@@ -25,8 +25,8 @@ Views:
   range --from --to [--status open|done|any]   any date window, filtered
 
 Dates are bucketed in your LOCAL timezone (override with --tz "America/Sao_Paulo"
-or $WORK_BRAIN_TZ). DB location follows the same rules as graph.py
-($WORK_BRAIN_DB / $WORK_BRAIN_HOME).
+or $SECOND_BRAIN_TZ). DB location follows the same rules as graph.py
+($SECOND_BRAIN_DB / $SECOND_BRAIN_HOME).
 """
 
 from __future__ import annotations
@@ -47,8 +47,8 @@ import graph  # noqa: E402
 # ---------------------------------------------------------------------------
 def _local_tz(name: str | None):
     """Resolve the timezone used to decide which calendar day a due-date is on.
-    Order: explicit --tz / $WORK_BRAIN_TZ (IANA name), else the system local tz."""
-    name = name or os.environ.get("WORK_BRAIN_TZ")
+    Order: explicit --tz / $SECOND_BRAIN_TZ (IANA name), else the system local tz."""
+    name = name or graph._env("TZ")
     if name:
         try:
             from zoneinfo import ZoneInfo
@@ -80,7 +80,7 @@ def _fetch_neo4j() -> list[dict]:
     cfg = graph._neo4j_cfg()
     if not (cfg["url"] and cfg["password"]):
         raise SystemExit("neo4j backend requested but not configured "
-                         "(set WORK_BRAIN_NEO4J_URL/_PASSWORD or ~/.work_brain/neo4j.json)")
+                         "(set SECOND_BRAIN_NEO4J_URL/_PASSWORD or ~/.second_brain/neo4j.json)")
     stmt = {"statement": "MATCH (x:Node) RETURN properties(x) AS p"}
     endpoint = cfg["url"].rstrip("/") + f"/db/{cfg['db']}/tx/commit"
     import base64, urllib.request
@@ -129,7 +129,7 @@ def _is_closed(d: dict) -> bool:
 
 
 # who "me" is — the brain owner. Tasks with no assignee default to the owner.
-OWNER = os.environ.get("WORK_BRAIN_OWNER", "Gabriel")
+OWNER = graph._env("OWNER", "Gabriel")
 # a task is NOT waiting on me if it's in one of these holding states
 _PARKED_STATES = {"waiting", "blocked", "delegated", "needs-review"}
 
@@ -421,11 +421,11 @@ def main(argv=None):
                    help="range filter (default any)")
     p.add_argument("--since-days", type=int, default=7,
                    help="closed: look back this many days (default 7)")
-    p.add_argument("--tz", help="IANA tz for day buckets (default $WORK_BRAIN_TZ / system)")
+    p.add_argument("--tz", help="IANA tz for day buckets (default $SECOND_BRAIN_TZ / system)")
     p.add_argument("--backend", choices=["sqlite", "neo4j", "auto"], default="sqlite",
                    help="where to read (default sqlite mirror; neo4j = master over HTTP)")
     p.add_argument("--mine", action="store_true",
-                   help="only tasks the owner ($WORK_BRAIN_OWNER) needs to act on "
+                   help="only tasks the owner ($SECOND_BRAIN_OWNER) needs to act on "
                         "(assigned to me, not delegated, not parked waiting)")
     p.add_argument("--assignee",
                    help="comma list of assignee tokens to keep: me | unassigned | <name>")

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""work-brain pre-commit — enforce CONVENTIONS §4 (docs ship with behavior).
+"""second-brain pre-commit — enforce CONVENTIONS §4 (docs ship with behavior).
 
 Fails the commit if it changes behavior (engine, hooks, viz, or plugin config)
 without also staging a docs change (any *.md — README / CONVENTIONS / INSTALL /

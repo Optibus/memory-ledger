@@ -1,6 +1,6 @@
-# Installing work-brain
+# Installing second-brain
 
-work-brain is a Claude Code plugin. Installing it makes its skills, the `/brain`
+second-brain is a Claude Code plugin. Installing it makes its skills, the `/brain`
 command, and the always-on capture hooks available **globally** (every project,
 every session). It works in Claude Code and the Claude app.
 
@@ -20,23 +20,23 @@ so you add the repo as a marketplace, then install from it.
 **From a local clone** (what you'll do on your own machines):
 
 ```
-git clone git@github.com:gabriel-nori-optibus/work-brain.git ~/dev/work-brain
+git clone git@github.com:gabriel-nori-optibus/second-brain.git ~/dev/second-brain
 ```
 then, inside Claude Code:
 ```
-/plugin marketplace add ~/dev/work-brain
-/plugin install work-brain@work-brain
+/plugin marketplace add ~/dev/second-brain
+/plugin install second-brain@second-brain
 ```
 
 **From GitHub directly** (no manual clone):
 ```
-/plugin marketplace add gabriel-nori-optibus/work-brain
-/plugin install work-brain@work-brain
+/plugin marketplace add gabriel-nori-optibus/second-brain
+/plugin install second-brain@second-brain
 ```
 
 **Dev mode** (try it for one session without installing):
 ```
-claude --plugin-dir ~/dev/work-brain
+claude --plugin-dir ~/dev/second-brain
 ```
 
 Restart the session (or run `/reload-plugins`) after installing.
@@ -51,7 +51,7 @@ active in **all projects and all sessions** — the hooks are not scoped to any 
 - The session brief (`SessionStart`) fires on `startup`, `resume`, `clear`, and
   `compact`, so your open loops resurface however a session begins.
 - Hook commands use `${CLAUDE_PLUGIN_ROOT}` (absolute) and the global brain home
-  (`~/.work_brain`), so they behave identically regardless of the session's `cwd`.
+  (`~/.second_brain`), so they behave identically regardless of the session's `cwd`.
 
 Nothing extra is needed to "make it global" — user-level enable is the switch.
 (Sub-agents don't double-capture: they have no `UserPromptSubmit`, and `Stop` is
@@ -63,14 +63,14 @@ The brain is **enabled when its home directory exists**. Skills and hooks no-op
 silently until then, so create it once:
 
 ```
-mkdir -p ~/.work_brain
-python3 ~/dev/work-brain/scripts/graph.py init
+mkdir -p ~/.second_brain
+python3 ~/dev/second-brain/scripts/graph.py init
 ```
 
-- Home dir: `~/.work_brain` (override with `$WORK_BRAIN_HOME`; exact DB file with
-  `$WORK_BRAIN_DB`).
+- Home dir: `~/.second_brain` (override with `$SECOND_BRAIN_HOME`; exact DB file with
+  `$SECOND_BRAIN_DB`).
 - Set your timezone once so date views bucket correctly, e.g. in your shell rc:
-  `export WORK_BRAIN_TZ="America/Sao_Paulo"`.
+  `export SECOND_BRAIN_TZ="America/Sao_Paulo"`.
 
 To **disable** the brain anywhere, unset/rename that dir — the hooks detect it and
 go quiet.
@@ -78,12 +78,12 @@ go quiet.
 ### Optional: shared neo4j master
 
 By default everything runs on the local SQLite mirror (offline, instant). To share
-one brain across machines, point it at a neo4j server — create `~/.work_brain/neo4j.json`:
+one brain across machines, point it at a neo4j server — create `~/.second_brain/neo4j.json`:
 
 ```json
 { "url": "http://your-neo4j-host:7474", "db": "neo4j", "user": "neo4j", "password": "…" }
 ```
-(or the env vars `WORK_BRAIN_NEO4J_URL / _DB / _USER / _PASSWORD`). Writes go to
+(or the env vars `SECOND_BRAIN_NEO4J_URL / _DB / _USER / _PASSWORD`; the legacy `WORK_BRAIN_*` names still work). Writes go to
 SQLite immediately and sync to neo4j through an offline outbox; reads prefer the
 master when it's reachable. **Keep this file out of the repo — it holds a secret.**
 
@@ -110,7 +110,7 @@ python3 scripts/graph.py open-loops            # everything still awaiting actio
 ### Map + dashboard (optional UI)
 
 ```
-WORK_BRAIN_TZ="America/Sao_Paulo" python3 viz/serve.py       # http://127.0.0.1:8770
+SECOND_BRAIN_TZ="America/Sao_Paulo" python3 viz/serve.py       # http://127.0.0.1:8770
 ```
 One page, two tabs: **Map** (live graph) and **Dashboard** (the query views). Add
 `--host 0.0.0.0` to reach it from your phone on the LAN / a tunnel. Read-only, no tokens.
@@ -118,7 +118,7 @@ One page, two tabs: **Map** (live graph) and **Dashboard** (the query views). Ad
 ## 4. Verify
 
 ```
-/plugin              # work-brain shows as installed + enabled
+/plugin              # second-brain shows as installed + enabled
 /hooks               # SessionStart, UserPromptSubmit, Stop are listed
 claude plugin list   # from the CLI
 ```
@@ -130,6 +130,6 @@ python3 scripts/graph.py list --type capture --all --limit 5
 ## Uninstall
 
 ```
-/plugin uninstall work-brain@work-brain
+/plugin uninstall second-brain@second-brain
 ```
-Your brain data in `~/.work_brain` is left untouched (delete that dir to remove it).
+Your brain data in `~/.second_brain` is left untouched (delete that dir to remove it).

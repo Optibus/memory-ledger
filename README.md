@@ -1,4 +1,4 @@
-# work-brain
+# second-brain
 
 An external working memory for a **busy** brain — a graph-linked local memory
 plus a set of skills you drive in plain language (any language), from **Slack,
@@ -6,7 +6,7 @@ Claude Code, or the Claude app**. You talk; it remembers, breaks work into tiny
 next-steps, sets real alarms, and reaches your other tools.
 
 > **Install:** see [INSTALL.md](INSTALL.md) — `/plugin marketplace add` this repo,
-> `/plugin install work-brain@work-brain`, then `mkdir -p ~/.work_brain`.
+> `/plugin install second-brain@second-brain`, then `mkdir -p ~/.second_brain`.
 
 ## The idea
 
@@ -18,12 +18,12 @@ head, and everything is one link away from its context.
 Storage is a single **SQLite** file — fast to query, trivial to back up, and
 exportable to readable Markdown or JSON any time.
 
-The brain is **global and lives outside any repo**, at `~/.work_brain` (override
-with `$WORK_BRAIN_HOME`), so every project on your machine shares one brain and
+The brain is **global and lives outside any repo**, at `~/.second_brain` (override
+with `$SECOND_BRAIN_HOME`), so every project on your machine shares one brain and
 it's never committed:
 
 ```
-~/.work_brain/
+~/.second_brain/
   graph.db            the memory graph — nodes, edges, AND skills (all live here)
   learned_skills/     optional local SKILL.md exports (only if add-skill --with-file)
   exports/            export-memory output
@@ -36,7 +36,7 @@ the done archive: out of your active views, but kept, searchable, and still
 linked so the brain can learn from what worked.
 
 **neo4j master + sections.** The unified source of truth is a **neo4j** graph
-(config in `~/.work_brain/neo4j.json`); the local SQLite is a durable mirror.
+(config in `~/.second_brain/neo4j.json`); the local SQLite is a durable mirror.
 Every write goes to both — and if neo4j is down it's **queued and auto-synced**
 when it's back (`neo4j-status`, `flush`, `scripts/brain_sync.py`). Every node
 carries a **`realm` / section** (`optibus`, `personal`, …) so one graph holds
@@ -68,7 +68,7 @@ auto-creates tasks for explicit to-dos; a `Stop` hook (`hooks/capture_answer.py`
 stores a summary of the answer, linked to its question. So a simple answered
 question becomes a recallable node on its own — and you recall it for free via
 `graph.py search` / `brain_query.py`, never spending tokens to "remember".
-Disable it by removing/renaming the brain home (`~/.work_brain`); the hooks then
+Disable it by removing/renaming the brain home (`~/.second_brain`); the hooks then
 no-op.
 
 ## Skills
@@ -111,8 +111,8 @@ python3 scripts/graph.py neighbors --id <node-id> --depth 2
 python3 scripts/graph.py export --format both
 ```
 
-The DB path resolves as: `$WORK_BRAIN_DB` → `$WORK_BRAIN_HOME/graph.db` →
-`~/.work_brain/graph.db` (default). Same in Claude Code and the Claude app.
+The DB path resolves as: `$SECOND_BRAIN_DB` → `$SECOND_BRAIN_HOME/graph.db` →
+`~/.second_brain/graph.db` (default). Same in Claude Code and the Claude app.
 See `CONVENTIONS.md` §2.
 
 ```bash
@@ -139,7 +139,7 @@ python3 scripts/brain_query.py agenda --mine   # only what YOU must act on
 
 Add **`--mine`** to any view (dashboard: the "🙋 Mine · needs action" toggle) to
 drop tasks assigned to someone else, delegated away, or parked waiting/blocked —
-leaving only the owner's live actions (`$WORK_BRAIN_OWNER`, default `Gabriel`;
+leaving only the owner's live actions (`$SECOND_BRAIN_OWNER`, default `Gabriel`;
 unassigned counts as the owner's). Or filter by exact owner with
 **`--assignee me|unassigned|<name>`** (dashboard: one toggle chip per assignee).
 `--mine` is **strict**: only tasks whose `assignee` is the owner (not unassigned,
@@ -150,7 +150,7 @@ not someone else), and never delegated or parked waiting/blocked. Rows carry
 card's date chip → date picker (writes token-free via `/api/set-due`). Captured
 to-dos get their **assignee inferred** (mine / a named person / unassigned — never
 blindly "me"; "ask/chase <Name>" stays *yours*).
-Local-tz buckets via `--tz` / `$WORK_BRAIN_TZ`; `--backend sqlite|neo4j|auto`.
+Local-tz buckets via `--tz` / `$SECOND_BRAIN_TZ`; `--backend sqlite|neo4j|auto`.
 Recall stays free — reach for this (or `graph.py search` / `open-loops`) instead
 of asking the model to remember.
 
@@ -177,12 +177,12 @@ use `--host 0.0.0.0` (behind a tunnel) to reach it from your phone. Read-only.
 See **[INSTALL.md](INSTALL.md)** for the full flow. In short:
 
 **Claude Code** — install as a plugin (marketplace add this repo →
-`/plugin install work-brain@work-brain`), then `mkdir -p ~/.work_brain`. Enabling
+`/plugin install second-brain@second-brain`), then `mkdir -p ~/.second_brain`. Enabling
 at user level makes it active in every session. Talk to it with `/brain ...` or
 invoke skills by name.
 
 **Claude app** — upload the skill folders as Agent Skills. The same graph engine
-runs in the sandbox; keep memory portable via `~/.work_brain/` or a connected
+runs in the sandbox; keep memory portable via `~/.second_brain/` or a connected
 persistent location.
 
 ## Connected machines

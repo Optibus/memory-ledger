@@ -1,6 +1,6 @@
 ---
 name: recall
-description: Retrieve and resurface things from the work-brain memory graph — answer "what do I know about X", "what's on my plate", "what's due", "what was decided about Y", "how is this connected". Use whenever the person asks about past context, or before acting so you don't lose what's already known.
+description: Retrieve and resurface things from the second-brain memory graph — answer "what do I know about X", "what's on my plate", "what's due", "what was decided about Y", "how is this connected". Use whenever the person asks about past context, or before acting so you don't lose what's already known.
 ---
 
 # recall
