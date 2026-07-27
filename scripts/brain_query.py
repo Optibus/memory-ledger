@@ -333,7 +333,16 @@ def assignees(backend="sqlite") -> dict:
     return counts
 
 
-VIEWS = ["today", "tomorrow", "week", "agenda", "closed", "range"]
+VIEWS = ["agenda", "open", "today", "tomorrow", "week", "closed", "range"]
+
+
+def view_open(nodes, tz):
+    """All open (non-closed) tasks/subtasks regardless of due date — the full
+    backlog. Dated first (soonest), then undated by title. This is the view where
+    the assignee filter is most useful (undated tasks show here too)."""
+    out = [n for n in nodes if n.get("type") in ("task", "subtask") and not _is_closed(n)]
+    return sorted(out, key=lambda d: (_local_date(d.get("due", ""), tz) or date.max,
+                                      d.get("title", "")))
 
 
 def compute(view, *, date_from=None, date_to=None, status="any",
@@ -354,7 +363,9 @@ def compute(view, *, date_from=None, date_to=None, status="any",
         nodes = [n for n in nodes
                  if norm_assignee((n.get("props") or {}).get("assignee", "")) in wanted]
 
-    if view == "today":
+    if view == "open":
+        title, rows = "Open tasks (all, by due)", view_open(nodes, tzinfo)
+    elif view == "today":
         title, rows = f"Due today ({ref})", view_today(nodes, tzinfo, ref)
     elif view == "tomorrow":
         t = ref + timedelta(days=1)

@@ -416,7 +416,7 @@ document.querySelectorAll('#modebar button').forEach(b=>
 
 // ---- dashboard tab (scoped so nothing collides with the map globals) ----
 const Dash = (function(){
-  const VIEWS=["agenda","today","tomorrow","week","closed","range"];
+  const VIEWS=["agenda","open","today","tomorrow","week","closed","range"];
   const st={ view:"agenda", from:"", to:"", status:"any", since_days:7, mine:false, assignees:[] };
   let ASSIGNEES={};   // token -> count, for the assignee filter chips
   const $=s=>document.querySelector(s);

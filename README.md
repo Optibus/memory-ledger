@@ -128,6 +128,7 @@ date views in pure SQL — **no tokens** — as a text table or `--json`:
 
 ```bash
 python3 scripts/brain_query.py agenda      # overdue + today + tomorrow
+python3 scripts/brain_query.py open        # ALL open tasks (dated or not) — best with --assignee
 python3 scripts/brain_query.py week        # next 7 days (+ overdue)
 python3 scripts/brain_query.py closed --since-days 7
 python3 scripts/brain_query.py range --from 2026-07-20 --to 2026-07-31 --status open

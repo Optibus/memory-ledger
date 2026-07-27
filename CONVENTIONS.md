@@ -195,9 +195,12 @@ answers the common date views in pure SQL — **no tokens** — as a text table
 
 ```
 python3 scripts/brain_query.py agenda      # overdue + today + tomorrow
+python3 scripts/brain_query.py open        # ALL open tasks (any/no due) — pair with --assignee
 python3 scripts/brain_query.py today | tomorrow | week | closed [--since-days N]
 python3 scripts/brain_query.py range --from YYYY-MM-DD --to YYYY-MM-DD [--status open|done|any]
 ```
+The date views (today/week/…) only show **dated** tasks; use **`open`** to see
+undated ones (e.g. another person's tasks) — it's the right view for the assignee filter.
 
 Prefer it (or `graph.py search` / `open-loops`) over asking the model to recall —
 recall is free. `--backend sqlite|neo4j|auto`, local-tz buckets via `--tz` /
