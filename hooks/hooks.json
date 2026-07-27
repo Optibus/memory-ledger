@@ -4,43 +4,39 @@
       {
         "matcher": "startup",
         "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/open_loops_brief.py\"",
-            "timeout": 15
-          }
+          { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/open_loops_brief.py\"", "timeout": 15 }
         ]
       },
       {
         "matcher": "resume",
         "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/open_loops_brief.py\"",
-            "timeout": 15
-          }
+          { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/open_loops_brief.py\"", "timeout": 15 }
+        ]
+      },
+      {
+        "matcher": "clear",
+        "hooks": [
+          { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/open_loops_brief.py\"", "timeout": 15 }
+        ]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/open_loops_brief.py\"", "timeout": 15 }
         ]
       }
     ],
     "UserPromptSubmit": [
       {
         "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/capture_prompt.py\"",
-            "timeout": 10
-          }
+          { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/capture_prompt.py\"", "timeout": 10 }
         ]
       }
     ],
     "Stop": [
       {
         "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/capture_answer.py\"",
-            "timeout": 10
-          }
+          { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/capture_answer.py\"", "timeout": 10 }
         ]
       }
     ]

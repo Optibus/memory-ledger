@@ -41,6 +41,22 @@ claude --plugin-dir ~/dev/work-brain
 
 Restart the session (or run `/reload-plugins`) after installing.
 
+### Runs on every session (user-level)
+
+Installing via `/plugin install` enables the plugin at **user level**, so it's
+active in **all projects and all sessions** — the hooks are not scoped to any repo:
+
+- The capture hooks (`UserPromptSubmit`, `Stop`) are **matcher-less** → they fire
+  on every prompt and every completed turn, in every session.
+- The session brief (`SessionStart`) fires on `startup`, `resume`, `clear`, and
+  `compact`, so your open loops resurface however a session begins.
+- Hook commands use `${CLAUDE_PLUGIN_ROOT}` (absolute) and the global brain home
+  (`~/.work_brain`), so they behave identically regardless of the session's `cwd`.
+
+Nothing extra is needed to "make it global" — user-level enable is the switch.
+(Sub-agents don't double-capture: they have no `UserPromptSubmit`, and `Stop` is
+the main agent's turn, not `SubagentStop`.)
+
 ## 2. Enable the brain
 
 The brain is **enabled when its home directory exists**. Skills and hooks no-op
