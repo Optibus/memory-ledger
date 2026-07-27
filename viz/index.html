@@ -98,6 +98,55 @@
     border-radius:7px;padding:9px;font-size:12.5px;max-height:220px;overflow:auto;margin-bottom:8px}
   .drelh{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px}
   .drelrow{font-size:12.5px;color:var(--fg);padding:2px 0;font-family:ui-monospace,monospace}
+
+  /* ---- token-free editing: composer, card actions, relation manager ---- */
+  .dbtn{background:#21262d;color:var(--fg);border:1px solid var(--border);border-radius:7px;
+    padding:5px 10px;font-size:12px;cursor:pointer;font-family:inherit}
+  .dbtn:hover{border-color:var(--accent)}
+  .dbtn.pri{background:var(--accent);border-color:var(--accent);color:#0d1117;font-weight:600}
+  .dbtn.ok{border-color:#3fb950;color:#3fb950}
+  .dbtn.dngr{border-color:#f85149;color:#f85149}
+  .dbtn:disabled{opacity:.45;cursor:default}
+  #dnewbar{margin:0 0 12px}
+  .nt{background:var(--panel);border:1px solid var(--accent);border-radius:11px;
+    padding:13px;margin-bottom:12px}
+  .nt input[type=text],.nt textarea,.nt select,.nt input[type=date]{
+    background:#0d1117;color:var(--fg);border:1px solid var(--border);border-radius:7px;
+    padding:7px 9px;font-size:13px;font-family:inherit;width:100%}
+  .nt textarea{min-height:56px;resize:vertical}
+  .nt input:focus,.nt textarea:focus,.nt select:focus{outline:none;border-color:var(--accent)}
+  .ntgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px}
+  .ntl{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);
+    display:block;margin-bottom:3px}
+  .ntfoot{display:flex;gap:8px;align-items:center;margin-top:10px}
+  .ntfoot .sp{flex:1}
+  .sugbox{margin-top:10px;padding-top:9px;border-top:1px dashed var(--border)}
+  .sugh{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);
+    margin-bottom:6px}
+  .sugrow{display:flex;gap:7px;align-items:center;margin-bottom:5px;flex-wrap:wrap}
+  .sugrow select{width:auto;font-size:11.5px;padding:3px 6px}
+  .sugt{font-size:12.5px;color:var(--fg);flex:1;min-width:120px}
+  .sugt b{color:var(--accent);font-weight:600}
+  .sugcue{font-size:10.5px;color:var(--muted);font-style:italic}
+  .dact{display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin:9px 0}
+  .dact select,.dact input{background:#0d1117;color:var(--fg);border:1px solid var(--border);
+    border-radius:7px;padding:4px 7px;font-size:12px;font-family:inherit}
+  .dact input{width:110px}
+  .relx{background:none;border:none;color:var(--muted);cursor:pointer;font-size:13px;
+    padding:0 4px;line-height:1}
+  .relx:hover{color:#f85149}
+  .lkrow{display:flex;gap:7px;align-items:center;margin-top:7px;flex-wrap:wrap}
+  .lkrow input{background:#0d1117;color:var(--fg);border:1px solid var(--border);
+    border-radius:7px;padding:4px 7px;font-size:12px;font-family:inherit;width:170px}
+  .lkrow select{background:#0d1117;color:var(--fg);border:1px solid var(--border);
+    border-radius:7px;padding:4px 7px;font-size:11.5px;font-family:inherit}
+  .lkres{max-height:132px;overflow:auto;margin-top:5px}
+  .lkres button{display:block;width:100%;text-align:left;background:#0d1117;color:var(--fg);
+    border:1px solid var(--border);border-radius:6px;padding:4px 7px;font-size:12px;
+    margin-bottom:3px;cursor:pointer;font-family:inherit}
+  .lkres button:hover{border-color:var(--accent)}
+  .dnote{font-size:11.5px;color:var(--muted);margin-top:6px}
+  .dnote.err{color:#f85149}
   #dmeta{color:var(--muted);font-size:12.5px;margin:0 0 12px}
   .dcard{background:var(--panel);border:1px solid var(--border);border-radius:11px;
     padding:11px 13px;margin-bottom:9px}
@@ -145,6 +194,7 @@
 <div id="dash">
   <div id="dnav"></div>
   <div id="dctl"></div>
+  <div id="dnewbar"></div>
   <p id="dmeta"></p>
   <div id="dlist"></div>
 </div>
@@ -424,6 +474,7 @@ const Dash = (function(){
   const VIEWS=["agenda","open","today","tomorrow","week","closed","range"];
   const st={ view:"agenda", from:"", to:"", status:"any", since_days:7, mine:false, assignees:[] };
   let ASSIGNEES={};   // token -> count, for the assignee filter chips
+  let META={rels:[],statuses:[],writable:false};  // from /api/meta — never hardcoded here
   const $=s=>document.querySelector(s);
   const mk=(t,c,txt)=>{const e=document.createElement(t); if(c)e.className=c;
     if(txt!=null)e.textContent=txt; return e;};
@@ -520,6 +571,126 @@ const Dash = (function(){
     };
     return c;
   }
+  // ---- token-free writes -------------------------------------------------
+  // Every mutation is one POST to the engine's api_* helpers: plain SQL, no
+  // model in the loop. The UI is a full CRUD client, not an AI front-end.
+  async function post(path,body){
+    try{
+      const r=await fetch(path,{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify(body)});
+      return await r.json();
+    }catch(e){ return {ok:false,error:String(e)}; }
+  }
+  function relSelect(cur){
+    const s=mk("select");
+    (META.rels||["relates-to"]).forEach(r=>{ const o=mk("option",null,r); o.value=r;
+      if(r===cur)o.selected=true; s.appendChild(o); });
+    return s;
+  }
+
+  // ---- new-task composer, with live link recognition ----
+  function newBar(){
+    const bar=$("#dnewbar"); bar.innerHTML="";
+    if(!META.writable){
+      bar.appendChild(mk("div","dnote","read-only server (--no-write) — editing disabled"));
+      return;
+    }
+    const b=mk("button","dbtn pri","＋ New task");
+    b.onclick=()=>composer(bar,b);
+    bar.appendChild(b);
+  }
+  function composer(bar,btn){
+    btn.style.display="none";
+    const f=mk("div","nt"); bar.appendChild(f);
+    const title=mk("input"); title.type="text";
+    title.placeholder="what needs doing? mention a ticket, PR or person and it links itself";
+    f.appendChild(lbl("title",title));
+    const grid=mk("div","ntgrid");
+    const due=mk("input"); due.type="date";
+    const asg=mk("input"); asg.type="text"; asg.placeholder="me";
+    asg.setAttribute("list","asglist");
+    const pri=mk("select"); ["","P1","P2","P3","P4"].forEach(p=>{const o=mk("option",null,p||"—");
+      o.value=p; pri.appendChild(o);});
+    const typ=mk("select"); ["task","subtask"].forEach(t=>{const o=mk("option",null,t);
+      o.value=t; typ.appendChild(o);});
+    grid.appendChild(lbl("due",due)); grid.appendChild(lbl("assignee",asg));
+    grid.appendChild(lbl("priority",pri)); grid.appendChild(lbl("type",typ));
+    f.appendChild(grid);
+    const body=mk("textarea"); body.placeholder="notes (optional)";
+    const bw=lbl("details",body); bw.style.marginTop="8px"; f.appendChild(bw);
+    // assignee autocomplete from the tokens already in the graph
+    if(!$("#asglist")){
+      const dl=mk("datalist"); dl.id="asglist";
+      Object.keys(ASSIGNEES).forEach(a=>{const o=mk("option"); o.value=a; dl.appendChild(o);});
+      f.appendChild(dl);
+    }
+    const sug=mk("div","sugbox"); sug.style.display="none"; f.appendChild(sug);
+    let picks=[];                        // [{id,rel,title,type,on}]
+    let t=null;
+    title.oninput=()=>{ clearTimeout(t); t=setTimeout(()=>recognise(title.value,sug,picks),260); };
+    const foot=mk("div","ntfoot");
+    const save=mk("button","dbtn pri","Create task");
+    const cancel=mk("button","dbtn","Cancel");
+    const note=mk("span","dnote");
+    foot.appendChild(save); foot.appendChild(cancel);
+    foot.appendChild(mk("span","sp")); foot.appendChild(note);
+    f.appendChild(foot);
+    cancel.onclick=()=>{ f.remove(); btn.style.display=""; };
+    save.onclick=async()=>{
+      if(!title.value.trim()){ note.className="dnote err"; note.textContent="title required"; return; }
+      save.disabled=true; note.className="dnote"; note.textContent="saving…";
+      const links=picks.filter(p=>p.on).map(p=>({id:p.id,rel:p.rel}));
+      const d=await post("/api/add-task",{ title:title.value.trim(), body:body.value.trim(),
+        due:due.value?(due.value+"T12:00:00"):"", assignee:asg.value.trim(),
+        priority:pri.value, type:typ.value, links });
+      if(!d.ok){ save.disabled=false; note.className="dnote err";
+        note.textContent=d.error||"failed"; return; }
+      f.remove(); btn.style.display="";
+      await refreshAssignees(); load();
+    };
+    title.focus();
+  }
+  function lbl(text,el){
+    const w=mk("div"); w.appendChild(mk("span","ntl",text)); w.appendChild(el); return w;
+  }
+  // the recognition system: ask the engine what this text mentions, and how
+  async function recognise(text,box,picks){
+    if(text.trim().length<3){ box.style.display="none"; box.innerHTML=""; picks.length=0; return; }
+    let d;
+    try{
+      const r=await fetch("/api/suggest-links?text="+encodeURIComponent(text));
+      d=await r.json();
+    }catch(e){ return; }
+    if(!d.ok||!d.suggestions.length){ box.style.display="none"; box.innerHTML=""; picks.length=0; return; }
+    // keep any relation the user already overrode / unchecked
+    const prev={}; picks.forEach(p=>prev[p.id]={rel:p.rel,on:p.on,touched:p.touched});
+    picks.length=0;
+    box.innerHTML=""; box.style.display="block";
+    box.appendChild(mk("div","sugh","recognised "+d.suggestions.length+
+      " connection"+(d.suggestions.length===1?"":"s")+" — edit or uncheck"));
+    d.suggestions.forEach(s=>{
+      const old=prev[s.id]||{};
+      const p={id:s.id,rel:old.touched?old.rel:s.rel,title:s.title,type:s.type,
+               on:old.on!==undefined?old.on:true,touched:old.touched||false};
+      picks.push(p);
+      const row=mk("div","sugrow");
+      const cb=mk("input"); cb.type="checkbox"; cb.checked=p.on;
+      cb.onchange=()=>{ p.on=cb.checked; };
+      const sel=relSelect(p.rel);
+      sel.onchange=()=>{ p.rel=sel.value; p.touched=true; };
+      const t=mk("div","sugt"); t.innerHTML="<b></b> <span></span>";
+      t.querySelector("b").textContent=s.title.slice(0,52);
+      t.querySelector("span").textContent="("+s.type+")";
+      row.appendChild(cb); row.appendChild(sel); row.appendChild(t);
+      if(s.cue) row.appendChild(mk("span","sugcue",'matched "'+s.cue+'"'));
+      box.appendChild(row);
+    });
+  }
+  async function refreshAssignees(){
+    try{ const r=await fetch("/api/assignees"); const d=await r.json();
+      if(d.ok){ ASSIGNEES=d.assignees||{}; ctl(); } }catch(e){}
+  }
+
   function pickDue(chip,row){
     const inp=mk("input"); inp.type="date"; inp.className="duepick";
     if(row.due_local && row.due_local!=="--") inp.value=row.due_local;
@@ -539,24 +710,139 @@ const Dash = (function(){
       const r=await fetch("/api/node?id="+encodeURIComponent(id)); const d=await r.json();
       if(!d.ok){ det.textContent=d.error||"error"; return; }
       det.innerHTML="";
+      const redraw=()=>expand(id,det);
       if(d.body){ const b=mk("div","dbody",d.body); det.appendChild(b); }
+      if(META.writable) det.appendChild(actions(d,redraw,det));
+      det.appendChild(mk("div","drelh", d.edges && d.edges.length
+        ? "Related ("+d.edges.length+")" : "No links"));
       if(d.edges && d.edges.length){
         const rel=mk("div","drel");
         d.edges.forEach(e=>{
           const line=mk("div","drelrow");
-          line.textContent=(e.dir==="out"?"→ ":"← ")+e.rel+": "+e.title+"  ("+e.type+")";
+          const txt=mk("span",null,(e.dir==="out"?"→ ":"← ")+e.rel+": "+e.title+"  ("+e.type+")");
+          line.appendChild(txt);
+          if(META.writable){
+            const x=mk("button","relx","×");
+            x.title="remove this link";
+            x.onclick=async()=>{
+              x.disabled=true;
+              // edges render from this node's perspective; unlink needs the real direction
+              const src=e.dir==="out"?d.id:e.id, dst=e.dir==="out"?e.id:d.id;
+              const res=await post("/api/unlink",{src,dst,rel:e.rel});
+              if(res.ok){ redraw(); load(); } else { x.disabled=false; x.title=res.error||"failed"; }
+            };
+            line.appendChild(x);
+          }
           rel.appendChild(line);
         });
-        det.appendChild(mk("div","drelh","Related ("+d.edges.length+")"));
         det.appendChild(rel);
-      } else { det.appendChild(mk("div","drelh","No links")); }
+      }
+      if(META.writable) det.appendChild(linkAdder(d,redraw));
     }catch(e){ det.textContent="can't load ("+e+")"; }
+  }
+  // complete / status / assignee / rename — all without the model
+  function actions(d,redraw,det){
+    const bar=mk("div","dact");
+    const note=mk("span","dnote");
+    const done=(d.status||"")==="done"||(d.status||"")==="cancelled";
+    if(!done){
+      const ok=mk("button","dbtn ok","✓ Complete");
+      ok.onclick=async()=>{ ok.disabled=true;
+        const r=await post("/api/complete",{id:d.id});
+        if(r.ok){ load(); redraw(); } else { ok.disabled=false; note.className="dnote err";
+          note.textContent=r.error||"failed"; } };
+      bar.appendChild(ok);
+    }
+    const st=mk("select");
+    (META.statuses||[]).forEach(s=>{ const o=mk("option",null,s); o.value=s;
+      if(s===(d.status||""))o.selected=true; st.appendChild(o); });
+    if(!(META.statuses||[]).includes(d.status||"")){
+      const o=mk("option",null,d.status||"—"); o.value=d.status||""; o.selected=true;
+      st.insertBefore(o,st.firstChild);
+    }
+    st.onchange=async()=>{
+      const r=await post("/api/set-status",{id:d.id,status:st.value});
+      if(r.ok){ load(); redraw(); } else { note.className="dnote err"; note.textContent=r.error; }
+    };
+    bar.appendChild(st);
+    const asg=mk("input"); asg.type="text"; asg.value=(d.props&&d.props.assignee)||"";
+    asg.placeholder="assignee"; asg.setAttribute("list","asglist");
+    asg.onchange=async()=>{
+      const r=await post("/api/set-assignee",{id:d.id,assignee:asg.value.trim()});
+      if(r.ok){ refreshAssignees(); load(); } else { note.className="dnote err";
+        note.textContent=r.error; }
+    };
+    bar.appendChild(asg);
+    const ed=mk("button","dbtn","✎ Edit");
+    ed.onclick=()=>editor(d,redraw,det);
+    bar.appendChild(ed);
+    bar.appendChild(note);
+    return bar;
+  }
+  function editor(d,redraw,det){
+    const f=mk("div","nt");
+    const title=mk("input"); title.type="text"; title.value=d.title||"";
+    f.appendChild(lbl("title",title));
+    const body=mk("textarea"); body.value=d.body||"";
+    const bw=lbl("details",body); bw.style.marginTop="8px"; f.appendChild(bw);
+    const foot=mk("div","ntfoot");
+    const save=mk("button","dbtn pri","Save");
+    const cancel=mk("button","dbtn","Cancel");
+    const note=mk("span","dnote");
+    foot.appendChild(save); foot.appendChild(cancel);
+    foot.appendChild(mk("span","sp")); foot.appendChild(note);
+    f.appendChild(foot);
+    cancel.onclick=redraw;
+    save.onclick=async()=>{
+      save.disabled=true;
+      const r=await post("/api/update-node",{id:d.id,title:title.value,body:body.value});
+      if(r.ok){ load(); redraw(); }
+      else { save.disabled=false; note.className="dnote err"; note.textContent=r.error||"failed"; }
+    };
+    // swap the action bar for the editor, in this card only
+    const bar=det.querySelector(".dact");
+    if(bar) bar.replaceWith(f); else det.appendChild(f);
+    title.focus();
+    return f;
+  }
+  // build a new relation by searching for the other end
+  function linkAdder(d,redraw){
+    const wrap=mk("div");
+    const row=mk("div","lkrow");
+    const q=mk("input"); q.type="text"; q.placeholder="link to… (search nodes)";
+    const sel=relSelect("relates-to");
+    row.appendChild(q); row.appendChild(sel);
+    wrap.appendChild(row);
+    const res=mk("div","lkres"); wrap.appendChild(res);
+    const note=mk("div","dnote"); wrap.appendChild(note);
+    let t=null;
+    q.oninput=()=>{ clearTimeout(t); t=setTimeout(async()=>{
+      res.innerHTML="";
+      if(q.value.trim().length<2) return;
+      try{
+        const r=await fetch("/api/search?q="+encodeURIComponent(q.value.trim()));
+        const s=await r.json();
+        (s.results||[]).filter(x=>x.id!==d.id).forEach(x=>{
+          const b=mk("button",null,x.title.slice(0,58)+"  ("+x.type+")");
+          b.onclick=async()=>{
+            b.disabled=true;
+            const out=await post("/api/link",{src:d.id,dst:x.id,rel:sel.value});
+            if(out.ok){ redraw(); load(); }
+            else { b.disabled=false; note.className="dnote err"; note.textContent=out.error; }
+          };
+          res.appendChild(b);
+        });
+        if(!res.children.length) note.textContent="no matches";
+      }catch(e){}
+    },260); };
+    return wrap;
   }
   let built=false, timer=null;
   async function show(){
     if(!built){
       try{ const r=await fetch("/api/assignees"); const d=await r.json(); if(d.ok) ASSIGNEES=d.assignees||{}; }catch(e){}
-      tabs(); ctl(); built=true;
+      try{ const r=await fetch("/api/meta"); const m=await r.json(); if(m.ok) META=m; }catch(e){}
+      tabs(); ctl(); newBar(); built=true;
     }
     load();
     clearInterval(timer); timer=setInterval(()=>{ if(mode==='dash') load(); }, 120000);

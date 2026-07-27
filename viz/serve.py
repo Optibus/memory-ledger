@@ -26,6 +26,10 @@ import brain_query  # noqa: E402  (the off-token query layer — powers the dash
 
 INDEX = HERE / "index.html"
 
+# Writes (POST /api/*) are enabled unless started with --no-write. The write API
+# is unauthenticated, so bind to 127.0.0.1 or pass --no-write when exposing it.
+WRITABLE = True
+
 
 def _sqlite_payload() -> dict:
     con = graph.connect()
@@ -154,6 +158,29 @@ class Handler(BaseHTTPRequestHandler):
                 nid = (parse_qs(parsed.query).get("id") or [""])[0]
                 self._send(200, json.dumps(brain_query.node_detail(nid)),
                            "application/json")
+            elif path == "/api/meta":   # vocabulary, so the UI never hardcodes it
+                self._send(200, json.dumps({
+                    "ok": True, "rels": graph.EDGE_RELS,
+                    "statuses": graph.TASK_STATUSES,
+                    "writable": WRITABLE,
+                }), "application/json")
+            elif path == "/api/suggest-links":
+                q = parse_qs(parsed.query)
+                text = (q.get("text") or [""])[0]
+                exclude = (q.get("exclude") or [""])[0]
+                con = graph.connect()
+                res = graph.suggest_links(con, text, 8, exclude)
+                self._send(200, json.dumps({"ok": True, "count": len(res),
+                                            "suggestions": res}), "application/json")
+            elif path == "/api/search":  # node picker for the relation editor
+                q = parse_qs(parsed.query)
+                term = (q.get("q") or [""])[0].strip()
+                if len(term) < 2:
+                    self._send(200, json.dumps({"ok": True, "results": []}),
+                               "application/json")
+                else:
+                    self._send(200, json.dumps(self._search(term, q)),
+                               "application/json")
             elif path.startswith("/api/"):   # dashboard views: /api/<view>?params
                 self._dashboard(path[len("/api/"):], parse_qs(parsed.query))
             else:
@@ -192,41 +219,178 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, json.dumps({"ok": False, "error": str(e)}),
                        "application/json")
 
-    # --- writes: set a task's due date from the web UI (token-free) ---
+    def _search(self, term, q):
+        limit = 12
+        raw = (q.get("limit") or [""])[0]
+        if raw.isdigit():
+            limit = max(1, min(30, int(raw)))
+        con = graph.connect()
+        like = f"%{term.lower()}%"
+        rows = con.execute(
+            "SELECT id,type,title,status FROM nodes"
+            " WHERE lower(title) LIKE ? ORDER BY length(title) LIMIT ?",
+            (like, limit)).fetchall()
+        return {"ok": True, "results": [dict(r) for r in rows]}
+
+    # ---------------------------------------------------------------- writes
+    # Token-free CRUD from the browser: every route below is plain SQL through
+    # the engine's api_* helpers, so the UI needs no model to feed the brain.
+    # Vocabulary/closed sets are enforced HERE (the engine keeps them soft) —
+    # this is the untrusted boundary.
     def do_POST(self):
         from urllib.parse import urlparse
         path = urlparse(self.path).path
+        routes = {
+            "/api/set-due": self._set_due,
+            "/api/add-task": self._add_task,
+            "/api/complete": self._complete,
+            "/api/set-status": self._set_status,
+            "/api/set-assignee": self._set_assignee,
+            "/api/update-node": self._update_node,
+            "/api/link": self._link,
+            "/api/unlink": self._unlink,
+        }
+        handler = routes.get(path)
         try:
-            if path == "/api/set-due":
-                n = int(self.headers.get("Content-Length") or 0)
-                try:
-                    data = json.loads(self.rfile.read(n) or b"{}")
-                except Exception:
-                    data = {}
-                res = self._set_due(data.get("id", ""), data.get("due", ""))
-                self._send(200 if res.get("ok") else 400,
-                           json.dumps(res), "application/json")
-            else:
+            if handler is None:
                 self._send(404, json.dumps({"ok": False, "error": "not found"}),
                            "application/json")
+                return
+            if not WRITABLE:
+                self._send(403, json.dumps({
+                    "ok": False,
+                    "error": "server started with --no-write; writes are disabled"}),
+                    "application/json")
+                return
+            n = int(self.headers.get("Content-Length") or 0)
+            try:
+                data = json.loads(self.rfile.read(n) or b"{}")
+            except Exception:
+                data = {}
+            if not isinstance(data, dict):
+                data = {}
+            res = handler(data)
+            self._send(200 if res.get("ok") else 400,
+                       json.dumps(res), "application/json")
         except Exception as e:
             self._send(500, json.dumps({"ok": False, "error": str(e)}),
                        "application/json")
 
-    def _set_due(self, node_id, due):
-        if not node_id:
+    @staticmethod
+    def _str(data, key, limit=4000):
+        v = data.get(key)
+        return v.strip()[:limit] if isinstance(v, str) else ""
+
+    def _set_due(self, data):
+        nid = self._str(data, "id", 200)
+        if not nid:
             return {"ok": False, "error": "missing id"}
+        res = graph.api_update_node(graph.connect(), nid,
+                                    due=self._str(data, "due", 40))
+        return ({"ok": True, "id": nid, "due": res["node"]["due"]}
+                if res.get("ok") else res)
+
+    def _add_task(self, data):
+        title = self._str(data, "title", 300)
+        if not title:
+            return {"ok": False, "error": "missing title"}
+        ntype = self._str(data, "type", 20) or "task"
+        if ntype not in ("task", "subtask"):
+            return {"ok": False, "error": "type must be task or subtask"}
+        props = {"source": "web-ui"}
+        for key in ("assignee", "priority"):
+            val = self._str(data, key, 60)
+            if val:
+                props[key] = val
         con = graph.connect()
-        if not con.execute("SELECT 1 FROM nodes WHERE id=?", (node_id,)).fetchone():
-            return {"ok": False, "error": f"no node {node_id}"}
-        con.execute("UPDATE nodes SET due=?, updated=? WHERE id=?",
-                    (due or "", graph.now(), node_id))
-        con.commit()
-        try:
-            graph._after_write(con, nodes=[node_id])   # mirror + sync to neo4j
-        except Exception:
-            pass
-        return {"ok": True, "id": node_id, "due": due or ""}
+        res = graph.api_create_node(
+            con, ntype, title, self._str(data, "body"), props,
+            status="open", due=self._str(data, "due", 40),
+            realm=self._str(data, "realm", 40))
+        if not res.get("ok"):
+            return res
+        nid = res["node"]["id"]
+        # apply whichever suggested/edited links the user kept
+        links, rejected = [], []
+        for item in (data.get("links") or [])[:20]:
+            if not isinstance(item, dict):
+                continue
+            dst, rel = str(item.get("id", ""))[:200], str(item.get("rel", ""))[:40]
+            if rel not in graph.EDGE_RELS:
+                rejected.append({"id": dst, "rel": rel, "error": "unknown relation"})
+                continue
+            r = graph.api_link(con, nid, dst, rel)
+            (links if r.get("ok") else rejected).append(
+                {"id": dst, "rel": rel, **({} if r.get("ok") else {"error": r.get("error")})})
+        res["links"] = links
+        if rejected:
+            res["rejected"] = rejected
+        return res
+
+    def _complete(self, data):
+        nid = self._str(data, "id", 200)
+        if not nid:
+            return {"ok": False, "error": "missing id"}
+        return graph.api_complete(graph.connect(), nid, self._str(data, "note", 500))
+
+    def _set_status(self, data):
+        nid = self._str(data, "id", 200)
+        status = self._str(data, "status", 20)
+        if not nid:
+            return {"ok": False, "error": "missing id"}
+        if status not in graph.TASK_STATUSES:
+            return {"ok": False,
+                    "error": f"status must be one of {', '.join(graph.TASK_STATUSES)}"}
+        waiting = data.get("waiting_on")
+        return graph.api_set_status(
+            graph.connect(), nid, status,
+            waiting_on=(self._str(data, "waiting_on", 200)
+                        if isinstance(waiting, str) else None))
+
+    def _set_assignee(self, data):
+        nid = self._str(data, "id", 200)
+        if not nid:
+            return {"ok": False, "error": "missing id"}
+        # "" is meaningful: it un-assigns
+        return graph.api_update_node(
+            graph.connect(), nid,
+            props_patch={"assignee": self._str(data, "assignee", 60)})
+
+    def _update_node(self, data):
+        nid = self._str(data, "id", 200)
+        if not nid:
+            return {"ok": False, "error": "missing id"}
+        fields, patch = {}, {}
+        if isinstance(data.get("title"), str):
+            title = self._str(data, "title", 300)
+            if not title:
+                return {"ok": False, "error": "title cannot be empty"}
+            fields["title"] = title
+        if isinstance(data.get("body"), str):
+            fields["body"] = self._str(data, "body")
+        if isinstance(data.get("priority"), str):
+            patch["priority"] = self._str(data, "priority", 20)
+        if not fields and not patch:
+            return {"ok": False, "error": "nothing to update"}
+        return graph.api_update_node(graph.connect(), nid,
+                                     props_patch=patch or None, **fields)
+
+    def _edge_args(self, data):
+        src, dst = self._str(data, "src", 200), self._str(data, "dst", 200)
+        rel = self._str(data, "rel", 40)
+        if not src or not dst:
+            return None, {"ok": False, "error": "missing src or dst"}
+        if rel not in graph.EDGE_RELS:
+            return None, {"ok": False, "error": f"unknown relation: {rel}"}
+        return (src, dst, rel), None
+
+    def _link(self, data):
+        args, err = self._edge_args(data)
+        return err or graph.api_link(graph.connect(), *args)
+
+    def _unlink(self, data):
+        args, err = self._edge_args(data)
+        return err or graph.api_unlink(graph.connect(), *args)
 
     def log_message(self, *_):  # quiet
         pass
@@ -237,7 +401,15 @@ def main():
     ap.add_argument("--port", type=int, default=8770)
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--no-open", action="store_true")
+    ap.add_argument("--no-write", action="store_true",
+                    help="serve read-only — refuse every POST. Use this when "
+                         "binding --host 0.0.0.0, since the write API is "
+                         "unauthenticated and anyone on the network could edit "
+                         "your brain.")
     args = ap.parse_args()
+
+    global WRITABLE
+    WRITABLE = not args.no_write
 
     graph.connect().close()  # ensure the brain exists
     url = f"http://{args.host}:{args.port}/"

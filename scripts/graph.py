@@ -43,8 +43,8 @@ NODE_TYPES = [
 ]
 EDGE_RELS = [
     "relates-to", "blocks", "blocked-by", "part-of", "has-subtask",
-    "assigned-to", "about", "depends-on", "mentions", "authored-by",
-    "example-of", "follows-up",
+    "assigned-to", "about", "depends-on", "causes", "caused-by",
+    "mentions", "authored-by", "example-of", "follows-up",
     # neuroplasticity / learned skills
     "applies-to", "learned-from", "reinforces", "triggered-by",
 ]
@@ -368,44 +368,18 @@ def cmd_init(args):
 
 def cmd_add_node(args):
     con = connect()
-    nid = args.id or _gen_id(con, args.type, args.title)
-    ts = now()
-    realm = getattr(args, "realm", None) or DEFAULT_REALM
-    con.execute(
-        "INSERT INTO nodes(id,type,title,body,props,status,due,realm,created,updated)"
-        " VALUES(?,?,?,?,?,?,?,?,?,?)",
-        (nid, args.type, args.title, args.body or "",
-         json.dumps(_parse_props(args.props)), args.status or "",
-         args.due or "", realm, ts, ts),
-    )
-    con.commit()
-    sync = _after_write(con, nodes=[nid])
-    row = con.execute("SELECT * FROM nodes WHERE id=?", (nid,)).fetchone()
-    out({"ok": True, "node": _node_dict(row), "sync": sync})
+    out(api_create_node(con, args.type, args.title, args.body,
+                        _parse_props(args.props), args.status, args.due,
+                        getattr(args, "realm", None), args.id))
 
 
 def cmd_update_node(args):
     con = connect()
-    row = con.execute("SELECT * FROM nodes WHERE id=?", (args.id,)).fetchone()
-    if not row:
-        out({"ok": False, "error": f"no node {args.id}"}); return
-    cur = _node_dict(row)
-    title = args.title if args.title is not None else cur["title"]
-    body = args.body if args.body is not None else cur["body"]
-    status = args.status if args.status is not None else cur["status"]
-    due = args.due if args.due is not None else cur["due"]
-    props = cur["props"]
-    if args.props is not None:
-        props = {**props, **_parse_props(args.props)}
-    realm = args.realm if getattr(args, "realm", None) else (cur.get("realm") or DEFAULT_REALM)
-    con.execute(
-        "UPDATE nodes SET title=?,body=?,props=?,status=?,due=?,realm=?,updated=? WHERE id=?",
-        (title, body, json.dumps(props), status, due, realm, now(), args.id),
-    )
-    con.commit()
-    sync = _after_write(con, nodes=[args.id])
-    row = con.execute("SELECT * FROM nodes WHERE id=?", (args.id,)).fetchone()
-    out({"ok": True, "node": _node_dict(row), "sync": sync})
+    out(api_update_node(con, args.id, title=args.title, body=args.body,
+                        status=args.status, due=args.due,
+                        realm=getattr(args, "realm", None),
+                        props_patch=(_parse_props(args.props)
+                                     if args.props is not None else None)))
 
 
 def cmd_del_node(args):
@@ -418,20 +392,7 @@ def cmd_del_node(args):
 
 def cmd_add_edge(args):
     con = connect()
-    for end in (args.src, args.dst):
-        if not con.execute("SELECT 1 FROM nodes WHERE id=?", (end,)).fetchone():
-            out({"ok": False, "error": f"no node {end}"}); return
-    try:
-        con.execute(
-            "INSERT INTO edges(src,dst,rel,props,created) VALUES(?,?,?,?,?)",
-            (args.src, args.dst, args.rel, json.dumps(_parse_props(args.props)), now()),
-        )
-        con.commit()
-    except Exception:
-        pass  # UNIQUE dup -> treat as idempotent
-    sync = _after_write(con, edges=[(args.src, args.dst, args.rel)])
-    out({"ok": True, "edge": {"src": args.src, "dst": args.dst, "rel": args.rel},
-         "sync": sync})
+    out(api_link(con, args.src, args.dst, args.rel, _parse_props(args.props)))
 
 
 def cmd_del_edge(args):
@@ -638,19 +599,7 @@ def cmd_export(args):
 # ---------------------------------------------------------------------------
 def cmd_complete(args):
     con = connect()
-    row = con.execute("SELECT * FROM nodes WHERE id=?", (args.id,)).fetchone()
-    if not row:
-        out({"ok": False, "error": f"no node {args.id}"}); return
-    cur = _node_dict(row)
-    props = {**cur["props"], "completed_at": now()}
-    if args.note:
-        props["completion_note"] = args.note
-    con.execute("UPDATE nodes SET status=?, props=?, updated=? WHERE id=?",
-                ("done", json.dumps(props), now(), args.id))
-    con.commit()
-    sync = _after_write(con, nodes=[args.id])
-    row = con.execute("SELECT * FROM nodes WHERE id=?", (args.id,)).fetchone()
-    out({"ok": True, "archived": True, "node": _node_dict(row), "sync": sync})
+    out(api_complete(con, args.id, args.note))
 
 
 def cmd_done(args):
@@ -884,6 +833,261 @@ def cmd_use_skill(args):
 
 
 # ---------------------------------------------------------------------------
+# link recognition — "what is this text already connected to?"
+# ---------------------------------------------------------------------------
+# Given free text (a task title you are typing), find the nodes it mentions and
+# infer HOW they relate from the wording around each mention. Pure regex + a
+# scan of the node table: no model, no tokens. Same engine the web UI calls as
+# you type, so the UI needs no intelligence of its own.
+#
+# Cue -> relation, most specific first. The relation always reads
+# "<the text> --rel--> <the mentioned node>", so the reciprocal side is implied
+# (brain_query._relations derives badges from both ends).
+_LINK_CUES = [
+    ("blocked-by",  r"(?:is\s+)?blocked\s+(?:by|on)|waiting\s+(?:on|for)"
+                    r"|held\s+up\s+by|gated\s+(?:on|by)|stuck\s+(?:on|behind)"
+                    r"|pending\b|behind\b"),
+    ("blocks",      r"(?:this\s+)?blocks\b|is\s+blocking\b|blocking\b|unblocks\b"),
+    ("caused-by",   r"caused\s+by|because\s+of|due\s+to|regression\s+(?:from|of)"
+                    r"|introduced\s+(?:by|in)|broken\s+by|broke\s+in|fallout\s+(?:from|of)"),
+    ("causes",      r"causes?\b|causing\b|breaks?\b|breaking\b|leads?\s+to"
+                    r"|results?\s+in|regresses\b"),
+    ("depends-on",  r"depends?\s+on|depending\s+on|requires?\b|needs?\b|relies\s+on"),
+    ("has-subtask", r"has\s+subtasks?|includes?\b|contains?\b|breaks?\s+down\s+into"),
+    ("part-of",     r"part\s+of|subtask\s+of|belongs\s+to|under\b|within\b|inside\b"),
+    ("follows-up",  r"follow(?:s|ing)?[\s-]?ups?\s+(?:on|with)|follow\s+up\s+(?:on|with)"
+                    r"|after\b|once\b"),
+    ("assigned-to", r"assign(?:ed)?\s+to|delegate[dsn]?\s+to|hand(?:ed)?\s+off\s+to"
+                    r"|owner\s*[:=]"),
+    ("about",       r"about\b|regarding\b|\bre\s*:|context\s+for"),
+    ("mentions",    r"\bwith\b|\bcc\b|\bfyi\b"),
+]
+_LINK_CUES = [(rel, re.compile(r"(?:" + pat + r")[\s:,\-–—]*$")) for rel, pat in _LINK_CUES]
+
+# how far back from a mention we look for a cue word
+_CUE_WINDOW = 40
+
+# Filler that commonly sits between the cue and the mention — "blocked by *PR*
+# #7366", "waiting on *the ticket* OS-82651". Stripped from the tail of the
+# window before cue matching. Deliberately contains NO prepositions or verbs:
+# cues like "depends on" / "caused by" / "part of" end in one, and eating it
+# would stop them matching.
+_MENTION_FILLER = re.compile(
+    r"(?:\b(?:pr|mr|pull\s+request|ticket|issue|task|bug|card|node|epic|story|item"
+    r"|the|a|an)\b|[\s:,\-–—]+)+$")
+
+
+def _mention_keys(d: dict) -> set:
+    """Distinctive strings that, appearing in free text, mean THIS node.
+
+    Deliberately narrow: a whole title (only if long enough to be unambiguous),
+    plus the identifiers people actually type — ticket keys (OS-84566), PR/issue
+    numbers (#7366), channel handles (#cord-devs), and a person's first name.
+    """
+    title = (d.get("title") or "").strip().lower()
+    if not title:
+        return set()
+    keys = set()
+    if len(title) >= 6:
+        keys.add(title)
+    keys.update(re.findall(r"\b[a-z]{2,5}-\d{1,6}\b", title))   # OS-84566, MS-33
+    keys.update(re.findall(r"#\d{2,6}", title))                  # #7366
+    if title.startswith("#") and len(title) > 3:                 # #cord-devs
+        keys.add(title)
+    if d.get("type") == "person":
+        for part in re.split(r"\s+", title):
+            if len(part) >= 3:
+                keys.add(part)                                   # first/last name
+    return keys
+
+
+def _find_mention(text_low: str, key: str) -> int:
+    """Index of `key` in text as a whole token, or -1. Boundary-aware so 'os-8'
+    does not match inside 'os-84566' and a name does not match mid-word."""
+    m = re.search(r"(?<![\w#-])" + re.escape(key) + r"(?![\w-])", text_low)
+    return m.start() if m else -1
+
+
+def suggest_links(con, text: str, limit: int = 8, exclude: str = "") -> list:
+    """Nodes this text mentions, each with the relation its wording implies."""
+    text = (text or "").strip()
+    if len(text) < 3:
+        return []
+    low = text.lower()
+    rows = con.execute("SELECT id,type,title,status FROM nodes").fetchall()
+    hits = {}
+    for row in rows:
+        d = dict(row)
+        if d["id"] == exclude:
+            continue
+        best = -1
+        matched = ""
+        for key in _mention_keys(d):
+            idx = _find_mention(low, key)
+            # prefer the longest key that matches (most specific mention)
+            if idx >= 0 and len(key) > len(matched):
+                best, matched = idx, key
+        if best < 0:
+            continue
+        before = _MENTION_FILLER.sub("", low[max(0, best - _CUE_WINDOW):best])
+        after = low[best + len(matched):best + len(matched) + 12]
+        rel, cue = "", ""
+        for candidate, pat in _LINK_CUES:
+            m = pat.search(before)
+            if m:
+                rel, cue = candidate, m.group(0).strip(" :,-–—")
+                break
+        if not rel:
+            # no cue: a person is mentioned, anything else merely relates
+            rel = "mentions" if d["type"] == "person" else "relates-to"
+        # "needs X first" / "requires X first" is a block, not a dependency
+        if rel == "depends-on" and re.match(r"\s+first\b", after):
+            rel, cue = "blocked-by", (cue + " … first").strip()
+        hit = {"id": d["id"], "type": d["type"], "title": d["title"],
+               "status": d["status"] or "", "rel": rel, "cue": cue,
+               "matched": matched, "at": best,
+               # how much of this node's OWN title the mention accounts for —
+               # "#7366" is most of the PR's title but incidental in a task that
+               # merely quotes it
+               "cover": len(matched) / max(1, len(d["title"] or ""))}
+        prev = hits.get(d["id"])
+        if prev is None or len(matched) > len(prev["matched"]):
+            hits[d["id"]] = hit
+
+    # One node per distinct mention. Several nodes can match the SAME text at the
+    # SAME position (a task whose title quotes "PR #7366" collides with the PR).
+    # Keep the one the identifier most belongs to, so the suggestion list is not
+    # padded with everything that ever referenced the ticket.
+    by_span = {}
+    for h in hits.values():
+        key = (h["matched"], h["at"])
+        best_so_far = by_span.get(key)
+        if best_so_far is None or h["cover"] > best_so_far["cover"]:
+            by_span[key] = h
+    out_ = sorted(by_span.values(), key=lambda h: (h["at"], -len(h["matched"])))
+    for h in out_:
+        h.pop("cover", None)
+    return out_[:limit]
+
+
+def cmd_suggest_links(args):
+    con = connect()
+    res = suggest_links(con, args.text, int(args.limit), args.exclude or "")
+    out({"ok": True, "count": len(res), "text": args.text, "suggestions": res})
+
+
+# ---------------------------------------------------------------------------
+# write API — one implementation, shared by the CLI and the web UI
+# ---------------------------------------------------------------------------
+# These return plain dicts (no printing) so viz/serve.py can call them directly
+# and stay in lockstep with the CLI: same validation, same neo4j sync.
+TASK_STATUSES = ["open", "doing", "blocked", "waiting", "done", "cancelled"]
+
+
+def api_create_node(con, node_type, title, body="", props=None, status="",
+                    due="", realm="", node_id=""):
+    title = (title or "").strip()
+    if not title:
+        return {"ok": False, "error": "missing title"}
+    # NODE_TYPES is a SOFT vocabulary (§3) — the live graph legitimately holds
+    # channel/team/process/capture/pr nodes that are not in it. Callers that
+    # need a closed set (e.g. the web UI) enforce it at their own boundary.
+    if not (node_type or "").strip():
+        return {"ok": False, "error": "missing type"}
+    nid = node_id or _gen_id(con, node_type, title)
+    ts = now()
+    con.execute(
+        "INSERT INTO nodes(id,type,title,body,props,status,due,realm,created,updated)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?)",
+        (nid, node_type, title, body or "", json.dumps(props or {}),
+         status or "", due or "", realm or DEFAULT_REALM, ts, ts))
+    con.commit()
+    sync = _after_write(con, nodes=[nid])
+    row = con.execute("SELECT * FROM nodes WHERE id=?", (nid,)).fetchone()
+    return {"ok": True, "node": _node_dict(row), "sync": sync}
+
+
+def api_update_node(con, node_id, *, title=None, body=None, status=None,
+                    due=None, realm=None, props_patch=None):
+    row = con.execute("SELECT * FROM nodes WHERE id=?", (node_id,)).fetchone()
+    if not row:
+        return {"ok": False, "error": f"no node {node_id}"}
+    cur = _node_dict(row)
+    props = cur["props"]
+    if props_patch:
+        props = {**props, **props_patch}
+    con.execute(
+        "UPDATE nodes SET title=?,body=?,props=?,status=?,due=?,realm=?,updated=? WHERE id=?",
+        (cur["title"] if title is None else title,
+         cur["body"] if body is None else body,
+         json.dumps(props),
+         cur["status"] if status is None else status,
+         cur["due"] if due is None else due,
+         realm or cur.get("realm") or DEFAULT_REALM,
+         now(), node_id))
+    con.commit()
+    sync = _after_write(con, nodes=[node_id])
+    row = con.execute("SELECT * FROM nodes WHERE id=?", (node_id,)).fetchone()
+    return {"ok": True, "node": _node_dict(row), "sync": sync}
+
+
+def api_complete(con, node_id, note=""):
+    """Archive, never delete (CONVENTIONS §2a): status=done + completed_at."""
+    row = con.execute("SELECT * FROM nodes WHERE id=?", (node_id,)).fetchone()
+    if not row:
+        return {"ok": False, "error": f"no node {node_id}"}
+    patch = {"completed_at": now()}
+    if note:
+        patch["completion_note"] = note
+    res = api_update_node(con, node_id, status="done", props_patch=patch)
+    if res.get("ok"):
+        res["archived"] = True
+    return res
+
+
+def api_set_status(con, node_id, status, waiting_on=None):
+    """Move a node's state. Mirrors graph set-state: stamps state_since so
+    age_days stays honest, and mirrors onto status for tasks."""
+    if status not in TASK_STATUSES:
+        return {"ok": False, "error": f"unknown status: {status}"}
+    if status == "done":
+        return api_complete(con, node_id)
+    patch = {"state": status, "state_since": now()}
+    if waiting_on is not None:
+        patch["waiting_on"] = waiting_on
+    return api_update_node(con, node_id, status=status, props_patch=patch)
+
+
+def api_link(con, src, dst, rel, props=None):
+    # EDGE_RELS is also soft — hooks legitimately write `captured-from`. Closed
+    # sets are enforced by the caller (see viz/serve.py).
+    if not (rel or "").strip():
+        return {"ok": False, "error": "missing relation"}
+    if src == dst:
+        return {"ok": False, "error": "cannot link a node to itself"}
+    for end in (src, dst):
+        if not con.execute("SELECT 1 FROM nodes WHERE id=?", (end,)).fetchone():
+            return {"ok": False, "error": f"no node {end}"}
+    try:
+        con.execute("INSERT INTO edges(src,dst,rel,props,created) VALUES(?,?,?,?,?)",
+                    (src, dst, rel, json.dumps(props or {}), now()))
+        con.commit()
+    except Exception:
+        pass   # UNIQUE(src,dst,rel) -> idempotent
+    sync = _after_write(con, edges=[(src, dst, rel)])
+    return {"ok": True, "edge": {"src": src, "dst": dst, "rel": rel}, "sync": sync}
+
+
+def api_unlink(con, src, dst, rel):
+    cur = con.execute("DELETE FROM edges WHERE src=? AND dst=? AND rel=?",
+                      (src, dst, rel))
+    con.commit()
+    sync = _after_write(con, del_edges=[(src, dst, rel)])
+    return {"ok": cur.rowcount > 0, "removed": cur.rowcount,
+            "edge": {"src": src, "dst": dst, "rel": rel}, "sync": sync}
+
+
+# ---------------------------------------------------------------------------
 # state awareness / open loops
 # ---------------------------------------------------------------------------
 # A node is an OPEN LOOP until its state says otherwise. State persists (stays
@@ -1030,6 +1234,11 @@ def build_parser():
     a = sub.add_parser("del-edge"); a.set_defaults(func=cmd_del_edge)
     a.add_argument("--src", required=True); a.add_argument("--dst", required=True)
     a.add_argument("--rel", required=True)
+
+    a = sub.add_parser("suggest-links"); a.set_defaults(func=cmd_suggest_links)
+    a.add_argument("text", help="free text to scan for mentions of known nodes")
+    a.add_argument("--limit", type=int, default=8)
+    a.add_argument("--exclude", help="node id to never suggest (the node being edited)")
 
     a = sub.add_parser("search"); a.set_defaults(func=cmd_search)
     a.add_argument("query", nargs="?", default="")

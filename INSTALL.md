@@ -115,9 +115,14 @@ python3 scripts/graph.py open-loops            # everything still awaiting actio
 
 ```
 SECOND_BRAIN_TZ="America/Sao_Paulo" python3 viz/serve.py       # http://127.0.0.1:8770
+SECOND_BRAIN_TZ="America/Sao_Paulo" python3 viz/serve.py --no-write   # read-only
 ```
-One page, two tabs: **Map** (live graph) and **Dashboard** (the query views). Add
-`--host 0.0.0.0` to reach it from your phone on the LAN / a tunnel. Read-only, no tokens.
+One page, two tabs: **Map** (live graph) and **Dashboard** (the query views). The
+dashboard also **edits** the brain — create tasks with auto-recognised links,
+complete them, change status/assignee/due, rename, and add/remove relations — all
+token-free (no model). Add `--host 0.0.0.0` to reach it from your phone on the LAN
+/ a tunnel; because the write API is **unauthenticated**, pair that with
+`--no-write` unless you trust every device on the network.
 
 ## 4. Verify
 

@@ -162,7 +162,31 @@ A dependency-free local server serves one page with **two tabs**:
   click-to-inspect showing every connection and its direction. Polls the DB so
   changes appear in real time.
 - **Dashboard** — the `brain_query.py` views (agenda / open / today / tomorrow /
-  week / closed / range) as cards, over the same store.
+  week / closed / range) as cards, over the same store. It is also a **full
+  editor**: create tasks, tick them off, change status/assignee/due, rename them,
+  and add or remove relations — all token-free (see below).
+
+### Feed the brain without the model
+
+The dashboard is a complete CRUD client, so the AI is one way in, not the only
+one. Click **＋ New task** and type; as you write, second-brain scans your title
+for things it already knows and proposes how they connect:
+
+```
+"Rerun the export once PR #7366 lands, needs the migration first, with Yuri"
+                        └ follows-up      └ blocked-by          └ mentions
+```
+
+Ticket keys (`OS-84566`), PR numbers (`#7366`), `#channels` and people are all
+recognised, and the wording picks the relation — `blocked by` → `blocked-by`,
+`caused by` → `caused-by`, `part of` → `part-of`, `depends on` → `depends-on`.
+Every suggestion is a row you can re-point or uncheck before saving. Expand any
+card to complete it, move its state, reassign it, edit it, or manage its links
+with a `×` and a search box. No model call, no tokens — the same engine the CLI
+uses (`graph.py suggest-links "…"`).
+
+Writes are unauthenticated and bound to localhost; serve with `--no-write` if you
+expose the UI on your network.
 
 ```bash
 python3 viz/serve.py            # opens http://127.0.0.1:8770/ in your browser
@@ -170,7 +194,9 @@ python3 viz/serve.py --no-open --host 0.0.0.0 --port 8770 &   # reachable on LAN
 ```
 
 Reads neo4j when reachable, else the SQLite mirror. Binds to localhost by default;
-use `--host 0.0.0.0` (behind a tunnel) to reach it from your phone. Read-only.
+use `--host 0.0.0.0` (behind a tunnel) to reach it from your phone. The dashboard
+**writes** too (see above), and the write API is unauthenticated — add
+`--no-write` for a read-only server when exposing it.
 
 ## Install
 

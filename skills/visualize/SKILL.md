@@ -1,6 +1,6 @@
 ---
 name: visualize
-description: Open the live brain UI in the browser — one local server, two tabs: a force-directed Map of every node/edge/relation (zoom/pan, search, type filters, click-to-inspect) and a token-free Dashboard of the date views (agenda/open/today/tomorrow/week/closed/range). Use for "show me the graph", "visualize my brain/memory", "open the map/dashboard", "see the connections", "what's due". Auto-refreshes as the graph changes.
+description: Open the live brain UI in the browser — one local server, two tabs: a force-directed Map of every node/edge/relation (zoom/pan, search, type filters, click-to-inspect) and a token-free Dashboard of the date views (agenda/open/today/tomorrow/week/closed/range) that also EDITS the brain (create tasks with auto-recognised links, complete, status/assignee/due, rename, manage relations). Use for "show me the graph", "visualize my brain/memory", "open the map/dashboard", "see the connections", "what's due", "add a task in the UI", "let me edit it myself". Auto-refreshes as the graph changes.
 ---
 
 # visualize
@@ -47,8 +47,28 @@ open/done filter; closed has a since-days control). Each card shows due date
 (overdue in red), type, status, realm, and `waiting on:`. This is the
 `brain_query.py` layer over HTTP — no model, no tokens.
 
+## Editing from the UI (no model needed)
+The dashboard is a full editor, so the user never depends on you to maintain the
+brain. Point them at it when they'd rather click than type a request:
+
+- **＋ New task** — title, due, assignee, priority, type, notes. While they type
+  the title, the server recognises nodes the text mentions and proposes the
+  relation from the wording (`blocked by PR #7366` → `blocked-by`, `caused by …` →
+  `caused-by`, `needs X first` → `blocked-by`, `part of …` → `part-of`, `with
+  <person>` → `mentions`). Each suggestion can be re-pointed to any relation or
+  unchecked before saving.
+- **Expand a card** → ✓ Complete (archives, never deletes), status dropdown,
+  assignee field, ✎ Edit (title/body), a `×` on any relation to remove it, and a
+  search box to add a new one.
+- Same engine you call: `graph.py suggest-links "<text>"` returns the identical
+  suggestions, so you and the UI never disagree.
+
+If the server was started with `--no-write` the editing controls are hidden and
+every write returns 403 — tell the user to restart without that flag.
+
 ## Notes
 - The server binds to 127.0.0.1 only by default. Use `--host 0.0.0.0` (behind a
-  tunnel) to reach it from your phone on the LAN.
+  tunnel) to reach it from your phone on the LAN — and pass `--no-write` when you
+  do, because the write API is unauthenticated.
 - Colours are per node type (see the legend); node size grows with connection count.
 - If the port is busy, pass a different `--port`.

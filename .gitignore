@@ -3,5 +3,10 @@
 memory/
 
 .idea/
+.DS_Store
 __pycache__/
 *.pyc
+
+# Generated deck: a 6 MB self-contained HTML + ~16 MB of screenshots. Rebuild it
+# with presentation/build/{capture,build,verify}.js instead of committing binaries.
+presentation/

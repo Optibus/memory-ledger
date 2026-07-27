@@ -102,6 +102,7 @@ Every command prints JSON to stdout. Commands:
 | `add-edge --src ID --dst ID --rel REL [--props JSON]` | Link two nodes (idempotent). |
 | `del-edge --src ID --dst ID --rel REL` | Remove a link. |
 | `search "text" [--type T] [--limit N]` | Full-text search over title+body (prefix-matched). |
+| `suggest-links "text" [--limit N] [--exclude ID]` | **Link recognition** — which known nodes this text mentions, and the relation its wording implies (`blocked by X` → `blocked-by`). Pure regex + a node scan: no model, no tokens. Powers the web UI's live suggestions as you type. |
 | `list [--type T] [--status S] [--due-before ISO] [--all] [--limit N]` | Filtered list. **Hides the done/cancelled archive by default** — pass `--all` or `--status done` to see it. |
 | `due [--within-days N]` | Tasks/reminders due within N days (flags `overdue`). |
 | `neighbors --id ID [--rel REL] [--depth N]` | Walk the graph out to depth N. |
@@ -224,10 +225,42 @@ dashboard flags 🔒 blocked / ⛓ blocks / 🔗 related without the model. `/ap
 returns a node's full body + named neighbors for the click-to-expand card. All
 token-free.
 
-**Edit due dates from the dashboard.** Click a card's date chip (shows "📅 not
-set" when empty) to open a date picker; it `POST`s `/api/set-due {id, due}` which
-writes the mirror + syncs neo4j — token-free planning, no model. The `plan-today`
-command (or `plan-my-day` skill) picks up today's `--mine` tasks and blocks them.
+## 2f. The web UI is a full write surface — the brain works without the model
+
+**The model helps feed and manage the brain; it is never the only way in.** The
+dashboard is a complete CRUD client: everything below is plain SQL through the
+engine's `api_*` helpers, with **no model call and no tokens** — the same
+guarantee as the read layer.
+
+| Do this in the browser | Endpoint | Notes |
+|---|---|---|
+| Create a task | `POST /api/add-task` | `{title, body, due, assignee, priority, type, links[]}`. Type limited to `task`/`subtask`; created `open` with `props.source="web-ui"`. |
+| See what a title connects to | `GET /api/suggest-links?text=` | Live as you type — see below. |
+| Mark done | `POST /api/complete` | Archives (§2a): `status=done` + `completed_at`. Never deletes. |
+| Move state | `POST /api/set-status` | Only `open,doing,blocked,waiting,done,cancelled`; stamps `state_since` like `set-state`. |
+| Reassign | `POST /api/set-assignee` | `""` un-assigns. |
+| Rename / edit notes | `POST /api/update-node` | `title` (non-empty), `body`, `priority`. |
+| Set a due date | `POST /api/set-due` | The date chip ("📅 not set" when empty) opens a picker. |
+| Create a relation | `POST /api/link` | Search for the other end, pick the relation, done. |
+| Remove a relation | `POST /api/unlink` | The `×` on any row under **Related**. |
+| Read the vocabulary | `GET /api/meta` | Relations + statuses + `writable`; the UI never hardcodes them. |
+| Find a node to link | `GET /api/search?q=` | Title substring, for the relation picker. |
+
+**Link recognition — the brain guesses the relation, you confirm it.** As you
+type a task title the composer calls `suggest-links`, which scans the text for
+mentions of nodes you already have (whole titles, ticket keys like `OS-84566`,
+PR numbers like `#7366`, `#channel` handles, a person's name) and reads the
+wording around each mention to pick the relation: *"blocked by PR #7366"* →
+`blocked-by`, *"caused by …"* → `caused-by`, *"needs X first"* → `blocked-by`,
+*"part of …"* → `part-of`, *"with <person>"* → `mentions`, nothing recognisable →
+`relates-to`. Each suggestion renders as a row you can **re-point to any relation
+or uncheck**, and your override survives further typing. It is a suggestion
+engine, not an oracle — the user always has the last word.
+
+**Writes are unauthenticated.** They are bound to `127.0.0.1` by default. If you
+expose the UI (`--host 0.0.0.0` for phone access), pass **`--no-write`**: every
+`POST` then returns 403 and the UI hides its editing controls (`/api/meta`
+reports `writable: false`).
 
 ## 3. Vocabulary
 
@@ -241,9 +274,14 @@ waiting, needs-reply · and closed ones: done, cancelled, closed, answered,
 resolved, merged, shipped, deployed, declined.
 
 **Edge relations:** `relates-to`, `blocks`, `blocked-by`, `part-of`,
-`has-subtask`, `assigned-to`, `about`, `depends-on`, `mentions`,
-`authored-by`, `example-of`, `follows-up`, and for learned skills:
+`has-subtask`, `assigned-to`, `about`, `depends-on`, `causes`, `caused-by`,
+`mentions`, `authored-by`, `example-of`, `follows-up`, and for learned skills:
 `applies-to`, `learned-from`, `reinforces`, `triggered-by`.
+
+Both vocabularies are **soft** — the engine does not reject an unlisted type or
+relation (hooks legitimately write `capture` nodes and `captured-from` edges).
+Closed sets are enforced at untrusted boundaries instead: the web UI's write API
+(`viz/serve.py`) accepts only the relations above and only `task`/`subtask`.
 
 **Task status values:** `open`, `doing`, `blocked`, `done`, `cancelled`.
 `done`/`cancelled` are the **archive** — hidden from active views but kept.
