@@ -256,3 +256,14 @@ without matching doc updates is **incomplete**.
 name/flag/behavior and fix **every** mention (don't leave a stale example). If a
 default changed, update the example that shows it. Verify commands/flags shown in
 docs actually exist (`graph.py <cmd> --help`). Then commit code + docs together.
+
+**Enforced by a pre-commit hook** (`.githooks/pre-commit`): a commit that stages
+behavior (`scripts/`, `hooks/`, `viz/`, or `.claude-plugin/*.json`) without also
+staging a docs change (any `*.md`) is **blocked**. Enable it once per clone:
+
+```
+git config core.hooksPath .githooks
+```
+
+A genuinely doc-neutral change can bypass with `git commit --no-verify` — use it
+sparingly, and only when you're sure no doc describes what changed.
