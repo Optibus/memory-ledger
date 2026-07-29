@@ -7,8 +7,8 @@ description: Open the live brain UI in the browser — one local server, two tab
 
 Launch the brain UI — a dependency-free local web server serving one page with
 two tabs: the **Map** (live graph) and the **Dashboard** (the `brain_query.py`
-date views, token-free). Both read the same store (neo4j when reachable, else the
-local SQLite mirror).
+date views, token-free). Both read the same brain file — and a configured graph
+mirror when one is reachable.
 
 Load only the conventions that apply — not the whole file:
 `python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" match-rules "where the brain database lives"`

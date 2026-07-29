@@ -6,9 +6,8 @@ description: The neuroplasticity skill — teach the brain a new, reusable abili
 # learn-skill
 
 This is how the brain grows. A learned skill is a `skill` **node in the graph**
-— its triggers and its full procedure live in the DB and sync everywhere (neo4j
-master + local mirror), so the brain can recognise when to use it again in any
-project, on any machine, from the phone. **The DB is the source of truth — no
+— its triggers and its full procedure live in the DB, so the brain can recognise
+when to use it again in any project, on any machine, from the phone. **The DB is the source of truth — no
 markdown file is written** (skills used to be lone `.md` files, which isolated
 them to one machine; they're nodes now).
 

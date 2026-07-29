@@ -1911,8 +1911,9 @@ AI with shell access and this file can reconstitute the interaction layer.
 5. **Re-create the always-on capture.** `spec_hooks` describes the three hooks, what
    fires them and what each stores. They are pure Python/SQL and can be rewritten
    from that description against the schema in `spec_db_schema`.
-6. **Reconnect the master store.** `spec_sync` covers the neo4j mirror, the outbox
-   queue and reconciliation. Optional — the brain is fully functional on SQLite.
+6. **Reconnect the mirror, only if one is configured.** `spec_sync` covers the
+   optional graph mirror, the outbox queue and reconciliation. Skip it otherwise —
+   the brain is fully functional as a single local file, which is the default.
 7. **Re-seed the base layer only if the conventions are missing.** With a plugin
    checkout present, `ingest-conventions` reloads the shipped text — it KEEPS every
    user-authored or user-edited rule, so restoring never undoes the user's own brain.
@@ -1948,22 +1949,26 @@ shares one brain. It is never committed.
   graph.db          the whole brain in one portable SQLite file (content + skills + genome)
   learned_skills/   optional local SKILL.md exports; never the source of truth
   exports/          export-memory output
-  neo4j.json        optional master-store config (secret)
+  neo4j.json        optional graph-mirror config (secret)
   .last_consolidate stamp for the daily consolidation
 ```
 
 Path resolution: `$SECOND_BRAIN_DB` (explicit file) -> `$SECOND_BRAIN_HOME/graph.db`
 -> `~/.second_brain/graph.db`. Copying `graph.db` moves the brain; copying the home
 directory moves brain + learned skills. Identical behaviour in Claude Code and the
-Claude app.
+Claude app. The file is the whole product — no server, no account, no network.
 
 Two orthogonal groupings: `realm` is which section of life (`optibus`, `personal`,
 `shared`); an `area` (`hub_*`, linked with `part-of`) is which domain of meaning.
 """),
-    "spec_sync": ("Master store, mirror and reconciliation", """
-The unified source of truth is a neo4j graph (config `~/.second_brain/neo4j.json`);
-local SQLite is a durable mirror. Every write goes to both. If neo4j is down the op
-is queued in the `outbox` table and pushed when it returns.
+    "spec_sync": ("Optional graph mirror and reconciliation", """
+The brain is one local SQLite file and needs no network. OPTIONALLY, a graph mirror
+can be configured (`~/.second_brain/neo4j.json` or `SECOND_BRAIN_NEO4J_*`) so several
+machines share one brain — the plugin ships no default and connects to nothing unless
+configured. Every write lands locally first, then mirrors. If the mirror is
+unreachable the op is queued in the `outbox` table and pushed when it returns, so
+losing it never blocks or loses a write. Use TLS if you configure one: credentials
+and the whole graph cross the network on every write.
 
 - `neo4j-status` — configured / reachable / pending op count.
 - `flush` — drain the outbox.

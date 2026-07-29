@@ -79,17 +79,26 @@ python3 ~/dev/second-brain/scripts/graph.py init
 To **disable** the brain anywhere, unset/rename that dir — the hooks detect it and
 go quiet.
 
-### Optional: shared neo4j master
+### Optional: mirror one brain across machines
 
-By default everything runs on the local SQLite mirror (offline, instant). To share
-one brain across machines, point it at a neo4j server — create `~/.second_brain/neo4j.json`:
+**Nothing here is required.** Out of the box the brain is one local SQLite file —
+offline, instant, and connected to nothing.
+
+If you want the same brain on more than one machine, point it at a graph server you
+control by creating `~/.second_brain/neo4j.json`:
 
 ```json
-{ "url": "http://your-neo4j-host:7474", "db": "neo4j", "user": "neo4j", "password": "…" }
+{ "url": "https://<your-graph-host>:<port>", "db": "neo4j", "user": "…", "password": "…" }
 ```
-(or the env vars `SECOND_BRAIN_NEO4J_URL / _DB / _USER / _PASSWORD`). Writes go to
-SQLite immediately and sync to neo4j through an offline outbox; reads prefer the
-master when it's reachable. **Keep this file out of the repo — it holds a secret.**
+(or the env vars `SECOND_BRAIN_NEO4J_URL / _DB / _USER / _PASSWORD`). Writes land in
+SQLite immediately and mirror through an offline outbox, so an unreachable mirror
+never blocks or loses a write.
+
+Two things worth getting right if you do this:
+- **Use TLS.** The credentials and your whole graph cross the network on every write.
+- **Keep the config file out of any repo — it holds a secret.** Restrict it with
+  `chmod 600`, and never paste the credentials into a command that gets saved (a
+  shell history or a tool-permission allowlist counts as saved).
 
 ## 3. What turns on automatically (no model call)
 

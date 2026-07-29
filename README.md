@@ -27,7 +27,7 @@ it's never committed:
   graph.db            the memory graph — nodes, edges, AND skills (all live here)
   learned_skills/     optional local SKILL.md exports (only if add-skill --with-file)
   exports/            export-memory output
-  neo4j.json          optional neo4j master config (secret — never commit)
+  neo4j.json          optional graph-mirror config (secret — never commit)
   (routines, definitions live here too)
 ```
 
@@ -35,13 +35,17 @@ it's never committed:
 the done archive: out of your active views, but kept, searchable, and still
 linked so the brain can learn from what worked.
 
-**neo4j master + sections.** The unified source of truth is a **neo4j** graph
-(config in `~/.second_brain/neo4j.json`); the local SQLite is a durable mirror.
-Every write goes to both — and if neo4j is down it's **queued and auto-synced**
-when it's back (`neo4j-status`, `flush`, `scripts/brain_sync.py`). Every node
-carries a **`realm` / section** (`optibus`, `personal`, …) so one graph holds
-work + personal life, filterable (`sections`, `add-node --realm`). The
-visualizer reads from neo4j too.
+**One local file, and sections.** The brain is a single SQLite file on your
+machine — durable, offline, portable. Nothing about it needs a network, and it
+connects to nothing unless you ask it to. Every node carries a **`realm` /
+section** (`optibus`, `personal`, `shared`, …) so one graph holds work + personal
+life, filterable (`sections`, `add-node --realm`).
+
+**Optional graph mirror.** If you want one brain across several machines, point it
+at a graph server you control and every write mirrors there too. Lose the
+connection and writes queue in an offline outbox, draining automatically when it
+returns (`neo4j-status`, `flush`, `scripts/brain_sync.py`) — the local file is
+always authoritative for reads, so the mirror can never block you.
 
 **Areas — nothing durable floats loose.** Every keeper belongs to a **domain
 area** (`hub_quote`, `hub_health`, `hub_process`, …), so a domain is one edge walk

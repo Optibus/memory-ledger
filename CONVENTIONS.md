@@ -98,7 +98,7 @@ brain. It is never committed. The home holds:
   graph.db            the memory graph (single portable file) — skills live here too, as nodes
   learned_skills/     OPTIONAL local SKILL.md exports (only if add-skill --with-file); not the source of truth
   exports/            export-memory output
-  neo4j.json          optional neo4j master config (secret — never commit)
+  neo4j.json          optional graph-mirror config (secret — never commit)
   (routines, definitions live here too)
 ```
 
@@ -208,18 +208,27 @@ still awaiting action, and it stays open until closed.
 - **Track new loops** as they appear (a PR to move, an email/message to answer)
   as `pr`/`email`/`message` nodes with a `props.state`, so they can't slip.
 
-## 2d. Storage: neo4j master + local mirror + sections
+## 2d. Storage: one local file, an optional mirror, and sections
 
-The unified **master store is neo4j** (Gabriel's home graph; config in
-`~/.second_brain/neo4j.json`). Every mutation writes to the local SQLite mirror
-(durable, offline, fast reads) **and** is pushed to neo4j; if neo4j is down the
-change is queued in an `outbox` and **drains automatically** on the next
-successful write or an explicit `flush`. neo4j is the source of truth; SQLite is
-the resilience cache.
-- `neo4j-status` — configured / up / pending-ops · `flush` — drain the queue.
+**The brain is one local SQLite file, and that is the whole product.** It is
+durable, offline, fast to read, and portable — copy `graph.db` and the brain moves
+with it. Nothing about the brain requires a network.
+
+**Optional graph mirror.** If a `graph` backend is configured, every mutation also
+pushes there, so several machines can share one brain. Configure it with
+`~/.second_brain/neo4j.json` or the `SECOND_BRAIN_NEO4J_*` env vars — any
+reachable graph server works; the plugin ships no default and connects to nothing
+unless you configure it. When the mirror is unreachable the change is queued in an
+`outbox` and **drains automatically** on the next successful write or an explicit
+`flush`, so losing the mirror never blocks or loses a write.
+- `neo4j-status` — configured / reachable / pending-ops · `flush` — drain the queue.
 - `$SECOND_BRAIN_NO_AUTOSYNC=1` queues without per-op push (for heavy batch loads;
   `flush` afterwards) · `scripts/brain_sync.py` does a full bulk reconcile.
-- The visualizer (`viz/serve.py`) reads from neo4j, falling back to SQLite if down.
+- The visualizer (`viz/serve.py`) reads the mirror when one is reachable, else the
+  local file.
+
+Node `type` is a property in the mirror, not a label, so changing a node's type
+needs no label surgery — re-emitting the node through the API is enough.
 
 **Sections (realms):** every node has a `realm` — the section it belongs to:
 `optibus` (work; the default), `shared`, and `personal` (add others as needed).
@@ -331,7 +340,7 @@ engine, not an oracle — the user always has the last word.
 **The UI never writes a value you did not change.** The card's assignee input,
 status select and due chip all compare against the value they rendered and skip
 the `POST` when it is unchanged — a change handler on a pre-filled field can fire
-on a bare focus+blur, and a no-op write would churn `updated` and the neo4j sync
+on a bare focus+blur, and a no-op write would churn `updated` and the mirror sync
 for nothing.
 
 **Writes are unauthenticated.** They are bound to `127.0.0.1` by default. If you
