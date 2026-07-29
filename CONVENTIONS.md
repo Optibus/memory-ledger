@@ -130,7 +130,7 @@ Commands:
 | `del-node --id ID` | Delete a node (its edges cascade). |
 | `add-edge --src ID --dst ID --rel REL [--props JSON]` | Link two nodes (idempotent). |
 | `del-edge --src ID --dst ID --rel REL` | Remove a link. |
-| `search "text" [--type T] [--limit N]` | Full-text search over title+body (prefix-matched). |
+| `search "text" [--type T] [--limit N] [--budget CHARS] [--full]` | Full-text search over title+body (prefix-matched). **Budgeted by default** — bodies are trimmed to share `--budget` (2,600) and only decision-relevant props are returned; uncapped it was ~9k chars where `recall` answered the same cue in ~1.5k. `--full` restores whole bodies; `get-node --id` reads one completely. |
 | `suggest-links "text" [--limit N] [--exclude ID]` | **Link recognition** — which known nodes this text mentions, and the relation its wording implies (`blocked by X` → `blocked-by`). Pure regex + a node scan: no model, no tokens. Powers the web UI's live suggestions as you type. |
 | `recall "cue" [--limit N] [--depth 2] [--budget CHARS]` | **Associative recall — prefer this over `search`.** Seeds on full-text, spreads activation across edges, modulates by memory strength, returns a SLIM ranked payload inside a char budget. One call replaces `search` + `neighbors` and costs ~40% fewer chars. |
 | `consolidate [--day D] [--older-than N]` | Roll a day's `capture` nodes into one digest note. **Non-destructive** — every capture is kept and linked; the digest is what recall surfaces. |
@@ -140,6 +140,10 @@ Commands:
 | `match-rules "situation" [--limit N] [--budget CHARS] [--full]` | **Which conventions apply to THIS situation** (§2i) — the token-light replacement for reading this whole file (~8% of it). No model call. Always-apply rules are appended, not counted against `--limit`. |
 | `ingest-conventions [--file F] [--realm R]` | Load this file into the brain as `rule` nodes, one per section (§2i). Idempotent and **never overwrites a user-authored or user-edited rule**. |
 | `add-rule --title T [--body ...] [--scenario CUES] [--section S] [--source user\|learned\|plugin] [--overrides ID] [--non-negotiable] [--id ID] [--realm R]` | Author or override a rule — the mutable half of the genome (§2i). `--overrides` marks the shipped rule `superseded`. |
+| `park [--body TEXT] [--title T] [--about ID] [--area A]` | **Move context OUT of the window** (§2j): stores the blob (stdin or `--body`) and returns a tiny receipt, so the model can drop the content. |
+| `unpark --id ID [--offset N] [--chars N]` | Read parked context back, whole or sliced. |
+| `resume [--budget CHARS] [--days N] [--limit N]` | **Rehydrate after `/clear`** (§2j) — the thread that was in play, what's parked, what's open, inside a budget. No model call. |
+| `maintain [--keep-days N]` | Brain-side upkeep: consolidate old captures into per-day digests, repair reversed digest links, report the read reduction. Non-destructive, idempotent, schedulable. |
 | `genome [--refresh] [--out DIR]` | The brain's own rebuild blueprint (§2i). `--refresh` re-derives the API surface + DB schema from the code; `--out` writes the full kit for an AI with no plugin. |
 | `due [--within-days N]` | Tasks/reminders due within N days (flags `overdue`). |
 | `neighbors --id ID [--rel REL] [--depth N]` | Walk the graph out to depth N. |
@@ -443,12 +447,59 @@ so neither can drift from the code the way a hand-written list would. `genome --
 DIR` writes the whole kit — specs, rules, and a manifest — for an AI with no plugin.
 Start at `spec_rebuild`.
 
+## 2j. Clearing context is cheap — the brain is what makes it safe
+
+**The context window is the expensive thing, not the graph.** Every request pays
+for the whole accumulated window; the graph costs only what you read from it. So
+the way to reduce spend is not to store less — it is to **carry less**, and query
+instead.
+
+That inverts the usual instinct. Do not preserve context "just in case": park it,
+clear it, and ask for it back if it turns out to matter.
+
+**Three moves, in the order you reach for them.**
+
+1. **`park`** — something bulky is in the conversation (a transcript, a long file,
+   an analysis) and you are done reading it. Park it and drop it:
+   ```
+   <blob> | python3 scripts/graph.py park --title "..." --about <node-id>
+   ```
+   It returns a receipt of a couple of hundred chars — id, size, first line — and
+   nothing else. Measured: 2,893 chars in, 245 chars of receipt out. Read it back
+   whole or sliced with `unpark --id`.
+2. **`/clear`** — then actually clear. This is the single biggest saving available
+   and it is under-used because it feels lossy. It is not lossy here: the hooks
+   already captured the turns, and the semantic nodes were written as you went.
+3. **`resume`** — rehydrate the thread: what was in play, what is parked, what is
+   still open, inside a `--budget` (default 1,800 chars). Pure SQL and full-text,
+   **no model call**. `SessionStart` fires on `/clear`, so the brief hands most of
+   this back automatically — `resume` is the fuller, on-demand version.
+
+**Answer from a query, not from memory of the window.** When a question is about
+something already in the brain, look it up (`recall`, `search`, `brain_query.py`,
+`match-rules`) rather than keeping the answer resident in context so it can be
+re-read later. A budgeted lookup costs ~1.5k chars; the same material sitting in
+the window costs that on *every* subsequent request.
+
+**Read paths are budgeted for this reason.** `search`, `recall`, `match-rules`,
+`match-skills` and `resume` all cap their payload and point at `get-node --id` for
+the one thing you actually want in full. `search --full` exists but is the
+exception, not the habit.
+
+**`maintain` is brain-side upkeep, and is a different thing.** It consolidates old
+`capture` nodes into one digest per day so *reads* stay small as the store grows —
+it does not clear context and it never deletes (§2a). Currently 141 captures
+holding 32,869 chars sit behind 3,505 chars of digest, an **89% reduction in what a
+read has to traverse**. Safe to schedule; the `SessionStart` hook already runs the
+daily pass.
+
 ## 3. Vocabulary
 
 **Node types:** `person`, `task`, `subtask`, `requirement`, `decision`,
 `note`, `project`, `reminder`, `writing-sample`, `association`, `meeting`,
 `jira-issue`, `resource`, `skill` (learned skill), `team`, `channel`,
-`area` (domain hub), `quote`, `rule` (a convention, §2i), `spec` (a genome
+`area` (domain hub), `quote`, `parked` (context moved out of the window, §2j),
+`rule` (a convention, §2i), `spec` (a genome
 blueprint, §2i), `process`, and the stateful trackables `pr`, `email`, `message`.
 
 **State values** (`props.state`, or task `status`): open, doing, blocked,

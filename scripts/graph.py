@@ -39,8 +39,13 @@ DEFAULT_REALM = _env("REALM", "optibus")
 NODE_TYPES = [
     "person", "task", "subtask", "requirement", "decision", "note",
     "project", "reminder", "writing-sample", "association", "meeting",
-    "jira-issue", "resource", "skill", "area", "quote",
+    "jira-issue", "resource", "skill", "area", "quote", "parked",
 ]
+
+# Default character budget for read paths that would otherwise return whole
+# bodies. `search` used to be uncapped and returned ~9k chars where `recall`
+# answered the same cue in ~1.5k — the single largest avoidable read cost.
+READ_BUDGET = 2600
 
 # An AREA is a domain hub: quotes, health, process... Content links to it with
 # `part-of`, so a domain is one edge walk away instead of a full-text guess.
@@ -484,7 +489,39 @@ def cmd_search(args):
     if args.type:
         results = [r for r in results if r["type"] == args.type]
     results = results[: args.limit]
-    out({"ok": True, "count": len(results), "results": results})
+    if getattr(args, "full", False):
+        out({"ok": True, "count": len(results), "results": results}); return
+    # BUDGETED BY DEFAULT. Uncapped, this returned whole bodies — ~9,000 chars
+    # where `recall` answered the same cue in ~1,500. Bodies are trimmed to share
+    # the budget; read one in full with `get-node --id`.
+    budget = int(getattr(args, "budget", None) or READ_BUDGET)
+    # Only the props a caller routinely decides on. Emitting every prop is what
+    # made the budget non-binding: props alone can outweigh the body.
+    KEEP_PROPS = ("priority", "assignee", "waiting_on", "jira", "pr", "state",
+                  "due", "section", "source", "attributed_to")
+    slim, used, truncated = [], 0, 0
+    for i, r in enumerate(results):
+        room = max(160, (budget - used) // max(1, len(results) - i))
+        body = r["body"] or ""
+        entry = {"id": r["id"], "type": r["type"], "title": r["title"]}
+        for k in ("status", "due"):
+            if r.get(k):
+                entry[k] = r[k]
+        p = r["props"] or {}
+        keep = {k: p[k] for k in KEEP_PROPS if p.get(k)}
+        if keep:
+            entry["props"] = keep
+        entry["body"] = body[:room]
+        if len(body) > room:
+            entry["truncated"] = True; truncated += 1
+        used += len(json.dumps(entry))
+        slim.append(entry)
+        if used >= budget:
+            break
+    out({"ok": True, "count": len(slim), "of": len(results), "chars": used,
+         "budget": budget, "truncated": truncated,
+         "hint": "full body: get-node --id · everything: --full",
+         "results": slim})
 
 
 def cmd_list(args):
@@ -1652,6 +1689,279 @@ def _hebbian(con, ids) -> list:
     return made
 
 
+def cmd_resume(args):
+    """Rehydrate the working thread after the context window was cleared.
+
+    THE POINT OF THIS COMMAND: `/clear` is the cheapest thing you can do to a
+    conversation — it drops the accumulated window, and every later request stops
+    paying for it. What normally makes clearing expensive is that you lose your
+    place. You don't, because the brain kept it. So clear often, then run this.
+
+    Returns a SMALL brief inside a char budget: what was most recently in play,
+    anything parked, and the open loops. Everything here is SQL and full-text —
+    no model call. Detail is fetched on demand (`get-node`, `unpark`, `recall`),
+    which is the whole trade: query the brain instead of carrying it.
+    """
+    con = connect()
+    budget = int(args.budget or 1800)
+    since = (datetime.now(timezone.utc) - timedelta(days=int(args.days or 2))).isoformat()
+
+    # What was being worked on: recently touched, minus the machinery (captures,
+    # digests, people, skills, rules) and minus work explicitly owned by someone
+    # else — after a clear you want YOUR thread back, not the last thing ingested.
+    owner = _env("OWNER", "Gabriel").lower()
+    focus = []
+    for r in con.execute(
+        "SELECT * FROM nodes WHERE updated>=? AND type NOT IN"
+        " ('capture','parked','channel','person','skill','rule','spec','area','team')"
+        " AND id NOT LIKE 'note_digest_%' ORDER BY updated DESC LIMIT 60",
+            (since,)).fetchall():
+        d = _node_dict(r)
+        a = str((d["props"] or {}).get("assignee", "")).strip().lower()
+        if a and owner not in a and a not in ("me", "unassigned", "team"):
+            continue
+        focus.append(d)
+        if len(focus) >= int(args.limit or 8):
+            break
+
+    parked = [_node_dict(r) for r in con.execute(
+        "SELECT * FROM nodes WHERE type='parked' ORDER BY updated DESC LIMIT 6"
+    ).fetchall()]
+
+    now_dt = datetime.now(timezone.utc)
+    loops = []
+    for r in con.execute("SELECT * FROM nodes ORDER BY updated DESC").fetchall():
+        d = _node_dict(r)
+        if not _is_open_loop(d):
+            continue
+        due_dt = _parse_dt(d["due"]) if d["due"] else None
+        d["_overdue"] = bool(due_dt and due_dt < now_dt)
+        loops.append(d)
+    # overdue first, then whatever was touched most recently
+    loops.sort(key=lambda d: (not d["_overdue"], d.get("updated") or ""), reverse=True)
+    loops.sort(key=lambda d: not d["_overdue"])
+
+    used = 0
+    def build(d, extra=""):
+        line = {"id": d["id"], "type": d["type"], "title": d["title"][:96]}
+        if d.get("status"):
+            line["status"] = d["status"]
+        p = d["props"] or {}
+        for k in ("priority", "jira", "pr", "waiting_on"):
+            if p.get(k):
+                line[k] = p[k]
+        if extra:
+            line["note"] = extra
+        return line
+
+    def fits(line, cap):
+        """Append only if it stays inside the cap — the budget is a promise."""
+        nonlocal used
+        cost = len(json.dumps(line))
+        if used + cost > cap:
+            return False
+        used += cost
+        return True
+
+    brief = {"ok": True, "budget": budget,
+             "focus": [], "parked": [], "open_loops": []}
+    for d in focus:
+        line = build(d)
+        if not fits(line, int(budget * 0.5)):
+            break
+        brief["focus"].append(line)
+    for d in parked:
+        line = build(d, f"{(d['props'] or {}).get('chars', '?')} chars — unpark --id {d['id']}")
+        if not fits(line, int(budget * 0.75)):
+            break
+        brief["parked"].append(line)
+    for d in loops:
+        line = build(d)
+        if not fits(line, budget):
+            break
+        brief["open_loops"].append(line)
+    brief["chars"] = used
+    brief["counts"] = {"focus": len(brief["focus"]), "parked": len(parked),
+                       "open_loops": len(loops)}
+    brief["hint"] = ("clear the window freely — detail lives in the brain. "
+                     "Deepen any line with: recall '<cue>' · get-node --id · unpark --id")
+    out(brief)
+
+
+def cmd_park(args):
+    """Move a blob of context OUT of the conversation and into the brain.
+
+    Reads the content from --body or stdin, stores it, and returns a DELIBERATELY
+    TINY receipt — id, size, and the first line. That is the whole point: once the
+    content is in the graph the model can drop it from working context and fetch it
+    back with `unpark` (or `get-node`) only if it is actually needed again.
+
+    Nothing is summarised or lossy here; the text is stored verbatim.
+    """
+    con = connect()
+    body = args.body
+    if body is None:
+        body = sys.stdin.read() if not sys.stdin.isatty() else ""
+    body = body or ""
+    if not body.strip():
+        out({"ok": False, "error": "nothing to park (pass --body or pipe stdin)"}); return
+    aid = None
+    if getattr(args, "area", None):
+        aid, err = _resolve_area(con, args.area)
+        if err:
+            out(err); return
+    lines = body.count("\n") + 1
+    first = next((l.strip() for l in body.splitlines() if l.strip()), "")
+    title = args.title or f"Parked context — {first[:70]}"
+    props = {"kind": "parked", "chars": len(body), "lines": lines,
+             "parked_at": now(), "source": args.source or "conversation"}
+    res = api_create_node(con, "parked", title, body, props, "", "",
+                          getattr(args, "realm", None), args.id)
+    if not res.get("ok"):
+        out(res); return
+    nid = res["node"]["id"]
+    if aid:
+        api_link(con, nid, aid, AREA_REL)
+    for ref in (args.about or []):
+        api_link(con, nid, ref, "about")
+    # The receipt is the product: small enough that parking is a net saving even
+    # for a few hundred chars.
+    out({"ok": True, "parked": nid, "chars": len(body), "lines": lines,
+         "first_line": first[:100], "area": aid,
+         "hint": f"drop it from context; read it back with: unpark --id {nid}"})
+
+
+def cmd_unpark(args):
+    """Read parked context back — the whole thing, or a slice of it."""
+    con = connect()
+    row = con.execute("SELECT * FROM nodes WHERE id=?", (args.id,)).fetchone()
+    if not row:
+        out({"ok": False, "error": f"no node {args.id}"}); return
+    d = _node_dict(row)
+    body = d["body"] or ""
+    start = max(0, int(args.offset or 0))
+    if args.chars:
+        chunk = body[start:start + int(args.chars)]
+    else:
+        chunk = body[start:]
+    out({"ok": True, "id": d["id"], "title": d["title"], "total_chars": len(body),
+         "offset": start, "returned": len(chunk),
+         "more": start + len(chunk) < len(body), "body": chunk})
+
+
+def _repair_digest_edges(con):
+    """Point captures AT their digest, not the other way round.
+
+    `part-of` reads "src is part of dst", so a capture belongs to its day's
+    digest. Earlier consolidation runs wrote it backwards (digest part-of capture),
+    which meant a capture never led to the summary that stands in for it — so
+    recall spread outward into every raw capture instead of stopping at the digest.
+    """
+    bad = con.execute(
+        "SELECT src, dst FROM edges WHERE rel='part-of' AND src LIKE 'note_digest_%'"
+    ).fetchall()
+    fixed = 0
+    for r in bad:
+        digest, capture = r["src"], r["dst"]
+        con.execute("DELETE FROM edges WHERE src=? AND dst=? AND rel='part-of'",
+                    (digest, capture))
+        con.execute("INSERT OR IGNORE INTO edges(src,dst,rel,props,created)"
+                    " VALUES(?,?,?,?,?)", (capture, digest, "part-of", "{}", now()))
+        fixed += 1
+    if fixed:
+        con.commit()
+    return fixed
+
+
+def cmd_maintain(args):
+    """Brain-side upkeep: consolidate, repair, and report what it saved.
+
+    NOT the same thing as clearing context — see `resume`/`park` for that. This
+    only tidies the STORE so reads stay small as it grows.
+
+    Safe to run on a schedule and safe to run twice. NON-DESTRUCTIVE (§2a) —
+    it consolidates and re-links, it never deletes. What it reduces is the SIZE OF
+    A READ: once a day's captures hang off one digest, recall surfaces the digest
+    instead of walking into every raw turn.
+    """
+    con = connect()
+    keep = int(args.keep_days if args.keep_days is not None else 2)
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=keep)).date().isoformat()
+
+    before_rows = con.execute(
+        "SELECT COUNT(*) n, COALESCE(SUM(LENGTH(COALESCE(body,''))),0) c FROM nodes"
+        " WHERE type='capture' AND substr(created,1,10)<=?"
+        " AND json_extract(props,'$.consolidated_into') IS NULL", (cutoff,)).fetchone()
+
+    repaired = _repair_digest_edges(con)
+
+    # consolidate every day at or before the cutoff, one digest per day
+    days = [r["d"] for r in con.execute(
+        "SELECT DISTINCT substr(created,1,10) d FROM nodes WHERE type='capture'"
+        " AND substr(created,1,10)<=? ORDER BY d", (cutoff,)).fetchall()]
+    digested = []
+    for day in days:
+        caps = [_node_dict(r) for r in con.execute(
+            "SELECT * FROM nodes WHERE type='capture' AND substr(created,1,10)=?"
+            " ORDER BY created", (day,)).fetchall()]
+        if not caps:
+            continue
+        asked = [c for c in caps if c["props"].get("role") == "user"]
+        did = f"note_digest_{day}"
+        lines = [f"- {re.sub(chr(92)+'s+', ' ', c['title']).strip()[:110]}" for c in asked]
+        body = (f"Digest of {len(caps)} captures on {day} ({len(asked)} prompts). "
+                f"Originals kept and linked; read one with get-node.\n\n"
+                + "\n".join(lines[:40]))
+        props = {"kind": "capture-digest", "day": day, "captures": len(caps),
+                 "prompts": len(asked), "consolidated_at": now()}
+        if con.execute("SELECT 1 FROM nodes WHERE id=?", (did,)).fetchone():
+            api_update_node(con, did, title=f"Digest — {day}", body=body,
+                            props_patch=props)
+        else:
+            api_create_node(con, "note", f"Digest — {day}", body, props,
+                            realm=DEFAULT_REALM, node_id=did)
+        newly = 0
+        for c in caps:
+            # correct direction: the capture is part of the digest
+            api_link(con, c["id"], did, "part-of")
+            if not c["props"].get("consolidated_into"):
+                newly += 1
+            cp = dict(c["props"]); cp["consolidated_into"] = did
+            con.execute("UPDATE nodes SET props=? WHERE id=?",
+                        (json.dumps(cp), c["id"]))
+        con.commit()
+        digested.append({"day": day, "digest": did, "captures": len(caps),
+                         "newly_consolidated": newly})
+
+    after = con.execute(
+        "SELECT COUNT(*) n, COALESCE(SUM(LENGTH(COALESCE(body,''))),0) c FROM nodes"
+        " WHERE type='capture' AND substr(created,1,10)<=?"
+        " AND json_extract(props,'$.consolidated_into') IS NULL", (cutoff,)).fetchone()
+    # The standing saving, not just this run's delta: everything a digest now
+    # stands in for, versus the size of the digests themselves.
+    behind = con.execute(
+        "SELECT COUNT(*) n, COALESCE(SUM(LENGTH(COALESCE(title,''))+LENGTH(COALESCE(body,''))),0) c"
+        " FROM nodes WHERE type='capture'"
+        " AND json_extract(props,'$.consolidated_into') IS NOT NULL").fetchone()
+    digest_chars = con.execute(
+        "SELECT COALESCE(SUM(LENGTH(COALESCE(body,''))),0) c FROM nodes"
+        " WHERE id LIKE 'note_digest_%'").fetchone()["c"]
+
+    _after_write(con, nodes=[d["digest"] for d in digested])
+    out({"ok": True, "destructive": False, "keep_days": keep, "cutoff": cutoff,
+         "reversed_edges_repaired": repaired,
+         "days_consolidated": len(digested), "digests": digested,
+         "newly_consolidated": before_rows["n"] - after["n"],
+         "still_loose": after["n"],
+         "captures_behind_a_digest": behind["n"],
+         "chars_they_hold": behind["c"],
+         "digest_chars_standing_in": digest_chars,
+         "read_reduction": (f"{100 * (1 - digest_chars / behind['c']):.0f}%"
+                            if behind["c"] else "n/a"),
+         "note": ("captures are kept and searchable; what shrinks is the read — "
+                  "recall stops at the digest instead of every raw turn")})
+
+
 def cmd_consolidate(args):
     """Sleep-style consolidation: episodic captures -> one semantic digest per
     day, linked back to the originals. NON-DESTRUCTIVE — every capture is kept;
@@ -1695,7 +2005,9 @@ def cmd_consolidate(args):
                             realm=DEFAULT_REALM, node_id=did)
         linked = 0
         for c in caps:
-            api_link(con, did, c["id"], "part-of")
+            # "src is part of dst" — the CAPTURE belongs to the digest, not the
+            # reverse. Backwards, recall never reached the digest from a capture.
+            api_link(con, c["id"], did, "part-of")
             cp = dict(c["props"]); cp["consolidated_into"] = did
             con.execute("UPDATE nodes SET props=? WHERE id=?",
                         (json.dumps(cp), c["id"]))
@@ -2160,9 +2472,49 @@ def build_parser():
     a.add_argument("--limit", type=int, default=8)
     a.add_argument("--exclude", help="node id to never suggest (the node being edited)")
 
-    a = sub.add_parser("search"); a.set_defaults(func=cmd_search)
+    a = sub.add_parser("search", description=(
+        "Full-text search. BUDGETED by default (bodies trimmed to share "
+        "--budget chars); --full restores whole bodies."))
+    a.set_defaults(func=cmd_search)
     a.add_argument("query", nargs="?", default="")
     a.add_argument("--type"); a.add_argument("--limit", type=int, default=15)
+    a.add_argument("--budget", type=int, default=READ_BUDGET,
+                   help=f"max chars of body text (default {READ_BUDGET})")
+    a.add_argument("--full", action="store_true", help="whole bodies, unbudgeted")
+
+    a = sub.add_parser("resume", description=(
+        "Rehydrate the working thread after clearing the context window: what was "
+        "in play, what is parked, what is still open — inside a char budget, no "
+        "model call. Run this right after /clear."))
+    a.set_defaults(func=cmd_resume)
+    a.add_argument("--budget", type=int, default=1800, help="max chars of brief")
+    a.add_argument("--days", type=int, default=2, help="how far back 'in play' reaches")
+    a.add_argument("--limit", type=int, default=8, help="max focus items")
+
+    a = sub.add_parser("park", description=(
+        "Move context OUT of the conversation into the brain and return a tiny "
+        "receipt, so the model can drop the content from its window."))
+    a.set_defaults(func=cmd_park)
+    a.add_argument("--body", help="content to park (default: read stdin)")
+    a.add_argument("--title"); a.add_argument("--id"); a.add_argument("--realm")
+    a.add_argument("--area", help="file it under a domain area")
+    a.add_argument("--source", help="where it came from (default: conversation)")
+    a.add_argument("--about", action="append",
+                   help="node id this context is about (repeatable)")
+
+    a = sub.add_parser("unpark", description="Read parked context back, whole or sliced.")
+    a.set_defaults(func=cmd_unpark)
+    a.add_argument("--id", required=True)
+    a.add_argument("--offset", type=int, help="start at this character")
+    a.add_argument("--chars", type=int, help="return at most this many chars")
+
+    a = sub.add_parser("maintain", description=(
+        "Brain-side upkeep: consolidate old captures into per-day digests, repair "
+        "reversed digest links, report what it saved. Non-destructive, idempotent, "
+        "safe to schedule. This tidies the STORE, not the context window."))
+    a.set_defaults(func=cmd_maintain)
+    a.add_argument("--keep-days", type=int, dest="keep_days", default=2,
+                   help="leave the last N days of captures loose (default 2)")
 
     a = sub.add_parser("list"); a.set_defaults(func=cmd_list)
     a.add_argument("--type"); a.add_argument("--status")

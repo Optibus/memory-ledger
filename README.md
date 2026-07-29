@@ -55,6 +55,18 @@ create it. Realm and area are orthogonal — realm is *which part of life*, area
 *which domain of meaning*. Add one with `add-area` the moment a second item of a
 kind shows up.
 
+**Clearing context is cheap; the brain makes it safe.** The expensive thing is the
+context window — every request pays for all of it — while the graph costs only what
+you read. So `park` moves a bulky blob out of the conversation and hands back a
+~200-char receipt, `/clear` drops the window, and `resume` gives the thread straight
+back: what was in play, what's parked, what's still open, inside a char budget and
+with no model call. The session brief already re-fires on `/clear`, so most of that
+is automatic. Read paths (`search`, `recall`, `match-rules`, `resume`) are budgeted
+for the same reason — answer from a lookup instead of keeping the answer resident.
+Separately, `maintain` is brain-side upkeep: it rolls old captures into per-day
+digests so reads stay small as the store grows (currently an 89% reduction in what a
+read traverses), and it never deletes.
+
 **The brain carries its own Claude layer (the genome).** The conventions are not a
 file the skills read top-to-bottom — they live in the graph as `rule` nodes, and a
 skill asks `match-rules "<what it is about to do>"` for just the ones that apply:

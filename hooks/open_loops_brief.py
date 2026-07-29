@@ -2,9 +2,14 @@
 """second-brain — open-loops SessionStart brief (+ daily consolidation).
 
 At the start of a session (when the brain is enabled), surface the open loops
-so the session opens knowing what's still hanging and can nudge the user to
-close them. Emits {"additionalContext": ...} on stdout (exit 0), or nothing
+AND the thread that was in play, so the session opens knowing what's hanging and
+where it left off. Emits {"additionalContext": ...} on stdout (exit 0), or nothing
 when the brain is disabled.
+
+This fires on `/clear` too, which is the point: clearing the context window is the
+cheapest thing you can do to a long conversation, and it is only safe because this
+hands the thread straight back. A few hundred chars here buys back the right to
+drop tens of thousands.
 
 It also triggers the **daily consolidation** — once per day, detached — rolling
 closed days' `capture` nodes into digest notes. This lives here rather than in a
@@ -86,12 +91,28 @@ for r in d.get("results", [])[:6]:
     w = f" (waiting on {w})" if w else ""
     lines.append(f"- {tag}{r.get('title', '')[:72]}{w}")
 
+# The thread that was in play — what makes a /clear recoverable. Best-effort:
+# a slow or failed call must never block the brief.
+focus_lines = []
+try:
+    rr = subprocess.run([sys.executable, graph, "resume", "--budget", "1400",
+                         "--limit", "3"],
+                        capture_output=True, text=True, timeout=8).stdout
+    for f in (json.loads(rr).get("focus") or [])[:3]:
+        focus_lines.append(f"- {f.get('title', '')[:70]}")
+except Exception:
+    pass
+
+focus_block = ("\nIn play when you left off:\n" + "\n".join(focus_lines)
+               if focus_lines else "")
+
 msg = (
     f"[second-brain] STATE — {n} open loops "
     f"({d.get('overdue', 0)} overdue, {d.get('stale', 0)} stale). They stay open "
     f"until closed; surface these and nudge the user to close the top ones ASAP "
     f"(open tasks, PRs to move, emails/messages to answer):\n"
     + "\n".join(lines)
-    + "\n(full list: scripts/graph.py open-loops · use the follow-up skill)"
+    + focus_block
+    + "\n(full list: open-loops · thread + parked: resume · park to offload context)"
 )
 print(json.dumps({"additionalContext": msg}))
