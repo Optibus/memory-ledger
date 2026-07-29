@@ -21,10 +21,19 @@ vocabulary, focus contract). Then:
 3. **Create nodes** with the right `--type` and a short, searchable `--title`.
    Put detail in `--body`. Put structured attributes in `--props` (slack, tz,
    url, jira_key, estimate_min, energy...). Set `--status`/`--due` on tasks.
-4. **Link them.** Add edges that capture the real relationship (`assigned-to`,
+4. **File it under its domain area** (CONVENTIONS §2e). Nothing durable floats
+   loose: pass `--area` on creation so it lands in its domain in one call —
+   `--area quote` for a quote, `--area health` for a symptom or energy note,
+   `--area process` for one of Gabriel's ways of working. Run `areas` if you are
+   unsure what exists; if the domain has no area yet and this is the second item
+   of its kind, `add-area` first. A bad area name errors instead of creating an
+   orphan, so it is safe to try.
+5. **Link them.** Add edges that capture the real relationship (`assigned-to`,
    `part-of`, `about`, `depends-on`, `relates-to`, `mentions`...). The graph's
-   value is the links — be generous but accurate.
-5. **Confirm in one line.** Tell the person what you saved and how it's linked,
+   value is the links — be generous but accurate. Cross-domain links are the
+   valuable ones: a quote linked to the decision it justifies, a health episode
+   linked to the day it cost.
+6. **Confirm in one line.** Tell the person what you saved and how it's linked,
    e.g. `Saved "Ship weekly report" (due Thu 9am), linked to project Weekly
    Reports and to you.` Do not dump the JSON.
 

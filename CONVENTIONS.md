@@ -106,12 +106,25 @@ Path resolution: `$SECOND_BRAIN_DB` (explicit file) → `$SECOND_BRAIN_HOME/grap
 → `~/.second_brain/graph.db`. Copying `graph.db` moves the whole brain; copying
 the home dir moves brain + learned skills. This works identically in Claude Code
 and the Claude app.
-Every command prints JSON to stdout. Commands:
+Every command prints JSON to stdout, and **wraps its result in an envelope** —
+`{"ok": true, ...}` on success, `{"ok": false, "error": "..."}` on failure. The
+payload key varies by command: a write returns the whole node under **`node`**
+(so a created id is `.node.id`, **not** `.id`), reads return **`results`** +
+`count`, `del-node` returns `deleted`. Bad flags are an argparse error on
+**stderr** with a non-zero exit — so parse stdout as JSON *and* let stderr
+through, or a typo'd flag looks like an empty result:
+
+```bash
+ID=$(python3 scripts/graph.py add-node --type task --title "..." | python3 -c \
+  'import sys,json; print(json.load(sys.stdin)["node"]["id"])')
+```
+
+Commands:
 
 | Command | Purpose |
 |---|---|
 | `init` | Create the DB (idempotent). |
-| `add-node --type T --title "..." [--body ...] [--props JSON] [--status S] [--due ISO] [--id ID]` | Create a node. Returns its `id`. |
+| `add-node --type T --title "..." [--body ...] [--props JSON] [--status S] [--due ISO] [--id ID] [--realm R] [--area A]` | Create a node. `--area` files it under a domain area in the same call (§2e) and **errors instead of creating an orphan** if the area does not exist. Returns the full node under `node` — read the new id from **`.node.id`**. There is **no `add-task` subcommand**: a task is `add-node --type task --status open` (the `add-task` *skill* wraps that and adds micro-steps; the web UI's is `POST /api/add-task`). |
 | `update-node --id ID [--title][--body][--props JSON][--status][--due]` | Update fields. `--props` MERGES into existing props. |
 | `get-node --id ID` | One node **plus all its edges** (neighbors named). |
 | `del-node --id ID` | Delete a node (its edges cascade). |
@@ -121,7 +134,9 @@ Every command prints JSON to stdout. Commands:
 | `suggest-links "text" [--limit N] [--exclude ID]` | **Link recognition** — which known nodes this text mentions, and the relation its wording implies (`blocked by X` → `blocked-by`). Pure regex + a node scan: no model, no tokens. Powers the web UI's live suggestions as you type. |
 | `recall "cue" [--limit N] [--depth 2] [--budget CHARS]` | **Associative recall — prefer this over `search`.** Seeds on full-text, spreads activation across edges, modulates by memory strength, returns a SLIM ranked payload inside a char budget. One call replaces `search` + `neighbors` and costs ~40% fewer chars. |
 | `consolidate [--day D] [--older-than N]` | Roll a day's `capture` nodes into one digest note. **Non-destructive** — every capture is kept and linked; the digest is what recall surfaces. |
-| `list [--type T] [--status S] [--due-before ISO] [--all] [--limit N]` | Filtered list. **Hides the done/cancelled archive by default** — pass `--all` or `--status done` to see it. |
+| `list [--type T] [--status S] [--area A] [--due-before ISO] [--all] [--limit N]` | Filtered list. **Hides the done/cancelled archive by default** — pass `--all` or `--status done` to see it. `--area` keeps only what is `part-of` that domain area (§2e). |
+| `areas` | Every domain area with its member count (§2e). Token-free. |
+| `add-area --title T [--id ID] [--domain KEY] [--body ...] [--realm R]` | Create a domain area. Idempotent on `--id`; default id is `hub_<slug of title>`. |
 | `due [--within-days N]` | Tasks/reminders due within N days (flags `overdue`). |
 | `neighbors --id ID [--rel REL] [--depth N]` | Walk the graph out to depth N. |
 | `complete --id ID [--note ...]` | Mark a task **done** — archives it (kept forever, hidden from active views), stamps `completed_at`. Never delete finished work; complete it. |
@@ -203,10 +218,44 @@ the resilience cache.
 - The visualizer (`viz/serve.py`) reads from neo4j, falling back to SQLite if down.
 
 **Sections (realms):** every node has a `realm` — the section it belongs to:
-`optibus` (work; the default) and `personal` (add others as needed). Set with
-`add-node --realm <section>` or `$SECOND_BRAIN_REALM`; `sections` lists the counts.
+`optibus` (work; the default), `shared`, and `personal` (add others as needed).
+Set with `add-node --realm <section>` or `$SECOND_BRAIN_REALM`; `sections` lists
+the counts.
 
-## 2e. Token-free reads (`brain_query.py`)
+## 2e. Areas — one hub per domain
+
+**Nothing durable floats loose.** A quote, a health note, a way of working: each
+belongs to a **domain area** so it can be *queried as a domain* rather than found
+by guessing full-text. An area is a node of type `area`, content points at it with
+`part-of`, and the id convention is `hub_<domain>`:
+
+```
+python3 scripts/graph.py areas                       # every domain + member count
+python3 scripts/graph.py list --area quote           # everything in one domain
+python3 scripts/graph.py add-node --type quote --area hub_quote --title "..."
+python3 scripts/graph.py add-area --title "Finance — money, contracts" --domain finance
+```
+
+`--area` accepts the full id (`hub_quote`) **or the bare domain** (`quote`). It
+resolves the area *before* creating the node, so a typo returns an error listing
+the known areas rather than leaving a node outside every domain.
+
+| Area | Domain | Realm | Holds |
+|---|---|---|---|
+| `hub_process` | process | optibus | Gabriel's ways of working — his `decision`s and discretionary methods |
+| `hub_quote` | quote | shared | Quotes he keeps, with `attributed_to` / `source_work` in props |
+| `hub_health` | health | personal | Symptoms, episodes, energy, appointments — anything affecting capacity |
+
+**Realm and area are orthogonal.** The realm is *which section of life* (work /
+personal / shared); the area is *which domain of meaning*. A health note is realm
+`personal`, area `health`. Add a new area the moment a second item of a domain
+shows up — two loose notes of a kind is the signal, not a full taxonomy up front.
+
+Areas are also where **cross-domain links earn their keep**: link a quote to the
+`decision` it justifies, or a health episode to the day it cost, so recall can
+explain *why*, not just list *what*.
+
+## 2f. Token-free reads (`brain_query.py`)
 
 Everyday "what's on my plate" reads don't need the model. `scripts/brain_query.py`
 answers the common date views in pure SQL — **no model call** (§0) — as a text table
@@ -243,7 +292,7 @@ dashboard flags 🔒 blocked / ⛓ blocks / 🔗 related without the model. `/ap
 returns a node's full body + named neighbors for the click-to-expand card. All
 token-free.
 
-## 2f. The web UI is a full write surface — the brain works without the model
+## 2g. The web UI is a full write surface — the brain works without the model
 
 **The model helps feed and manage the brain; it is never the only way in.** The
 dashboard is a complete CRUD client: everything below is plain SQL through the
@@ -286,7 +335,7 @@ expose the UI (`--host 0.0.0.0` for phone access), pass **`--no-write`**: every
 `POST` then returns 403 and the UI hides its editing controls (`/api/meta`
 reports `writable: false`).
 
-## 2g. Memory dynamics — how recall behaves like memory
+## 2h. Memory dynamics — how recall behaves like memory
 
 Three properties, all pure SQL/regex (recall stays model-free):
 
@@ -340,7 +389,8 @@ restores the old payload).
 **Node types:** `person`, `task`, `subtask`, `requirement`, `decision`,
 `note`, `project`, `reminder`, `writing-sample`, `association`, `meeting`,
 `jira-issue`, `resource`, `skill` (learned skill), `team`, `channel`,
-`process`, and the stateful trackables `pr`, `email`, `message`.
+`area` (domain hub), `quote`, `process`, and the stateful trackables `pr`,
+`email`, `message`.
 
 **State values** (`props.state`, or task `status`): open, doing, blocked,
 waiting, needs-reply · and closed ones: done, cancelled, closed, answered,

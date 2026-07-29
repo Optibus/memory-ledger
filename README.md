@@ -43,6 +43,14 @@ carries a **`realm` / section** (`optibus`, `personal`, …) so one graph holds
 work + personal life, filterable (`sections`, `add-node --realm`). The
 visualizer reads from neo4j too.
 
+**Areas — nothing durable floats loose.** Every keeper belongs to a **domain
+area** (`hub_quote`, `hub_health`, `hub_process`, …), so a domain is one edge walk
+away instead of a full-text guess: `areas` lists them with counts, `list --area
+health` returns just that domain, and `add-node --area quote` files it as you
+create it. Realm and area are orthogonal — realm is *which part of life*, area is
+*which domain of meaning*. Add one with `add-area` the moment a second item of a
+kind shows up.
+
 **The brain grows (neuroplasticity).** When a repeatable procedure shows up, it
 `learn`s a new skill — stored **as a node in the graph** (triggers + procedure in
 the DB, synced everywhere; not an isolated file). Next time a matching situation

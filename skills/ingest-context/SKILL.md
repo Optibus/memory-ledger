@@ -59,7 +59,8 @@ project, a ticket), **update/link it** instead of making a duplicate.
   "attendee"). Create missing people as `person` nodes.
 - **Decisions** → `add-node --type decision ...`, linked `relates-to` the
   meeting and `about` whom/what it concerns. If it's Gabriel's own way of
-  working, also link it `part-of hub_process` (see the Process category).
+  working, also file it under the process area (`--area process`, i.e.
+  `part-of hub_process` — see CONVENTIONS §2e for the domain areas).
 - **Action items** → `add-node --type task ... --status open` (+ `--due` if a
   date was given), linked `assigned-to` the owner and `relates-to` the meeting.
   Items owned by Gabriel land on his plate; consider `add-task` for micro-steps.

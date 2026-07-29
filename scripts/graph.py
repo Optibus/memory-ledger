@@ -39,8 +39,14 @@ DEFAULT_REALM = _env("REALM", "optibus")
 NODE_TYPES = [
     "person", "task", "subtask", "requirement", "decision", "note",
     "project", "reminder", "writing-sample", "association", "meeting",
-    "jira-issue", "resource", "skill",
+    "jira-issue", "resource", "skill", "area", "quote",
 ]
+
+# An AREA is a domain hub: quotes, health, process... Content links to it with
+# `part-of`, so a domain is one edge walk away instead of a full-text guess.
+# Area ids are `hub_<domain>` by convention (hub_quote, hub_health, hub_process).
+AREA_TYPE = "area"
+AREA_REL = "part-of"
 EDGE_RELS = [
     "relates-to", "blocks", "blocked-by", "part-of", "has-subtask",
     "assigned-to", "about", "depends-on", "causes", "caused-by",
@@ -374,9 +380,21 @@ def cmd_init(args):
 
 def cmd_add_node(args):
     con = connect()
-    out(api_create_node(con, args.type, args.title, args.body,
-                        _parse_props(args.props), args.status, args.due,
-                        getattr(args, "realm", None), args.id))
+    area = getattr(args, "area", None)
+    aid = None
+    if area:
+        # Resolve BEFORE creating, so a typo'd area never leaves an orphan node
+        # sitting outside every domain.
+        aid, err = _resolve_area(con, area)
+        if err:
+            out(err); return
+    res = api_create_node(con, args.type, args.title, args.body,
+                          _parse_props(args.props), args.status, args.due,
+                          getattr(args, "realm", None), args.id)
+    if aid and res.get("ok"):
+        api_link(con, res["node"]["id"], aid, AREA_REL)
+        res["area"] = aid
+    out(res)
 
 
 def cmd_update_node(args):
@@ -456,6 +474,14 @@ def cmd_search(args):
 def cmd_list(args):
     con = connect()
     where, params = [], []
+    area = getattr(args, "area", None)
+    if area:
+        aid, err = _resolve_area(con, area)
+        if err:
+            out(err); return
+        where.append(
+            "id IN (SELECT src FROM edges WHERE dst=? AND rel=?)")
+        params.extend([aid, AREA_REL])
     if args.type:
         where.append("type=?"); params.append(args.type)
     if args.status:
@@ -1569,6 +1595,48 @@ def cmd_sections(args):
          "sections": {r["realm"]: r["c"] for r in rows}})
 
 
+def _areas(con):
+    """Every area node with its member count, biggest first."""
+    return con.execute(
+        "SELECT n.id, n.title, n.realm, "
+        " (SELECT COUNT(*) FROM edges e WHERE e.dst=n.id AND e.rel=?) AS members "
+        "FROM nodes n WHERE n.type=? ORDER BY members DESC, n.id",
+        (AREA_REL, AREA_TYPE)).fetchall()
+
+
+def cmd_areas(args):
+    con = connect()
+    rows = _areas(con)
+    out({"ok": True, "count": len(rows), "rel": AREA_REL,
+         "areas": [{"id": r["id"], "title": r["title"],
+                    "realm": r["realm"], "members": r["members"]} for r in rows]})
+
+
+def cmd_add_area(args):
+    """Create a domain area (idempotent on --id)."""
+    con = connect()
+    aid = args.id or f"hub_{slugify(args.title)}"
+    row = con.execute("SELECT * FROM nodes WHERE id=?", (aid,)).fetchone()
+    if row:
+        out({"ok": True, "existed": True, "node": _node_dict(row)})
+        return
+    out(api_create_node(con, AREA_TYPE, args.title, args.body or "",
+                        {"domain": args.domain or slugify(args.title)},
+                        "", "", getattr(args, "realm", None), aid))
+
+
+def _resolve_area(con, area):
+    """An area id (or bare domain name) -> the area node id, or an error dict."""
+    for candidate in (area, f"hub_{slugify(area)}"):
+        row = con.execute("SELECT id FROM nodes WHERE id=? AND type=?",
+                          (candidate, AREA_TYPE)).fetchone()
+        if row:
+            return row["id"], None
+    known = ", ".join(r["id"] for r in _areas(con)) or "none yet"
+    return None, {"ok": False,
+                  "error": f"no area {area!r} (known: {known}) — create it with add-area"}
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="graph", description="second-brain graph engine")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -1582,10 +1650,19 @@ def build_parser():
     a.add_argument("--body"); a.add_argument("--props")
     a.add_argument("--status"); a.add_argument("--due"); a.add_argument("--id")
     a.add_argument("--realm", help="section: optibus | personal | ... (default $SECOND_BRAIN_REALM or optibus)")
+    a.add_argument("--area", help="file under a domain area (hub_quote | quote | hub_health ...) "
+                                 "— adds the part-of edge; errors if the area does not exist")
 
     a = sub.add_parser("flush").set_defaults(func=cmd_flush)
     sub.add_parser("neo4j-status").set_defaults(func=cmd_neo4j_status)
     sub.add_parser("sections").set_defaults(func=cmd_sections)
+    sub.add_parser("areas").set_defaults(func=cmd_areas)
+
+    a = sub.add_parser("add-area"); a.set_defaults(func=cmd_add_area)
+    a.add_argument("--title", required=True)
+    a.add_argument("--id", help="default hub_<slug of title>")
+    a.add_argument("--domain", help="short domain key (default: slug of title)")
+    a.add_argument("--body"); a.add_argument("--realm")
 
     a = sub.add_parser("update-node"); a.set_defaults(func=cmd_update_node)
     a.add_argument("--id", required=True)
@@ -1636,6 +1713,8 @@ def build_parser():
 
     a = sub.add_parser("list"); a.set_defaults(func=cmd_list)
     a.add_argument("--type"); a.add_argument("--status")
+    a.add_argument("--area", help="only what is part-of this domain area "
+                                 "(hub_quote | quote | hub_health ...)")
     a.add_argument("--due-before", dest="due_before")
     a.add_argument("--all", action="store_true",
                    help="include archived (done/cancelled) items")
