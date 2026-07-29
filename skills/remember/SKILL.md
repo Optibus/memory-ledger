@@ -7,8 +7,12 @@ description: Capture information into the second-brain memory graph — people, 
 
 Turn what the person just said into durable, linked memory.
 
-First, once per session, read `${CLAUDE_PLUGIN_ROOT}/CONVENTIONS.md` (graph API,
-vocabulary, focus contract). Then:
+Load only the conventions that apply — not the whole file:
+`python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" match-rules "store new information as linked nodes in the right area"`
+(no model call). If it returns nothing, run `ingest-conventions` once first.
+CONVENTIONS §2i explains the genome.
+
+Then:
 
 ## Steps
 

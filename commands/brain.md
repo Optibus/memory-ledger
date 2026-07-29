@@ -14,9 +14,12 @@ a busy brain. The person just said:
 
 ## Do this
 
-1. **Read `${CLAUDE_PLUGIN_ROOT}/CONVENTIONS.md`** once this session — it holds
-   the focus response contract, the graph API, the vocabulary, and the language
-   rule. Follow it exactly.
+1. **Load the rules that apply**, not the whole conventions file:
+   `python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" match-rules "<the request in a few words>"`.
+   It is a no-model-call lookup returning ~8% of the text, and the always-apply
+   rules (the response contract, capture, and the user's own hard rules) come back
+   every time. Follow them exactly. If it returns nothing, the base layer is not
+   ingested — run `ingest-conventions` once, then re-query. See CONVENTIONS §2i.
 2. **Detect the language** and reply in it.
 3. **Check what the brain already knows how to do.** Before improvising, run
    `python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" match-skills "<the request>"`.

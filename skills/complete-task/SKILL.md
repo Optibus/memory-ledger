@@ -7,7 +7,12 @@ description: Mark a task (or subtask/reminder) as done and move it to the done a
 
 Finishing work is a first-class action here: we **archive, never delete**.
 
-Read `${CLAUDE_PLUGIN_ROOT}/CONVENTIONS.md` once per session first.
+Load only the conventions that apply to what you are about to do — not the
+whole file:
+`python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" match-rules "<task in a few words>"`
+(no model call; ~8% of the full text). If it returns no rules the base layer is
+not loaded yet — run `ingest-conventions` once, then re-query. See CONVENTIONS
+§2i for the genome.
 
 ## Steps
 

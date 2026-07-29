@@ -10,8 +10,10 @@ two tabs: the **Map** (live graph) and the **Dashboard** (the `brain_query.py`
 date views, token-free). Both read the same store (neo4j when reachable, else the
 local SQLite mirror).
 
-Read `${CLAUDE_PLUGIN_ROOT}/CONVENTIONS.md` once per session first (for the DB
-location; the server reads the same brain).
+Load only the conventions that apply — not the whole file:
+`python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" match-rules "where the brain database lives"`
+(no model call). If it returns nothing, run `ingest-conventions` once first.
+CONVENTIONS §2i explains the genome.
 
 ## Launch
 

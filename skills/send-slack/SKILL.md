@@ -7,7 +7,12 @@ description: Send or schedule a Slack message — a DM to a person, a message to
 
 Reach someone on Slack using the connected Slack MCP tools.
 
-Read `${CLAUDE_PLUGIN_ROOT}/CONVENTIONS.md` once per session first.
+Load only the conventions that apply to what you are about to do — not the
+whole file:
+`python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" match-rules "<task in a few words>"`
+(no model call; ~8% of the full text). If it returns no rules the base layer is
+not loaded yet — run `ingest-conventions` once, then re-query. See CONVENTIONS
+§2i for the genome.
 
 ## Steps
 

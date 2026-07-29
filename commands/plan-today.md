@@ -8,7 +8,10 @@ Pick up the tasks you need to act on today and turn them into a realistic,
 time-blocked plan. Reads are **token-free** (`brain_query`); planning uses the
 calendar as the fixed spine.
 
-Read `${CLAUDE_PLUGIN_ROOT}/CONVENTIONS.md` once first (the focus contract + graph API).
+Load only the conventions that apply — not the whole file:
+`python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" match-rules "plan the day, surface open loops and due tasks"`
+(no model call). If it returns nothing, run `ingest-conventions` once first.
+CONVENTIONS §2i explains the genome.
 
 ## Steps
 

@@ -8,8 +8,10 @@ description: Ingest a piece of context into the memory graph — a Google Meet t
 Turn a raw blob of context (a call, a thread, an email, or pasted text) into
 connected memory the rest of second-brain can use.
 
-Read `${CLAUDE_PLUGIN_ROOT}/CONVENTIONS.md` once per session first (graph API,
-vocabulary, response contract).
+Load only the conventions that apply — not the whole file:
+`python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" match-rules "ingest a meeting transcript, extract decisions and action items"`
+(no model call). If it returns nothing, run `ingest-conventions` once first.
+CONVENTIONS §2i explains the genome.
 
 ## 1. Identify the source and fetch the content
 

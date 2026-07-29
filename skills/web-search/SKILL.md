@@ -7,7 +7,12 @@ description: Search the web / Google for something and bring back a clear answer
 
 Answer a question from the live web, then optionally keep what's useful.
 
-Read `${CLAUDE_PLUGIN_ROOT}/CONVENTIONS.md` once per session first.
+Load only the conventions that apply to what you are about to do — not the
+whole file:
+`python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" match-rules "<task in a few words>"`
+(no model call; ~8% of the full text). If it returns no rules the base layer is
+not loaded yet — run `ingest-conventions` once, then re-query. See CONVENTIONS
+§2i for the genome.
 
 ## Steps
 

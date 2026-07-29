@@ -51,6 +51,18 @@ create it. Realm and area are orthogonal — realm is *which part of life*, area
 *which domain of meaning*. Add one with `add-area` the moment a second item of a
 kind shows up.
 
+**The brain carries its own Claude layer (the genome).** The conventions are not a
+file the skills read top-to-bottom — they live in the graph as `rule` nodes, and a
+skill asks `match-rules "<what it is about to do>"` for just the ones that apply:
+**~8% of the full document, no model call**. The plugin ships the base layer;
+`add-rule` lets the user redefine it, and a `user` rule outranks the shipped default
+it overrides. Alongside them, `hub_genome` holds `spec` nodes describing the storage,
+the hooks, the engine's command surface and the DB schema — the API surface and
+schema are *introspected*, so they cannot drift from the code. `genome --out DIR`
+writes the whole kit, so given only `graph.db` any AI can rebuild the interaction
+layer and reconnect to the storage. The plugin becomes replaceable; the brain does
+not.
+
 **The brain grows (neuroplasticity).** When a repeatable procedure shows up, it
 `learn`s a new skill — stored **as a node in the graph** (triggers + procedure in
 the DB, synced everywhere; not an isolated file). Next time a matching situation

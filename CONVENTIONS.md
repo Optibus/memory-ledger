@@ -137,6 +137,10 @@ Commands:
 | `list [--type T] [--status S] [--area A] [--due-before ISO] [--all] [--limit N]` | Filtered list. **Hides the done/cancelled archive by default** — pass `--all` or `--status done` to see it. `--area` keeps only what is `part-of` that domain area (§2e). |
 | `areas` | Every domain area with its member count (§2e). Token-free. |
 | `add-area --title T [--id ID] [--domain KEY] [--body ...] [--realm R]` | Create a domain area. Idempotent on `--id`; default id is `hub_<slug of title>`. |
+| `match-rules "situation" [--limit N] [--budget CHARS] [--full]` | **Which conventions apply to THIS situation** (§2i) — the token-light replacement for reading this whole file (~8% of it). No model call. Always-apply rules are appended, not counted against `--limit`. |
+| `ingest-conventions [--file F] [--realm R]` | Load this file into the brain as `rule` nodes, one per section (§2i). Idempotent and **never overwrites a user-authored or user-edited rule**. |
+| `add-rule --title T [--body ...] [--scenario CUES] [--section S] [--source user\|learned\|plugin] [--overrides ID] [--non-negotiable] [--id ID] [--realm R]` | Author or override a rule — the mutable half of the genome (§2i). `--overrides` marks the shipped rule `superseded`. |
+| `genome [--refresh] [--out DIR]` | The brain's own rebuild blueprint (§2i). `--refresh` re-derives the API surface + DB schema from the code; `--out` writes the full kit for an AI with no plugin. |
 | `due [--within-days N]` | Tasks/reminders due within N days (flags `overdue`). |
 | `neighbors --id ID [--rel REL] [--depth N]` | Walk the graph out to depth N. |
 | `complete --id ID [--note ...]` | Mark a task **done** — archives it (kept forever, hidden from active views), stamps `completed_at`. Never delete finished work; complete it. |
@@ -384,13 +388,59 @@ per routed request**. `match-skills` returns cue-sized rows now; read the full
 procedure with `get-node --id` for the one skill you actually pick (`--full`
 restores the old payload).
 
+## 2i. The genome — the brain carries its own Claude layer
+
+**This document is the base layer, not the source of truth.** The plugin ships it;
+the brain stores it, the user mutates it, and every read goes through the graph. So
+a brain is self-describing: given only `graph.db`, any AI can rebuild the
+interaction layer and reconnect to the storage.
+
+Two areas hold it (§2e):
+
+| Area | Node type | Holds |
+|---|---|---|
+| `hub_convention` | `rule` | the operating rules — this file, one node per section, plus the user's own |
+| `hub_genome` | `spec` | the rebuild blueprint: storage, hooks, API surface, DB schema, sync, restore path |
+
+**Read rules by scenario, never the whole file.** This is the point:
+
+```
+python3 scripts/graph.py match-rules "<what you are about to do>"
+```
+
+No model call. It returns the sections that match the cue, plus the always-apply
+rules, trimmed to a `--budget` (default 2,600 chars). Measured on the real graph:
+**~2.4k chars against 28.5k for the full document — about 8%**, and the rule you
+actually need comes back first. `--full` returns whole bodies; `get-node --id` reads
+one rule completely.
+
+**Precedence — the user redefines the brain.** `user` (100) > `learned` (50) >
+`plugin` (0). Precedence is a *bounded booster on relevance*, never a re-sort, so a
+user rule edges past an equally-relevant default but a barely-relevant one cannot
+outrank a real match. `add-rule --overrides <plugin rule id>` marks the shipped rule
+`superseded` — kept as history (§2a), excluded from matching.
+
+**`ingest-conventions` is non-destructive.** Re-run it any time to refresh the base
+layer: it updates `source=plugin` rules and **keeps every user-authored or
+user-edited one**. Restoring the plugin can therefore never undo the user's brain.
+Only sections listed in `ALWAYS_APPLY_SECTIONS` (§0, §1) are forced into every
+answer — keep that set tiny, since each is a fixed cost on every lookup. Note the
+doc labels §4 non-negotiable too, but it binds only when you change behaviour, so it
+is matched, not forced.
+
+**`genome --refresh` re-derives what can be derived.** `spec_api_surface` is
+introspected from the engine's own argparse and `spec_db_schema` from `sqlite_master`,
+so neither can drift from the code the way a hand-written list would. `genome --out
+DIR` writes the whole kit — specs, rules, and a manifest — for an AI with no plugin.
+Start at `spec_rebuild`.
+
 ## 3. Vocabulary
 
 **Node types:** `person`, `task`, `subtask`, `requirement`, `decision`,
 `note`, `project`, `reminder`, `writing-sample`, `association`, `meeting`,
 `jira-issue`, `resource`, `skill` (learned skill), `team`, `channel`,
-`area` (domain hub), `quote`, `process`, and the stateful trackables `pr`,
-`email`, `message`.
+`area` (domain hub), `quote`, `rule` (a convention, §2i), `spec` (a genome
+blueprint, §2i), `process`, and the stateful trackables `pr`, `email`, `message`.
 
 **State values** (`props.state`, or task `status`): open, doing, blocked,
 waiting, needs-reply · and closed ones: done, cancelled, closed, answered,

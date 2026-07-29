@@ -47,6 +47,22 @@ NODE_TYPES = [
 # Area ids are `hub_<domain>` by convention (hub_quote, hub_health, hub_process).
 AREA_TYPE = "area"
 AREA_REL = "part-of"
+
+# --- The GENOME: the brain's copy of how its own Claude layer is built ---------
+# The plugin ships a base layer; the DB is where it is kept, mutated and re-read.
+# `rule` nodes hold the conventions (scenario-matched, so a request loads only the
+# 1-3 that apply instead of the whole CONVENTIONS.md); `spec` nodes hold the
+# rebuild blueprint (hooks, storage, API surface, restore steps) so ANY AI can
+# reconstitute the interaction layer from the graph alone if the plugin vanishes.
+RULE_TYPE = "rule"
+SPEC_TYPE = "spec"
+AREA_CONVENTION = "hub_convention"
+AREA_GENOME = "hub_genome"
+# A user-authored rule outranks the plugin's shipped default of the same key.
+RULE_PRECEDENCE = {"user": 100, "learned": 50, "plugin": 0}
+# Sections that bind on EVERY request, so match-rules appends them regardless of
+# the cue. Keep this set tiny: each one is a fixed cost paid on every lookup.
+ALWAYS_APPLY_SECTIONS = {"0", "1"}
 EDGE_RELS = [
     "relates-to", "blocks", "blocked-by", "part-of", "has-subtask",
     "assigned-to", "about", "depends-on", "causes", "caused-by",
@@ -859,6 +875,213 @@ def cmd_ingest_skills(args):
     out({"ok": True, "count": len(results), "ingested": results, "sync": sync})
 
 
+def _plugin_root() -> Path:
+    """The plugin checkout that ships the base layer (engine lives in ./scripts)."""
+    return Path(__file__).resolve().parent.parent
+
+
+def _conventions_path() -> Path:
+    return _plugin_root() / "CONVENTIONS.md"
+
+
+_SECTION_RE = re.compile(r"^##\s+(?P<num>[0-9]+[a-z]?)\.\s+(?P<title>.+?)\s*$", re.M)
+
+
+def _parse_conventions_sections(text: str) -> list:
+    """Split CONVENTIONS.md into its `## N. Title` sections.
+
+    Section granularity is deliberate. The doc is already organised by concern, so
+    one node per section is lossless and honest, and it is the unit that pays off at
+    read time: a request loads the 1-3 sections that apply instead of 400+ lines.
+    Finer rules are then added by hand with `add-rule` — that is the mutable part.
+    """
+    out_sections = []
+    matches = list(_SECTION_RE.finditer(text))
+    for i, m in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        body = text[m.end():end].strip()
+        # Trailing horizontal rules are separators, not content.
+        body = re.sub(r"\n-{3,}\s*$", "", body).strip()
+        if not body:
+            continue
+        out_sections.append({"section": m.group("num"),
+                             "title": m.group("title").strip(),
+                             "body": body})
+    return out_sections
+
+
+def _scenario_terms(title: str, body: str) -> str:
+    """Cue words for scenario matching: the heading, plus the bolded lead-ins the
+    doc uses to name each rule. Cheap, and refinable by the user afterwards."""
+    bolds = re.findall(r"\*\*(.+?)\*\*", body)
+    cues = [title] + [b.strip(" .:—-") for b in bolds[:14]]
+    seen, keep = set(), []
+    for c in cues:
+        c = re.sub(r"[`*]", "", c).strip()
+        if 2 < len(c) < 90 and c.lower() not in seen:
+            seen.add(c.lower()); keep.append(c)
+    return " · ".join(keep)
+
+
+def cmd_ingest_conventions(args):
+    """Load CONVENTIONS.md into the brain as `rule` nodes, one per section.
+
+    Idempotent and NON-DESTRUCTIVE: a rule the user has authored or edited is never
+    overwritten by the shipped text — it is reported as `kept`. That is what lets
+    the plugin ship a base layer while the user redefines the brain on top of it.
+    """
+    con = connect()
+    path = Path(args.file).expanduser() if args.file else _conventions_path()
+    if not path.exists():
+        out({"ok": False, "error": f"no conventions file at {path}"}); return
+    realm = getattr(args, "realm", None) or "shared"
+    aid, err = _resolve_area(con, AREA_CONVENTION)
+    if err:
+        out(err); return
+    sections = _parse_conventions_sections(path.read_text(encoding="utf-8", errors="replace"))
+    ts = now()
+    results, touched = [], []
+    for sec in sections:
+        nid = f"rule_s{sec['section']}_{slugify(sec['title'])[:48]}"
+        existing = con.execute("SELECT * FROM nodes WHERE id=?", (nid,)).fetchone()
+        scenario = _scenario_terms(sec["title"], sec["body"])
+        # Only the UNIVERSALLY applicable sections are forced into every answer.
+        # The doc labels three sections "(non-negotiable)", but §4 (keep docs in
+        # sync) is conditional — it binds when you change behaviour, not on every
+        # request — so title-matching alone over-forces. Curate explicitly instead.
+        forced = sec["section"] in ALWAYS_APPLY_SECTIONS
+        if existing:
+            cur = _node_dict(existing)
+            src = cur["props"].get("source", "plugin")
+            if src != "plugin" or cur["props"].get("user_edited"):
+                results.append({"id": nid, "action": "kept", "source": src})
+                continue
+            props = {**cur["props"], "section": sec["section"], "scenario": scenario,
+                     "source": "plugin", "precedence": RULE_PRECEDENCE["plugin"],
+                     "ingested_at": ts, "source_path": str(path)}
+            if forced:
+                props["non_negotiable"] = True
+            con.execute("UPDATE nodes SET title=?, body=?, props=?, updated=? WHERE id=?",
+                        (sec["title"], sec["body"], json.dumps(props), ts, nid))
+            results.append({"id": nid, "action": "updated", "source": "plugin"})
+        else:
+            props = {"section": sec["section"], "scenario": scenario,
+                     "source": "plugin", "precedence": RULE_PRECEDENCE["plugin"],
+                     "ingested_at": ts, "source_path": str(path)}
+            if forced:
+                props["non_negotiable"] = True
+            con.execute(
+                "INSERT INTO nodes(id,type,title,body,props,status,due,realm,created,updated)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (nid, RULE_TYPE, sec["title"], sec["body"], json.dumps(props),
+                 "active", "", realm, ts, ts))
+            results.append({"id": nid, "action": "created", "source": "plugin"})
+        touched.append(nid)
+        con.execute("INSERT OR IGNORE INTO edges(src,dst,rel,props,created)"
+                    " VALUES(?,?,?,?,?)", (nid, aid, AREA_REL, "{}", ts))
+    con.commit()
+    sync = _after_write(con, nodes=touched) if touched else None
+    out({"ok": True, "count": len(results), "file": str(path),
+         "area": aid, "rules": results, "sync": sync})
+
+
+def cmd_add_rule(args):
+    """Author or override a convention rule. This is the neuroplastic half: a
+    user rule outranks the plugin default it names via --overrides."""
+    con = connect()
+    aid, err = _resolve_area(con, AREA_CONVENTION)
+    if err:
+        out(err); return
+    source = args.source or "user"
+    props = {"section": args.section or "user",
+             "scenario": args.scenario or args.title,
+             "source": source,
+             "precedence": RULE_PRECEDENCE.get(source, RULE_PRECEDENCE["user"]),
+             "authored_at": now()}
+    if args.non_negotiable:
+        props["non_negotiable"] = True
+    if args.overrides:
+        props["overrides"] = args.overrides
+    nid = args.id or f"rule_{source}_{slugify(args.title)[:48]}"
+    res = api_create_node(con, RULE_TYPE, args.title, args.body or "", props,
+                          "active", "", getattr(args, "realm", None) or "shared", nid)
+    if not res.get("ok"):
+        out(res); return
+    api_link(con, nid, aid, AREA_REL)
+    if args.overrides:
+        # Retire the shipped rule rather than deleting it — history stays, and
+        # match-rules stops surfacing both sides of a contradiction.
+        api_update_node(con, args.overrides, status="superseded",
+                        props_patch={"superseded_by": nid})
+        api_link(con, nid, args.overrides, "follows-up")
+    res["area"] = aid
+    out(res)
+
+
+def cmd_match_rules(args):
+    """Which conventions apply to THIS situation — the token-light replacement for
+    reading all of CONVENTIONS.md.
+
+    Pure FTS + SQL, no model call. Non-negotiable rules are always included
+    (they apply whether or not the cue mentions them), then relevance order, then
+    the payload is trimmed to a character budget so this can run on every request.
+    """
+    con = connect()
+    q = (args.query or "").strip()
+    hits = []
+    if q:
+        words = [t for t in re.findall(r"\w+", q.lower()) if len(t) > 2]
+        terms = " OR ".join(f'"{t}"*' for t in words)
+        if terms:
+            hits = con.execute(
+                "SELECT n.* FROM nodes_fts f JOIN nodes n ON n.rowid=f.rowid"
+                " WHERE nodes_fts MATCH ? AND n.type=? AND n.status!='superseded'"
+                " ORDER BY rank", (terms, RULE_TYPE)).fetchall()
+    matched = [_node_dict(r) for r in hits]  # already in FTS relevance order
+    # Precedence is a BOUNDED BOOSTER on relevance, never a re-sort: a user rule
+    # edges ahead of an equally-relevant plugin default, but a barely-relevant user
+    # rule must not outrank a rule that actually matches. (Same shape as
+    # match-skills' reinforcement booster.)
+    for i, r in enumerate(matched):
+        prec = int(r["props"].get("precedence", 0) or 0)
+        r["_score"] = i - (1.5 if prec >= RULE_PRECEDENCE["user"] else
+                           0.75 if prec >= RULE_PRECEDENCE["learned"] else 0)
+    matched.sort(key=lambda r: r["_score"])
+    for r in matched:
+        r.pop("_score", None)
+    matched = matched[: args.limit]
+    # Universally-applicable rules are APPENDED, never counted against the limit —
+    # otherwise a handful of them fills every slot and the rule you actually asked
+    # for never appears (which is exactly what happened before this).
+    seen = {r["id"] for r in matched}
+    forced = [_node_dict(r) for r in con.execute(
+        "SELECT * FROM nodes WHERE type=? AND status!='superseded'"
+        " AND json_extract(props,'$.non_negotiable')=1"
+        " ORDER BY json_extract(props,'$.section')", (RULE_TYPE,)).fetchall()
+        if r["id"] not in seen]
+    results = matched + forced
+    if getattr(args, "full", False):
+        out({"ok": True, "count": len(results), "results": results}); return
+    budget = int(args.budget or 2600)
+    slim, used = [], 0
+    for r in results:
+        p = r["props"]
+        room = max(240, (budget - used) // max(1, len(results) - len(slim)))
+        entry = {"id": r["id"], "section": p.get("section", ""),
+                 "title": r["title"], "source": p.get("source", ""),
+                 "rule": r["body"][:room]}
+        if p.get("non_negotiable"):
+            entry["non_negotiable"] = True
+        if len(r["body"]) > room:
+            entry["truncated"] = True
+        used += len(entry["rule"])
+        slim.append(entry)
+        if used >= budget:
+            break
+    out({"ok": True, "count": len(slim), "budget": budget, "chars": used,
+         "hint": "read a full rule with get-node --id", "results": slim})
+
+
 def cmd_use_skill(args):
     """Reinforce a skill after it fires — strengthen the pathway (usage_count up,
     confidence nudged toward 1, last_used stamped)."""
@@ -1637,6 +1860,195 @@ def _resolve_area(con, area):
                   "error": f"no area {area!r} (known: {known}) — create it with add-area"}
 
 
+def _api_surface() -> list:
+    """Introspect this engine's own CLI. Derived, never hand-copied, so the genome
+    cannot drift from the code the way a hand-written command list would."""
+    parser = build_parser()
+    surface = []
+    for action in parser._actions:
+        if not isinstance(action, argparse._SubParsersAction):
+            continue
+        for name, sp in action.choices.items():
+            flags = []
+            for a in sp._actions:
+                if not a.option_strings:
+                    flags.append(f"<{a.dest}>")
+                    continue
+                if a.dest == "help":
+                    continue
+                flags.append(a.option_strings[0] + ("" if a.nargs == 0 else " V"))
+            surface.append({"command": name, "flags": flags,
+                            "help": (sp.description or "").strip()})
+    return sorted(surface, key=lambda d: d["command"])
+
+
+def _db_schema(con) -> list:
+    rows = con.execute(
+        "SELECT name, sql FROM sqlite_master WHERE sql IS NOT NULL"
+        " AND name NOT LIKE 'sqlite_%' ORDER BY type DESC, name").fetchall()
+    return [{"name": r["name"], "sql": " ".join((r["sql"] or "").split())} for r in rows]
+
+
+_GENOME_SPECS = {
+    "spec_rebuild": ("How to rebuild the Claude layer from this database alone", """
+If the plugin is gone and only `graph.db` survives, this is the restore path. Any
+AI with shell access and this file can reconstitute the interaction layer.
+
+1. **Find the brain.** `$SECOND_BRAIN_DB` -> `$SECOND_BRAIN_HOME/graph.db` ->
+   `~/.second_brain/graph.db`. The file IS the brain: schema, content, conventions,
+   skills and this blueprint are all inside it.
+2. **Read the API surface.** `spec_api_surface` lists every engine command and flag,
+   introspected from the code at snapshot time. If `scripts/graph.py` is also gone,
+   `spec_db_schema` has the full DDL — the tables are plain SQLite (`nodes`, `edges`,
+   `nodes_fts`, `outbox`) and can be driven with SQL directly.
+3. **Load the operating rules ON DEMAND, not all at once.** `match-rules "<what you
+   are about to do>"` returns only the sections that apply, inside a char budget.
+   Do NOT read the whole conventions text — that is the cost this design exists to
+   remove. `list --area convention` enumerates them if you need the full set.
+4. **Load the skills.** They are `skill` nodes, not files: `match-skills "<situation>"`
+   then `get-node --id` for the procedure. `ingest-skills` re-imports markdown skills
+   if a plugin checkout reappears.
+5. **Re-create the always-on capture.** `spec_hooks` describes the three hooks, what
+   fires them and what each stores. They are pure Python/SQL and can be rewritten
+   from that description against the schema in `spec_db_schema`.
+6. **Reconnect the master store.** `spec_sync` covers the neo4j mirror, the outbox
+   queue and reconciliation. Optional — the brain is fully functional on SQLite.
+7. **Re-seed the base layer only if the conventions are missing.** With a plugin
+   checkout present, `ingest-conventions` reloads the shipped text — it KEEPS every
+   user-authored or user-edited rule, so restoring never undoes the user's own brain.
+
+Precedence when rebuilding: a `user` rule outranks a `learned` one outranks the
+`plugin` default. A rule with `status=superseded` is history — do not apply it.
+"""),
+    "spec_hooks": ("How the always-on capture hooks work", """
+Three hooks make capture automatic, with no model call. All are pure Python + SQL.
+
+| Hook | Script | Fires | Stores | Injects into context |
+|---|---|---|---|---|
+| `UserPromptSubmit` | `hooks/capture_prompt.py` | every prompt | a `capture` node; auto-creates a `task` for an explicit to-do | ~197 chars |
+| `Stop` | `hooks/capture_answer.py` | after each answer | a `capture` node summarising the answer | nothing |
+| `SessionStart` | open-loops brief | session start | nothing | ~850 chars, capped at 6 loops so it cannot grow with the graph |
+
+Consequences a rebuild must preserve:
+- The turn is ALREADY captured. Never spend tokens re-storing a prompt or answer;
+  add only the semantic nodes the regex could not infer (a `decision`, a `person`,
+  a `note`).
+- "Token-free" means no model call for deciding or storing. It is not literally
+  zero: the two injected strings above are real context. Say "no model call" when
+  that is what is meant.
+- `SessionStart` also runs the once-a-day consolidation, guarded by a
+  `~/.second_brain/.last_consolidate` stamp. Opt out with `$SECOND_BRAIN_NO_CONSOLIDATE`.
+"""),
+    "spec_storage": ("Where the brain lives and how it is addressed", """
+The brain is GLOBAL and lives outside any repo, so every project on the machine
+shares one brain. It is never committed.
+
+```
+~/.second_brain/
+  graph.db          the whole brain in one portable SQLite file (content + skills + genome)
+  learned_skills/   optional local SKILL.md exports; never the source of truth
+  exports/          export-memory output
+  neo4j.json        optional master-store config (secret)
+  .last_consolidate stamp for the daily consolidation
+```
+
+Path resolution: `$SECOND_BRAIN_DB` (explicit file) -> `$SECOND_BRAIN_HOME/graph.db`
+-> `~/.second_brain/graph.db`. Copying `graph.db` moves the brain; copying the home
+directory moves brain + learned skills. Identical behaviour in Claude Code and the
+Claude app.
+
+Two orthogonal groupings: `realm` is which section of life (`optibus`, `personal`,
+`shared`); an `area` (`hub_*`, linked with `part-of`) is which domain of meaning.
+"""),
+    "spec_sync": ("Master store, mirror and reconciliation", """
+The unified source of truth is a neo4j graph (config `~/.second_brain/neo4j.json`);
+local SQLite is a durable mirror. Every write goes to both. If neo4j is down the op
+is queued in the `outbox` table and pushed when it returns.
+
+- `neo4j-status` — configured / reachable / pending op count.
+- `flush` — drain the outbox.
+- `scripts/brain_sync.py` — full bulk reconcile.
+- `$SECOND_BRAIN_NO_AUTOSYNC=1` — queue without per-op push (bulk loads), then flush.
+
+Node `type` is a PROPERTY in neo4j, not a label, so changing a node's type needs no
+label surgery — re-emitting the node through the API is enough.
+"""),
+}
+
+
+def cmd_genome(args):
+    """Emit (and optionally refresh) the brain's own build blueprint.
+
+    `--refresh` regenerates the derived specs — the API surface and DB schema come
+    from introspection, so the genome tracks the code instead of drifting from it.
+    """
+    con = connect()
+    aid, err = _resolve_area(con, AREA_GENOME)
+    if err:
+        out(err); return
+    ts = now()
+    if args.refresh:
+        derived = {
+            "spec_api_surface": ("Engine command surface (introspected)",
+                                 json.dumps(_api_surface(), indent=1)),
+            "spec_db_schema": ("Database schema (DDL)",
+                               json.dumps(_db_schema(con), indent=1)),
+        }
+        touched = []
+        for nid, (title, body) in {**_GENOME_SPECS, **derived}.items():
+            props = {"source": "plugin", "refreshed_at": ts,
+                     "derived": nid in derived}
+            row = con.execute("SELECT * FROM nodes WHERE id=?", (nid,)).fetchone()
+            if row:
+                cur = _node_dict(row)
+                if cur["props"].get("user_edited") and nid not in derived:
+                    continue
+                con.execute("UPDATE nodes SET title=?, body=?, props=?, updated=? WHERE id=?",
+                            (title, body.strip(), json.dumps({**cur["props"], **props}), ts, nid))
+            else:
+                con.execute(
+                    "INSERT INTO nodes(id,type,title,body,props,status,due,realm,created,updated)"
+                    " VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (nid, SPEC_TYPE, title, body.strip(), json.dumps(props),
+                     "active", "", "shared", ts, ts))
+            con.execute("INSERT OR IGNORE INTO edges(src,dst,rel,props,created)"
+                        " VALUES(?,?,?,?,?)", (nid, aid, AREA_REL, "{}", ts))
+            touched.append(nid)
+        con.commit()
+        _after_write(con, nodes=touched)
+
+    specs = con.execute(
+        "SELECT * FROM nodes WHERE type=? AND id IN"
+        " (SELECT src FROM edges WHERE dst=? AND rel=?) ORDER BY id", (SPEC_TYPE, aid, AREA_REL)
+    ).fetchall()
+    rules = con.execute(
+        "SELECT id,title,status,props FROM nodes WHERE type=? ORDER BY id", (RULE_TYPE,)).fetchall()
+    skills = con.execute("SELECT COUNT(*) c FROM nodes WHERE type='skill'").fetchone()["c"]
+    payload = {
+        "ok": True,
+        "generated": ts,
+        "db": str(db_path()),
+        "specs": [{"id": r["id"], "title": r["title"]} for r in specs],
+        "rules": len(rules),
+        "skills": skills,
+        "restore": "read spec_rebuild first, then match-rules '<task>' — never the whole conventions",
+    }
+    if args.out:
+        d = Path(args.out).expanduser(); d.mkdir(parents=True, exist_ok=True)
+        for r in specs:
+            (d / f"{r['id']}.md").write_text(
+                f"# {r['title']}\n\n{r['body']}\n", encoding="utf-8")
+        rule_rows = con.execute(
+            "SELECT id,title,body,status,props FROM nodes WHERE type=? ORDER BY id",
+            (RULE_TYPE,)).fetchall()
+        (d / "rules.md").write_text("\n\n".join(
+            f"## {r['title']}\n\n_id: `{r['id']}` · status: {r['status'] or 'active'}_\n\n{r['body']}"
+            for r in rule_rows), encoding="utf-8")
+        (d / "genome.json").write_text(json.dumps(payload, indent=1), encoding="utf-8")
+        payload["written_to"] = str(d)
+    out(payload)
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="graph", description="second-brain graph engine")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -1663,6 +2075,42 @@ def build_parser():
     a.add_argument("--id", help="default hub_<slug of title>")
     a.add_argument("--domain", help="short domain key (default: slug of title)")
     a.add_argument("--body"); a.add_argument("--realm")
+
+    a = sub.add_parser("ingest-conventions", description=(
+        "Load CONVENTIONS.md into the brain as rule nodes, one per section. "
+        "Idempotent; never overwrites a user-authored or user-edited rule."))
+    a.set_defaults(func=cmd_ingest_conventions)
+    a.add_argument("--file", help="default: the plugin's CONVENTIONS.md")
+    a.add_argument("--realm", help="default shared")
+
+    a = sub.add_parser("add-rule", description=(
+        "Author or override a convention rule (the mutable half of the genome)."))
+    a.set_defaults(func=cmd_add_rule)
+    a.add_argument("--title", required=True)
+    a.add_argument("--body"); a.add_argument("--id")
+    a.add_argument("--scenario", help="cue words for match-rules (default: the title)")
+    a.add_argument("--section", help="provenance label, e.g. 2e or 'user'")
+    a.add_argument("--source", choices=["user", "learned", "plugin"], default="user")
+    a.add_argument("--overrides", help="rule id this replaces (it is marked superseded)")
+    a.add_argument("--non-negotiable", dest="non_negotiable", action="store_true",
+                   help="always returned by match-rules, cue or no cue")
+    a.add_argument("--realm")
+
+    a = sub.add_parser("match-rules", description=(
+        "Which conventions apply to THIS situation — the token-light replacement "
+        "for reading all of CONVENTIONS.md. No model call."))
+    a.set_defaults(func=cmd_match_rules)
+    a.add_argument("query")
+    a.add_argument("--limit", type=int, default=6)
+    a.add_argument("--budget", type=int, default=2600, help="max chars of rule text")
+    a.add_argument("--full", action="store_true", help="whole rule bodies, unbudgeted")
+
+    a = sub.add_parser("genome", description=(
+        "The brain's own build blueprint — how to rebuild the Claude layer from the "
+        "DB alone. --refresh re-derives the API surface and schema from the code."))
+    a.set_defaults(func=cmd_genome)
+    a.add_argument("--refresh", action="store_true")
+    a.add_argument("--out", help="write the full kit (specs + rules) to a directory")
 
     a = sub.add_parser("update-node"); a.set_defaults(func=cmd_update_node)
     a.add_argument("--id", required=True)
