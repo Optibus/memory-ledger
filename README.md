@@ -7,6 +7,13 @@ next-steps, sets real alarms, and reaches your other tools.
 
 > **Install:** see [INSTALL.md](INSTALL.md) — `/plugin marketplace add` this repo,
 > `/plugin install second-brain@second-brain`, then `mkdir -p ~/.second_brain`.
+>
+> **Building on it?** [`docs/`](docs/README.md) is the developer reference —
+> [the algorithm](docs/algorithm.md), [query methods](docs/queries.md),
+> [search patterns](docs/search.md), [the HTTP API](docs/api.md),
+> [measured performance](docs/performance.md), [running neo4j](docs/neo4j.md),
+> [how it compares to MemPalace](docs/comparison.md),
+> and [how to contribute](CONTRIBUTING.md).
 
 ## The idea
 

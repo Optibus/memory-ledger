@@ -21,16 +21,18 @@ tokens *deciding* or *storing*: that work is regex + SQL. What does cost tokens 
 text that lands in the conversation — command output you read, and the short
 `additionalContext` two hooks inject. Measured 2026-07-27:
 
-| Hook | Injected into context |
-|---|---|
-| `UserPromptSubmit` | **197 chars**, on every prompt |
-| `SessionStart` | **~850 chars** (open-loops brief, capped at 6 loops so it does not grow with the graph) |
-| `Stop` | **nothing** |
+| Hook | Injected into context | Latency |
+|---|---|---|
+| `UserPromptSubmit` | **208 bytes** (~52 tokens), on every prompt | 64 ms |
+| `SessionStart` | **~1.0 KB** (~267 tokens; open-loops brief, capped at 6 loops so it does not grow with the graph) | 185 ms |
+| `Stop` | **nothing** (writes only) | 57 ms |
 
-In a real 17-prompt session that was ~1,000 new tokens — **0.01% of the session,
-about half a cent** — and it likely pays for itself, since the injected line tells
-the model not to re-store the turn and to recall through the free paths instead.
-So: effectively free, **not literally zero**. Say "no model call" when you mean it.
+A heavy day — ~60 prompts across ~6 sessions — is ~4,700 injected tokens, a few
+cents, **under 0.05% of what a working day of Claude Code costs**. It likely pays
+for itself, since the injected line tells the model not to re-store the turn and to
+recall through the free paths instead. So: effectively free, **not literally zero**.
+Say "no model call" when you mean it. Re-measure with the recipe in
+[`docs/performance.md`](docs/performance.md).
 
 - **Recall first.** Before answering, `match-skills` / `search` the graph (or the
   free `brain_query.py` views) so you build on prior context instead of starting
