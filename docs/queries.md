@@ -7,7 +7,7 @@ that answers the question** — that rule is the whole cost story.
 |---|---|---|---|
 | `brain_query.py` | never | zero in a terminal; only the rows you read in a session | date views, "what's on my plate" |
 | `graph.py` | never | only the rows you read | search, recall, graph walks, writes |
-| `/brain`, skills | yes | a normal prompt | you need judgement, or to reach Slack/Gmail/Jira |
+| `/ledger`, skills | yes | a normal prompt | you need judgement, or to reach Slack/Gmail/Jira |
 
 Both scripts are stdlib-only and print JSON with `--json` / by default, so they
 compose with `jq` and with each other.

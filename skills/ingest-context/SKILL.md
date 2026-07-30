@@ -90,6 +90,6 @@ mailbox is gated. This applies to Jira, meeting, and any other emails.
 - Always store **provenance** in props (source, url, date) so context is
   traceable.
 - Everything stays in the local brain (`~/.second_brain`); it's private.
-- This skill is what `read-email`, `slack-inbox`, and `/brain` hand off to when
+- This skill is what `read-email`, `slack-inbox`, and `/ledger` hand off to when
   they detect ingestible context. When a meeting-transcript email arrives,
   ingest it automatically, then report.

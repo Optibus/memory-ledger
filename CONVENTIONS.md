@@ -560,7 +560,7 @@ without matching doc updates is **incomplete**.
   rules. This is the source of truth every skill reads; it must never lie.
 - `README.md` — the overview, skills table, engine/usage examples.
 - `INSTALL.md` — if install, enable, hooks, or config changed.
-- the relevant `skills/*/SKILL.md` and `commands/brain.md` — if their flow changed.
+- the relevant `skills/*/SKILL.md` and `commands/ledger.md` — if their flow changed.
 
 **How:** after editing the engine/hooks/scripts, `grep` the docs for the old
 name/flag/behavior and fix **every** mention (don't leave a stale example). If a

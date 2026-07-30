@@ -1,12 +1,14 @@
-# second-brain
+# Memory Ledger
 
 An external working memory for a **busy** brain — a graph-linked local memory
 plus a set of skills you drive in plain language (any language), from **Slack,
 Claude Code, or the Claude app**. You talk; it remembers, breaks work into tiny
-next-steps, sets real alarms, and reaches your other tools.
+next-steps, sets real alarms, and reaches your other tools. It records as you
+work and keeps what is still open: what you owe, to whom, by when.
 
 > **Install:** see [INSTALL.md](INSTALL.md) — `/plugin marketplace add` this repo,
 > `/plugin install second-brain@second-brain`, then `mkdir -p ~/.second_brain`.
+> The repo and plugin id stay `second-brain`; the command is `/ledger`.
 >
 > **Building on it?** [`docs/`](docs/README.md) is the developer reference —
 > [the algorithm](docs/algorithm.md), [query methods](docs/queries.md),
@@ -142,7 +144,7 @@ removing/renaming the brain home (`~/.second_brain`); the hooks then no-op.
 | `writing-style` | Learn your voice and write as you, in your language. |
 | `export-memory` | Dump the whole graph to Markdown / JSON. |
 
-Front door in Claude Code: **`/brain <anything>`** routes to all of the above.
+Front door in Claude Code: **`/ledger <anything>`** routes to all of the above.
 **`/plan-today`** picks up only *your* actionable tasks (token-free) and blocks
 them into your calendar's free windows, ending with one clear first action.
 
@@ -265,7 +267,7 @@ Set against what a real day of Claude Code actually costs on the same machine �
 date view stay at exactly **zero** tokens — they are SQLite.
 
 The parts that *do* spend tokens are ordinary Claude Code work, billed like any other
-prompt: `/brain` recall, `ingest-context`, and the Slack/Gmail/Jira skills. Ingest is
+prompt: `/ledger` recall, `ingest-context`, and the Slack/Gmail/Jira skills. Ingest is
 deliberately manual (once or twice a day) rather than hook-driven, to keep that
 bounded.
 
@@ -330,7 +332,7 @@ See **[INSTALL.md](INSTALL.md)** for the full flow. In short:
 
 **Claude Code** — install as a plugin (marketplace add this repo →
 `/plugin install second-brain@second-brain`), then `mkdir -p ~/.second_brain`. Enabling
-at user level makes it active in every session. Talk to it with `/brain ...` or
+at user level makes it active in every session. Talk to it with `/ledger ...` or
 invoke skills by name.
 
 **Claude app** — upload the skill folders as Agent Skills. The same graph engine

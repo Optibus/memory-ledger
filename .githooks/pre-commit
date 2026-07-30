@@ -47,7 +47,7 @@ if behavior and not docs:
         print(f"  • {f}", file=sys.stderr)
     print("\nUpdate the docs that describe them (in this same commit):", file=sys.stderr)
     print("  CONVENTIONS.md · README.md · INSTALL.md · the relevant skills/*/SKILL.md"
-          " · commands/brain.md", file=sys.stderr)
+          " · commands/ledger.md", file=sys.stderr)
     print("  then `grep` the docs for any stale mention of what you changed.", file=sys.stderr)
     print("\nIf this change genuinely needs no doc update, bypass with:", file=sys.stderr)
     print("  git commit --no-verify\n", file=sys.stderr)

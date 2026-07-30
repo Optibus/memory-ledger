@@ -67,7 +67,7 @@ Do you have the id?                     -> get-node / neighbors
 Is it a date question?                  -> brain_query.py (agenda/week/...)
 Is it "what must I act on"?             -> brain_query.py --mine
 Is it "what's stuck"?                   -> open-loops
-Do you need judgement about the answer? -> /brain (this one costs tokens)
+Do you need judgement about the answer? -> /ledger (this one costs tokens)
 ```
 
 ## Budgets and drilling in

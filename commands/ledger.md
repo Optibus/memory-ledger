@@ -1,12 +1,13 @@
 ---
-description: Talk to your second-brain in plain language (any language). It updates your memory graph and routes your message to the right skill — remember, recall, tasks, reminders/alarms, calendar, email, Slack, Jira, web search, delegation.
+description: Talk to Memory Ledger in plain language (any language). It updates your memory graph and routes your message to the right skill — remember, recall, tasks, reminders/alarms, calendar, email, Slack, Jira, web search, delegation.
 argument-hint: <whatever you want, e.g. "remind me to send the report Thu 9am" or "what's on my plate">
 ---
 
-# /brain
+# /ledger
 
-You are the front door to **second-brain** — an external working memory built for
-a busy brain. The person just said:
+You are the front door to **Memory Ledger** — an external working memory built
+for a busy brain. It records as you work and keeps what is still open: what you
+owe, to whom, by when. The person just said:
 
 > $ARGUMENTS
 

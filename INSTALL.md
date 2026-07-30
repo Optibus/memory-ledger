@@ -1,8 +1,13 @@
-# Installing second-brain
+# Installing Memory Ledger
 
-second-brain is a Claude Code plugin. Installing it makes its skills, the `/brain`
-command, and the always-on capture hooks available **globally** (every project,
-every session). It works in Claude Code and the Claude app.
+Memory Ledger is a Claude Code plugin. Installing it makes its skills, the
+`/ledger` command, and the always-on capture hooks available **globally** (every
+project, every session). It works in Claude Code and the Claude app.
+
+> **Two names, on purpose.** The product is **Memory Ledger** and the command is
+> `/ledger`. The repo, the marketplace and the plugin id stay **`second-brain`**,
+> so every install line below is unchanged and existing installs keep working.
+> `/brain` was the old command name and is gone — use `/ledger`.
 
 ## Prerequisites
 

@@ -58,7 +58,7 @@ claude --plugin-dir ~/dev/second-brain
 | `hooks/hooks.json` | which hook binds to which Claude Code event |
 | `viz/serve.py`, `viz/index.html` | the local HTTP server, map and dashboard |
 | `skills/<name>/SKILL.md` | model-driven skills (these may spend tokens) |
-| `commands/` | `/brain`, `/plan-today` |
+| `commands/` | `/ledger`, `/plan-today` |
 | `CONVENTIONS.md` | the operating rules every skill reads first |
 | `docs/` | developer documentation |
 
