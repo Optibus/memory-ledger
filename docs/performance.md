@@ -195,12 +195,35 @@ and a ChromaDB store (the substrate MemPalace uses) built at increasing scale:
 | | Resident memory | Disk | Read latency |
 |---|---|---|---|
 | **second-brain (SQLite)** | **26 MiB** | **1.60 MiB** | 0.03–0.07 ms in-process |
-| neo4j, same 623 nodes | 836–862 MiB | 516 MB | 7–17 ms over localhost HTTP |
+| neo4j, same brain | ~430–460 MiB steady state | 516 MB (736 KB is the graph) | 7–17 ms over localhost HTTP |
 | ChromaDB, 50k documents | 262 MiB | 291 MB | ~1.0 ms |
 
 ~10 MiB of the SQLite figure is bare Python; 76 MiB of the ChromaDB figure is the
 import alone. The ChromaDB number is a **lower bound** — it used precomputed
 vectors, so it excludes the embedding model a real deployment loads.
+
+**Read the neo4j row carefully — almost none of it is the graph.** Re-measured on
+2026-07-30 with 647 nodes / 987 edges, and against an empty container as a control:
+
+| Component | Size | What it is |
+|---|---|---|
+| JVM anon | 427 MiB | the engine: 144 MiB committed heap (109 used, 512 configured), 161 MiB non-heap, the rest off-heap page cache and thread stacks |
+| OS page cache | 425 MiB → 22 MiB | the kernel caching the preallocated transaction logs; it was reclaimed on its own within a minute, unprompted |
+| kernel slab | 12 MiB | |
+| **the graph itself** | **736 KB on disk** | 647 nodes, 987 edges |
+
+Two controls make the point. An **empty container that has never been synced** sits
+at 492 MiB with a byte-identical 516 MB of disk — the cost is there before any data
+is. And after the page cache was reclaimed, the synced container fell from 866 MiB
+to **456 MiB** with nothing under memory pressure.
+
+Mind the accounting: cgroup `memory.current` reads 866 MiB at peak while
+`docker stats` reads ~450 MiB for the same container at the same instant, because
+Docker subtracts inactive file cache. Earlier revisions of this page published the
+peak figure (836–862 MiB) as the resident cost; the steady-state engine figure
+above is the fair one. The disk figure is not storage in any useful sense either —
+515 MB of the 516 MB is preallocated transaction logs, 258 MB each for the `neo4j`
+and `system` databases.
 
 The point is not that one wins. It is that the always-on footprint of this design
 is small enough to ignore, which is what makes leaving it running a non-decision.

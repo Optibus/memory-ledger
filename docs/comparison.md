@@ -50,18 +50,25 @@ synced into it.
 
 | | second-brain (SQLite) | ChromaDB @ 50k docs | neo4j @ 623 nodes |
 |---|---|---|---|
-| Resident memory | **26 MiB** | **262 MiB** | **836–862 MiB** |
-| — of which baseline | ~10 MiB (bare Python) | 76 MiB (import only) | 512 m heap + 256 m pagecache configured |
-| Disk | **1.60 MiB** | 291 MiB | 516 MB (`/data`) |
+| Resident memory | **26 MiB** | **262 MiB** | **~430–460 MiB** steady state |
+| — of which baseline | ~10 MiB (bare Python) | 76 MiB (import only) | 492 MiB *empty*, 0 nodes |
+| Disk | **1.60 MiB** | 291 MiB | 516 MB (`/data`) — 736 KB is the graph |
 | Per unit | 2.7 KB/node | ~6 KB/doc | — |
 | Read latency | **0.03–0.07 ms** in-process | ~1.0 ms vector query | 7–17 ms over localhost HTTP |
 | Write cost | 0 model calls, ~60 ms/hook | 29 s per 50k docs *before* embedding | 2.6 s for 623 nodes |
 
 Reading that table honestly:
 
-- **The memory gap is real and large.** 26 MiB against 262 MiB against ~850 MiB.
+- **The memory gap is real and large.** 26 MiB against 262 MiB against ~450 MiB.
   For a personal tool running all day on a laptop alongside an IDE and a browser,
   that is the difference between unnoticeable and noticeable.
+- **The neo4j figure is a floor, not a measurement of the brain.** An empty
+  container with zero nodes sits at 492 MiB and the same 516 MB of disk. The graph
+  is 736 KB. Earlier revisions here quoted 836–862 MiB, which was cgroup
+  `memory.current` at peak — about 425 MiB of that was OS page cache over the
+  preallocated transaction logs, and it was reclaimed unprompted within a minute.
+  See [performance.md](performance.md#resident-memory-and-how-that-compares) for
+  the full split.
 - **The ChromaDB figure is a lower bound.** That measurement used precomputed
   random vectors, so it excludes the embedding model a real MemPalace loads
   (~80–90 MB of ONNX weights plus its runtime) and the CPU spent embedding every
@@ -113,16 +120,18 @@ questions both ways:
 | Orphan nodes | needs code | 5.5 ms |
 
 **This changes the recommendation.** The earlier advice — "move to neo4j past
-~250k nodes" — was wrong in its emphasis. neo4j's cost is a **fixed ~850 MiB of
+~250k nodes" — was wrong in its emphasis. neo4j's cost is a **fixed ~450 MiB of
 resident memory and a 7–17 ms round trip on every query, regardless of graph
 size**. It does not become cheaper as the graph grows; it starts expensive and
-stays flat.
+stays flat — an empty container costs 492 MiB before you put anything in it. That
+floor is set by the JVM configuration, so tuning the heap down moves it; the graph
+itself contributes essentially nothing at this scale.
 
 So the crossover is about **query shape, not node count**:
 
 - Stay on SQLite for everything the CLI, the dashboard and `recall` already do.
   At 623 nodes — and at 60,000 — it is hundreds of times cheaper per read and
-  ~30× lighter in memory.
+  ~17× lighter in memory.
 - Add neo4j when you want the bottom four rows of that table: variable-depth
   paths, shortest path, centrality, orphan and hub analysis. Those are not "SQLite
   is slower at this" — they are *not expressible* without writing traversal code.
@@ -190,8 +199,22 @@ docker run -d --name brain-neo4j-bench -p 7475:7474 -p 7688:7687 \
 export SECOND_BRAIN_NEO4J_URL=http://localhost:7475 \
        SECOND_BRAIN_NEO4J_USER=neo4j SECOND_BRAIN_NEO4J_PASSWORD=<pw>
 python3 scripts/brain_sync.py
-docker stats --no-stream brain-neo4j-bench          # resident memory
-docker exec brain-neo4j-bench du -sh /data          # disk
+
+# resident memory — these two disagree, and both are "right":
+#   memory.current includes OS page cache (peaks ~866 MiB, then falls back)
+#   docker stats subtracts inactive file cache (~450 MiB, the steady state)
+docker exec brain-neo4j-bench cat /sys/fs/cgroup/memory.current
+docker exec brain-neo4j-bench grep -E '^(anon|file|slab) ' /sys/fs/cgroup/memory.stat
+docker stats --no-stream brain-neo4j-bench
+
+# the JVM's own view of the heap
+docker exec brain-neo4j-bench jcmd 1 GC.heap_info
+
+# disk — 515 MB of the 516 MB is preallocated transaction logs
+docker exec brain-neo4j-bench du -sh /data /data/databases/neo4j /data/transactions
+
+# the control that matters: run the same container, never sync it, measure again.
+# 492 MiB and the same 516 MB of disk, at zero nodes.
 
 # SQLite resident memory: RSS of a process that opens the db and runs one recall
 python3 -c "import sys,resource;sys.path.insert(0,'scripts');import graph;\
