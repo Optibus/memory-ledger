@@ -20,7 +20,7 @@ so you add the repo as a marketplace, then install from it.
 **From a local clone** (what you'll do on your own machines):
 
 ```
-git clone git@github.com:gabriel-nori-optibus/second-brain.git ~/dev/second-brain
+git clone git@github.com:Optibus/second-brain.git ~/dev/second-brain
 ```
 then, inside Claude Code:
 ```
@@ -30,7 +30,7 @@ then, inside Claude Code:
 
 **From GitHub directly** (no manual clone):
 ```
-/plugin marketplace add gabriel-nori-optibus/second-brain
+/plugin marketplace add Optibus/second-brain
 /plugin install second-brain@second-brain
 ```
 

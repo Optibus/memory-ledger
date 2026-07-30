@@ -102,10 +102,10 @@ persist every interaction in pure Python/SQL: a `UserPromptSubmit` hook
 (`hooks/capture_prompt.py`) stores each prompt and auto-creates tasks for explicit
 to-dos; a `Stop` hook (`hooks/capture_answer.py`) stores a summary of the answer,
 linked to its question. Deciding and storing cost **zero** tokens — it is regex and
-SQL. Two of the hooks do inject a short status line into the conversation (197 chars
-per prompt, an ~850-char open-loops brief at session start; the `Stop` hook injects
-nothing), which measured **0.01% of a real session — about half a cent**. Effectively
-free, not literally zero.
+SQL. Two of the hooks do inject a short status line into the conversation (208 bytes
+per prompt, a ~1.0 KB open-loops brief at session start; the `Stop` hook injects
+nothing), which measures **under 0.05% of a working day — a few cents**. Effectively
+free, not literally zero. Full accounting in [What it costs](#what-it-costs).
 
 So a simple answered question becomes a recallable node on its own, and you get it
 back by running `graph.py search` / `brain_query.py` — those run outside the
@@ -213,6 +213,65 @@ blindly "me"; "ask/chase <Name>" stays *yours*).
 Local-tz buckets via `--tz` / `$SECOND_BRAIN_TZ`; `--backend sqlite|neo4j|auto`.
 Recall stays free — reach for this (or `graph.py search` / `open-loops`) instead
 of asking the model to remember.
+
+## What it costs
+
+The honest split: **the always-on part never calls the model.** Only the skills that
+reach out (recall through Claude, ingest, Slack/Gmail/Jira) spend tokens, and those
+run when you ask — or, for ingest, once or twice a day rather than on every hook.
+
+**Verify the zero-token claim yourself.** No path in `hooks/` or `scripts/` calls a
+model API — the only outbound HTTP is the optional neo4j mirror:
+
+```bash
+grep -rn -iE "anthropic|api\.claude|openai|httpx" hooks/*.py scripts/*.py
+# only neo4j HTTP tx endpoints in graph.py / brain_query.py / brain_sync.py
+```
+
+### Measured hook overhead
+
+Each hook's real output, measured by running it (`python3 hooks/<hook>.py < event.json`):
+
+| Hook | Fires | Injected into context | Latency |
+|---|---|---|---|
+| `capture_prompt.py` | every prompt | 208 bytes (~52 tokens) | 64 ms |
+| `open_loops_brief.py` | session start / clear / compact | ~1.0 KB (~267 tokens) | 185 ms |
+| `capture_answer.py` | every answer | **nothing** (writes only) | 57 ms |
+
+The open-loops brief scales with how many loops are open and is budget-capped, so it
+does not grow without bound. Nothing else is added to any request.
+
+### What that costs per day
+
+At Claude Opus 5 input pricing ($5/MTok; $6.25 cache write, $0.50 cache read), a
+heavy day of ~60 prompts across ~6 sessions:
+
+| | Tokens/day | Cost/day |
+|---|---|---|
+| Per-prompt status line | 60 × 52 = 3,120 | $0.016 |
+| Session-start brief | 6 × 267 = 1,602 | $0.008 |
+| **Always-on total** | **~4,700** | **~$0.02–0.03** |
+
+Set against what a real day of Claude Code actually costs on the same machine — run
+`npx ccusage@latest daily` and compare your own — the brain's always-on overhead lands
+**under 0.05% of a working day**. Capture, search, open-loops, task insert, and every
+date view stay at exactly **zero** tokens — they are SQLite.
+
+The parts that *do* spend tokens are ordinary Claude Code work, billed like any other
+prompt: `/brain` recall, `ingest-context`, and the Slack/Gmail/Jira skills. Ingest is
+deliberately manual (once or twice a day) rather than hook-driven, to keep that
+bounded.
+
+Re-run the whole measurement any time:
+
+```bash
+npx ccusage@latest daily                     # your real spend, per day
+echo '{"session_id":"m","cwd":"'"$PWD"'","prompt":"test"}' > /tmp/hookin.json
+for h in open_loops_brief capture_prompt capture_answer; do
+  printf '%s: %s bytes\n' "$h" \
+    "$(python3 hooks/$h.py < /tmp/hookin.json | wc -c | tr -d ' ')"
+done
+```
 
 ## Visualize the brain
 
