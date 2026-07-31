@@ -42,6 +42,8 @@
   #legend h4 .all{float:right;text-transform:none;letter-spacing:0;font-weight:400;
     color:var(--muted);cursor:pointer;font-size:10px}
   #legend h4 .all:hover{color:var(--fg)}
+  #legend .fnote{color:var(--muted);font-size:11px;line-height:1.35;padding:2px 5px}
+  #legend .fnote code{color:var(--fg);font-size:10.5px}
   #detail{top:64px;right:12px;width:300px;max-height:78vh;overflow:auto;padding:14px;
     display:none}
   #detail.show{display:block}
@@ -251,7 +253,7 @@ let typesOff=new Set(), realmsOff=new Set(), hideDone=false, query="";
 let kindsOff=new Set();
 let cascade=false, cascadeOff=new Set();   // see recomputeCascade()
 let selected=null, hover=null, dragNode=null, panning=false, last={x:0,y:0};
-let version=null, alpha=1;
+let version=null, alpha=1, boot=null;
 
 const S = p => ({x: p.x*view.scale+view.tx, y: p.y*view.scale+view.ty});   // world->screen
 const Wld = (sx,sy) => ({x:(sx-view.tx)/view.scale, y:(sy-view.ty)/view.scale});
@@ -313,6 +315,11 @@ async function load(){
   try{
     const r = await fetch('/api/graph'); const d = await r.json();
     document.getElementById('err').style.display='none';
+    // The server re-execs when its code changes. Its boot id changes with it, and
+    // this page is then older than the API behind it — reload rather than sit
+    // there quietly missing whatever the new version added.
+    if(boot===null){ boot=d.meta.boot||""; }
+    else if((d.meta.boot||"")!==boot){ location.reload(); return; }
     if(d.version===version){ return; }      // nothing changed
     version=d.version;
     mergeGraph(d);
@@ -521,9 +528,19 @@ function esc(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>
 // poll with no code change.
 function buildFacet(boxId, counts, off){
   const box=document.getElementById(boxId);
-  const keys=Object.keys(counts||{}).sort();
+  // index.html is re-read from disk on every request but serve.py is not — an
+  // older server process serves this newer page and simply omits a facet it does
+  // not know about. Say so, rather than rendering an empty list that reads as a
+  // broken filter. Absent (undefined) is the stale case; {} is genuinely empty.
+  if(counts==null){
+    box.innerHTML='<div class="fnote">not sent by this server &mdash; '+
+                  'restart <code>viz/serve.py</code> to pick up new filters</div>';
+    return;
+  }
+  const keys=Object.keys(counts).sort();
   // a filter that was hiding something now gone stops counting as active
-  off.forEach(k=>{ if(!(k in (counts||{}))) off.delete(k); });
+  off.forEach(k=>{ if(!(k in counts)) off.delete(k); });
+  if(!keys.length){ box.innerHTML='<div class="fnote">none</div>'; return; }
   const swatch = (boxId==='rchips'||boxId==='kchips') ? realmPalette(keys) : colorFor;
   box.innerHTML=keys.map(k=>`<div class="chip ${off.has(k)?'off':''}" data-k="${esc(k)}">
       <span class="sw" style="background:${swatch(k)}"></span>${esc(k)||'(none)'}

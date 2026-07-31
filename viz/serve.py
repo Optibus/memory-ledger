@@ -6,15 +6,20 @@ $SECOND_BRAIN_HOME) and serves an interactive force-directed graph you can zoom,
 pan, filter, search, and click through. The page polls the API so edits made by
 any skill show up live.
 
-    python3 viz/serve.py [--port 8770] [--no-open]
+    python3 viz/serve.py [--port 8770] [--no-open] [--no-reload]
+
+It restarts itself when its own code changes, so a long-running server never
+serves a page newer than the API behind it. See RELOAD below.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import threading
+import time
 import webbrowser
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
@@ -29,6 +34,79 @@ INDEX = HERE / "index.html"
 # Writes (POST /api/*) are enabled unless started with --no-write. The write API
 # is unauthenticated, so bind to 127.0.0.1 or pass --no-write when exposing it.
 WRITABLE = True
+
+# Identifies THIS process. The page polls it and reloads itself when it changes,
+# so a restart carries the new page to an already-open tab.
+BOOT = f"{os.getpid()}-{int(time.time())}"
+
+# ---------------------------------------------------------------------------
+# RELOAD
+#
+# index.html is read from disk on every request, but this module and the engine
+# are loaded once at startup. A server left running for hours therefore serves a
+# CURRENT page against a STALE API — the page asks for a filter the process has
+# never heard of and silently shows nothing. That is a confusing failure, and the
+# fix is for the process to notice its own code changed and re-exec.
+#
+# Polling mtimes beats a filesystem-watch dependency: four files, once a second.
+# ---------------------------------------------------------------------------
+_RESTART = threading.Event()
+
+
+def _watched() -> list[Path]:
+    """This module, the engine modules it serves, and the page."""
+    out = [Path(__file__).resolve(), INDEX]
+    for mod in (graph, brain_query):
+        f = getattr(mod, "__file__", None)
+        if f:
+            out.append(Path(f).resolve())
+    return out
+
+
+def _stamp(paths) -> dict:
+    out = {}
+    for p in paths:
+        try:
+            out[str(p)] = p.stat().st_mtime_ns
+        except OSError:
+            out[str(p)] = None
+    return out
+
+
+def _watch(httpd, interval=1.0) -> None:
+    """Re-exec when a watched file changes. Refuses to restart into code that
+    does not compile — a typo mid-edit should not take the server down, and the
+    error is printed where the developer is already looking."""
+    paths = _watched()
+    seen = _stamp(paths)
+    while not _RESTART.is_set():
+        time.sleep(interval)
+        now = _stamp(paths)
+        changed = [p for p in now if now[p] != seen.get(p)]
+        if not changed:
+            continue
+        seen = now
+        broken = []
+        for c in changed:
+            if c.endswith(".py"):
+                try:
+                    compile(Path(c).read_text(encoding="utf-8"), c, "exec")
+                except SyntaxError as e:
+                    broken.append(f"{Path(c).name}:{e.lineno}: {e.msg}")
+                except OSError:
+                    pass
+        if broken:
+            print("  reload held — does not compile:", flush=True)
+            for b in broken:
+                print(f"    {b}", flush=True)
+            continue
+        print(f"  changed: {', '.join(Path(c).name for c in changed)} — restarting",
+              flush=True)
+        _RESTART.set()
+        # Unblock serve_forever from this thread; the exec happens in main(),
+        # after the listening socket is closed, so the port is free to rebind.
+        threading.Thread(target=httpd.shutdown, daemon=True).start()
+        return
 
 
 def _sqlite_payload() -> dict:
@@ -65,7 +143,7 @@ def _sqlite_payload() -> dict:
         "nodes": nodes, "edges": edges,
         "meta": {"nodes": len(nodes), "edges": len(edges),
                  "by_type": by_type, "by_realm": by_realm, "by_kind": by_kind,
-                 "generated": graph.now(),
+                 "boot": BOOT, "generated": graph.now(),
                  "source": "sqlite (local)", "db": str(graph.db_path())},
         # cheap change token so the client only re-lays-out when something moved
         "version": f"sqlite-{len(nodes)}-{len(edges)}-{max((n['props'].get('updated_at','') for n in nodes), default='')}",
@@ -124,7 +202,8 @@ def _neo4j_payload():
     return {
         "nodes": nodes, "edges": edges,
         "meta": {"nodes": len(nodes), "edges": len(edges), "by_type": by_type,
-                 "by_realm": by_realm, "by_kind": by_kind, "generated": graph.now(),
+                 "by_realm": by_realm, "by_kind": by_kind, "boot": BOOT,
+                 "generated": graph.now(),
                  "source": f"neo4j ({cfg['url']})"},
         "version": f"neo4j-{len(nodes)}-{len(edges)}",
     }
@@ -186,7 +265,7 @@ class Handler(BaseHTTPRequestHandler):
                     "kinds": brain_query.kinds("auto"),
                     "no_kind_token": brain_query.NO_KIND,
                     "types": brain_query.node_types("auto"),
-                    "writable": WRITABLE,
+                    "writable": WRITABLE, "boot": BOOT,
                 }), "application/json")
             elif path == "/api/suggest-links":
                 q = parse_qs(parsed.query)
@@ -425,6 +504,8 @@ def main():
     ap.add_argument("--port", type=int, default=8770)
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--no-open", action="store_true")
+    ap.add_argument("--no-reload", action="store_true",
+                    help="do not restart when the server's own code changes")
     ap.add_argument("--no-write", action="store_true",
                     help="serve read-only — refuse every POST. Use this when "
                          "binding --host 0.0.0.0, since the write API is "
@@ -434,19 +515,40 @@ def main():
 
     global WRITABLE
     WRITABLE = not args.no_write
+    # keep the log readable when it is a file rather than a terminal
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(line_buffering=True)
+        except (AttributeError, OSError):
+            pass
 
     graph.connect().close()  # ensure the brain exists
     url = f"http://{args.host}:{args.port}/"
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
-    print(f"second-brain map → {url}")
-    print(f"  brain: {graph.db_path()}")
-    print("  Ctrl-C to stop.")
-    if not args.no_open:
+    # a restart re-execs with the same argv; don't open a new tab each time
+    respawned = os.environ.pop("SECOND_BRAIN_VIZ_RESPAWN", "") == "1"
+    if not respawned:
+        print(f"second-brain map → {url}")
+        print(f"  brain: {graph.db_path()}")
+        print("  Ctrl-C to stop.")
+    else:
+        print(f"  reloaded → {url}")
+    if not args.no_reload:
+        threading.Thread(target=_watch, args=(httpd,), daemon=True).start()
+    if not (args.no_open or respawned):
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         print("\nstopped.")
+        httpd.server_close()
+        return
+    httpd.server_close()          # free the port BEFORE handing over
+    if _RESTART.is_set():
+        os.environ["SECOND_BRAIN_VIZ_RESPAWN"] = "1"
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.execv(sys.executable, [sys.executable, *sys.argv])
 
 
 if __name__ == "__main__":

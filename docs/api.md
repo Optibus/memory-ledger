@@ -122,6 +122,38 @@ allowed set in the error string rather than being silently coerced.
 
 ---
 
+## Reload
+
+The server restarts itself when its own code changes:
+
+```bash
+python3 viz/serve.py                 # reload on, the default
+python3 viz/serve.py --no-reload     # off
+```
+
+This exists because of a failure that is genuinely hard to diagnose from the
+browser. `index.html` is read from disk on **every request**, but `serve.py`,
+`graph.py` and `brain_query.py` are imported **once at startup**. A server left
+running for hours therefore serves a CURRENT page against a STALE API: the page
+asks for a facet the process has never heard of, gets nothing back, and renders an
+empty filter that looks broken rather than out of date.
+
+How it behaves:
+
+- Polls the mtimes of those four files once a second. No watch dependency for four
+  files.
+- On change it re-execs with the same argv, so the pid is unchanged and the port is
+  rebound after the listening socket closes. It does not reopen the browser.
+- **It refuses to restart into code that does not compile.** A typo mid-edit prints
+  `reload held — does not compile: serve.py:112: invalid syntax` and the server
+  keeps serving; fix the file and it restarts on the next poll.
+- Every process has a `boot` id, returned in `/api/meta` and `meta.boot` of
+  `/api/graph`. The page compares it on each poll and reloads itself when it
+  changes, so an open tab picks up the new page without being touched.
+
+If a facet ever renders "not sent by this server", that is this problem with
+`--no-reload`, or a server predating the feature. Restart it.
+
 ## What the UI does with it
 
 Two tabs over one dataset:
