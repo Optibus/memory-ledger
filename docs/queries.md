@@ -55,11 +55,26 @@ A node with no realm counts as the configured default (`$SECOND_BRAIN_REALM`,
 `optibus` out of the box) — the same convention the engine applies on write, so
 filtering never silently drops untagged nodes.
 
+### Kind filter
+
+`--kind` scopes by `props.kind` — free-form and sparse, used by skills for
+`learned` / `plugin` and by notes for whatever the author needed. Also open
+vocabulary: read it from `/api/kinds` or `brain_query.kinds()`.
+
+```bash
+python3 scripts/brain_query.py open --kind learned
+python3 scripts/brain_query.py agenda --kind "(none)"    # carrying no kind
+```
+
+Most nodes have no kind, so they get an explicit `(none)` bucket instead of being
+invisible to the filter.
+
 ### Other flags
 
 | Flag | Effect |
 |---|---|
 | `--realm` | comma list of realms to keep (see above) |
+| `--kind` | comma list of `props.kind` values to keep (see above) |
 | `--tz` | IANA timezone for day bucketing (default `$SECOND_BRAIN_TZ`, else system) |
 | `--backend sqlite\|neo4j\|auto` | read the local mirror or the neo4j master |
 | `--json` | machine-readable instead of the text table |

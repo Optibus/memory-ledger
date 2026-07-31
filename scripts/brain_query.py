@@ -292,6 +292,7 @@ def _slim(d: dict, tz) -> dict:
             "due": d.get("due") or "", "due_local": _due_cell(d, tz),
             "waiting_on": props.get("waiting_on", ""),
             "assignee": norm_assignee(props.get("assignee", "")),
+            "kind": norm_kind(props),
             "delegated": props.get("delegated", ""),
             "mine": is_mine_actionable(d),
             "blocked_by": rel.get("blocked_by", []),
@@ -360,6 +361,31 @@ def realms(backend="sqlite") -> dict:
     return out
 
 
+NO_KIND = "(none)"
+
+
+def norm_kind(props: dict | None) -> str:
+    """`props.kind` is optional and sparse — most nodes have none. Rather than
+    hide those, they get an explicit bucket so "show me everything without a kind"
+    is a filter you can actually express."""
+    k = str((props or {}).get("kind", "") or "").strip().lower()
+    return k or NO_KIND
+
+
+def kinds(backend="sqlite") -> dict:
+    """Every `props.kind` in the brain, with the same two counts as realms.
+
+    Free-form and open vocabulary: skills use it for learned/plugin, notes use it
+    for whatever the author needed. Read it, never ship a list."""
+    out: dict[str, dict] = {}
+    for n in _fetch(backend):
+        k = out.setdefault(norm_kind(n.get("props")), {"nodes": 0, "open_tasks": 0})
+        k["nodes"] += 1
+        if n.get("type") in ("task", "subtask") and not _is_closed(n):
+            k["open_tasks"] += 1
+    return out
+
+
 def node_types(backend="sqlite") -> dict:
     """Distinct node types (+counts). Open vocabulary, same as realms — the engine
     never restricts `--type`, so the UI has no business hardcoding the list."""
@@ -384,12 +410,13 @@ def view_open(nodes, tz):
 
 def compute(view, *, date_from=None, date_to=None, status="any",
             since_days=7, tz=None, backend="sqlite", mine=False, assignee=None,
-            realm=None):
+            realm=None, kind=None):
     """Run a view and return (title, rows, tz, ref). The single entry point both
     the CLI and the web/phone server call — no query logic lives anywhere else.
     `mine=True` keeps only tasks the owner needs to act on; `assignee` (comma list
     of normalized tokens: me / unassigned / <name>) filters by owner; `realm`
-    (comma list) scopes to one or more domains. Rows are annotated with
+    (comma list) scopes to one or more domains, `kind` (comma list, `(none)` for
+    nodes carrying no kind) scopes by `props.kind`. Rows are annotated with
     blocked_by / blocks / related from the graph edges."""
     tzinfo = _local_tz(tz)
     ref = datetime.now(tzinfo).date()
@@ -398,6 +425,9 @@ def compute(view, *, date_from=None, date_to=None, status="any",
     if realm:
         wanted_realms = {w.strip().lower() for w in realm.split(",") if w.strip()}
         nodes = [n for n in nodes if norm_realm(n.get("realm", "")) in wanted_realms]
+    if kind:
+        wanted_kinds = {w.strip().lower() for w in kind.split(",") if w.strip()}
+        nodes = [n for n in nodes if norm_kind(n.get("props")) in wanted_kinds]
     if mine:
         nodes = [n for n in nodes if is_mine_actionable(n)]
     if assignee:
@@ -447,6 +477,8 @@ def run_json(view, **opts) -> dict:
         title += "  · mine"
     if opts.get("realm"):
         title += f"  · {opts['realm']}"
+    if opts.get("kind"):
+        title += f"  · kind={opts['kind']}"
     return {"ok": True, "view": view, "title": title, "ref": ref.isoformat(),
             "count": len(rows), "results": [_slim(d, tz) for d in rows]}
 
@@ -475,6 +507,9 @@ def main(argv=None):
     p.add_argument("--realm",
                    help="comma list of realms to keep (optibus | personal | ...); "
                         "omit for every realm")
+    p.add_argument("--kind",
+                   help="comma list of props.kind values to keep; '(none)' selects "
+                        "nodes that carry no kind")
     p.add_argument("--json", action="store_true", help="emit JSON (for UI/phone backend)")
     args = p.parse_args(argv)
 
@@ -483,7 +518,7 @@ def main(argv=None):
             args.view, date_from=args.date_from, date_to=args.date_to,
             status=args.status, since_days=args.since_days, tz=args.tz,
             backend=args.backend, mine=args.mine, assignee=args.assignee,
-            realm=args.realm)
+            realm=args.realm, kind=args.kind)
     except ValueError as e:
         p.error(str(e))
     if args.mine:
@@ -492,6 +527,8 @@ def main(argv=None):
         title += f"  · {args.assignee}"
     if args.realm:
         title += f"  · {args.realm}"
+    if args.kind:
+        title += f"  · kind={args.kind}"
 
     if args.json:
         json.dump({"ok": True, "view": args.view, "title": title,

@@ -47,18 +47,20 @@ disabled"}`.
 | `/api/views` | the dashboard view payloads |
 | `/api/assignees` | distinct assignees, for the filter chips |
 | `/api/realms` | every realm in the brain + `{nodes, open_tasks}` counts, and the server's `default` |
+| `/api/kinds` | every `props.kind` + the same counts, and the `none_token` for nodes carrying no kind |
 | `/api/node?id=<id>` | one node in full plus its edges (the expand view) |
-| `/api/meta` | the vocabulary — node types, realms, edge rels, statuses |
+| `/api/meta` | the vocabulary — node types, realms, kinds, edge rels, statuses |
 | `/api/suggest-links` | proposed edges awaiting acceptance |
 | `/api/search?q=<q>` | node picker results for the relation editor |
 | `/api/<view>?<params>` | any `brain_query.py` view: `agenda`, `open`, `today`, `tomorrow`, `week`, `closed`, `range` |
 
 `/api/meta` exists so the UI never hardcodes vocabulary. Two of those sets are
 **closed** — `rels` and `statuses` are enforced on write — and two are **open**:
-`types` and `realms` are whatever the brain actually contains. Nobody's brain has
-the same list, so both are read at runtime and the UI renders what comes back.
-Invent a realm with `add-node --realm skunkworks` and it is a filter chip on the
-next poll, with no code change.
+`types`, `realms` and `kinds` are whatever the brain actually contains. Nobody's
+brain has the same list, so all three are read at runtime and the UI renders what
+comes back. Invent a realm with `add-node --realm skunkworks`, or a kind with
+`--props '{"kind":"postmortem"}'`, and it is a filter chip on the next poll, with
+no code change.
 
 `/api/realms` reports two counts per realm because they answer different
 questions: `nodes` is what the map filters over, `open_tasks` is what the
@@ -75,6 +77,8 @@ The dashboard views accept the same parameters as the CLI, as query string:
 /api/open?assignee=unassigned
 /api/agenda?realm=personal
 /api/open?realm=optibus,shared&mine=1
+/api/open?kind=postmortem
+/api/agenda?kind=(none)          # nodes that carry no kind at all
 /api/range?from=2026-07-20&to=2026-07-31&status=open
 /api/closed?since_days=14
 /api/week?tz=America/Sao_Paulo
@@ -83,6 +87,12 @@ The dashboard views accept the same parameters as the CLI, as query string:
 `realm` takes a comma list; omitting it means every realm. An empty realm on a
 node is normalised to the configured default (`$SECOND_BRAIN_REALM`, `optibus`
 out of the box), so filtering never silently drops untagged nodes.
+
+`kind` works the same way over `props.kind`, which is optional and sparse — most
+nodes have none. Rather than hide those, they land in an explicit `(none)` bucket,
+so "everything without a kind" is a filter you can express. On the **map** every
+kind is offered; on the **dashboard** only kinds that appear on open tasks are,
+since the dashboard lists tasks and a kind with none would be dead UI.
 
 ---
 
@@ -118,11 +128,11 @@ Two tabs over one dataset:
 
 - **Map** — a hand-written force simulation (`alpha *= 0.985` per frame, so it
   needs a moment to settle). Legend chips filter by **node type** and by
-  **realm**, independently, each with its own `all` reset; clicking a node shows
+  **realm** and **kind**, independently, each with its own `all` reset; clicking a node shows
   its neighbourhood. High-volume types (`channel`, `capture`) are worth hiding to
   make the rest legible.
 - **Dashboard** — the date views, with a "Mine · needs action" toggle, one chip
-  per assignee, one per realm, and `blocked_by` / `blocks` / `related` badges from
+  per assignee, one per realm, one per kind that has open tasks, and `blocked_by` / `blocks` / `related` badges from
   the edges. Cards expand on click (`/api/node`), and the date chip opens a picker
   that writes via `/api/set-due`.
 

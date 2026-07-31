@@ -305,6 +305,11 @@ one toggle chip per distinct assignee, from `/api/assignees`). Distinct from
 `--mine`: `assignee=me` matches only tasks *explicitly* the owner's, not
 unassigned ones.
 
+**`--kind <k>[,…]`** — scope by `props.kind` (free-form: `learned`, `plugin`,
+whatever a note author used). Nodes carrying no kind land in an explicit `(none)`
+bucket rather than being unfilterable. Open vocabulary like realms — read it from
+`/api/kinds` or `brain_query.kinds()`, never hardcode it.
+
 **`--realm <r>[,…]`** — scope any view to one or more sections of life
 (`?realm=optibus,shared` on the dashboard). Omit it for every realm. A node with
 no realm counts as `$SECOND_BRAIN_REALM` (default `optibus`), the same default the

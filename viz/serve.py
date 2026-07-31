@@ -48,20 +48,24 @@ def _sqlite_payload() -> dict:
             "id": d["id"], "type": d["type"], "title": d["title"],
             "status": d["status"], "due": d["due"], "body": d["body"],
             "realm": brain_query.norm_realm(d.get("realm", "")),
+            "kind": brain_query.norm_kind(d["props"]),
             "props": d["props"], "degree": degree.get(d["id"], 0),
         })
     edges = [{"src": e["src"], "dst": e["dst"], "rel": e["rel"]} for e in edge_rows]
 
     by_type: dict[str, int] = {}
     by_realm: dict[str, int] = {}
+    by_kind: dict[str, int] = {}
     for n in nodes:
         by_type[n["type"]] = by_type.get(n["type"], 0) + 1
         by_realm[n["realm"]] = by_realm.get(n["realm"], 0) + 1
+        by_kind[n["kind"]] = by_kind.get(n["kind"], 0) + 1
 
     return {
         "nodes": nodes, "edges": edges,
         "meta": {"nodes": len(nodes), "edges": len(edges),
-                 "by_type": by_type, "by_realm": by_realm, "generated": graph.now(),
+                 "by_type": by_type, "by_realm": by_realm, "by_kind": by_kind,
+                 "generated": graph.now(),
                  "source": "sqlite (local)", "db": str(graph.db_path())},
         # cheap change token so the client only re-lays-out when something moved
         "version": f"sqlite-{len(nodes)}-{len(edges)}-{max((n['props'].get('updated_at','') for n in nodes), default='')}",
@@ -103,22 +107,24 @@ def _neo4j_payload():
         edges.append({"src": s, "dst": dst, "rel": rel})
         degree[s] = degree.get(s, 0) + 1
         degree[dst] = degree.get(dst, 0) + 1
-    nodes, by_type, by_realm = [], {}, {}
+    nodes, by_type, by_realm, by_kind = [], {}, {}, {}
     for d in node_rows:
         p = d["row"][0] or {}
         nid = p.get("id")
         realm = brain_query.norm_realm(p.get("realm", ""))
         props = {k: v for k, v in p.items() if k not in CORE}
+        kind = brain_query.norm_kind(props)
         nodes.append({"id": nid, "type": p.get("type", ""), "title": p.get("title", ""),
                       "status": p.get("status", ""), "due": p.get("due", ""),
-                      "body": p.get("body", ""), "realm": realm, "props": props,
-                      "degree": degree.get(nid, 0)})
+                      "body": p.get("body", ""), "realm": realm, "kind": kind,
+                      "props": props, "degree": degree.get(nid, 0)})
         by_type[p.get("type", "")] = by_type.get(p.get("type", ""), 0) + 1
         by_realm[realm] = by_realm.get(realm, 0) + 1
+        by_kind[kind] = by_kind.get(kind, 0) + 1
     return {
         "nodes": nodes, "edges": edges,
         "meta": {"nodes": len(nodes), "edges": len(edges), "by_type": by_type,
-                 "by_realm": by_realm, "generated": graph.now(),
+                 "by_realm": by_realm, "by_kind": by_kind, "generated": graph.now(),
                  "source": f"neo4j ({cfg['url']})"},
         "version": f"neo4j-{len(nodes)}-{len(edges)}",
     }
@@ -165,6 +171,10 @@ class Handler(BaseHTTPRequestHandler):
                 nid = (parse_qs(parsed.query).get("id") or [""])[0]
                 self._send(200, json.dumps(brain_query.node_detail(nid)),
                            "application/json")
+            elif path == "/api/kinds":   # props.kind — open vocabulary, same as realms
+                self._send(200, json.dumps({
+                    "ok": True, "kinds": brain_query.kinds("auto"),
+                    "none_token": brain_query.NO_KIND}), "application/json")
             elif path == "/api/meta":   # vocabulary, so the UI never hardcodes it
                 # rels and statuses are closed sets the engine enforces; realms and
                 # types are OPEN — read from the brain, because they differ per person.
@@ -173,6 +183,8 @@ class Handler(BaseHTTPRequestHandler):
                     "statuses": graph.TASK_STATUSES,
                     "realms": brain_query.realms("auto"),
                     "default_realm": graph.DEFAULT_REALM,
+                    "kinds": brain_query.kinds("auto"),
+                    "no_kind_token": brain_query.NO_KIND,
                     "types": brain_query.node_types("auto"),
                     "writable": WRITABLE,
                 }), "application/json")
@@ -209,7 +221,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         alias = {"from": "date_from", "to": "date_to"}
         allowed = {"date_from", "date_to", "status", "since_days", "tz", "backend",
-                   "mine", "assignee", "realm"}
+                   "mine", "assignee", "realm", "kind"}
         # default to 'auto' so the dashboard reflects the SAME store as the map
         # (neo4j master when reachable, local sqlite mirror when offline)
         opts = {"backend": "auto"}
