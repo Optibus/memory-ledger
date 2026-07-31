@@ -26,9 +26,9 @@ Three storage objects, and that is the whole data model:
 
 | Table | Holds |
 |---|---|
-| `nodes` | `id, type, title, body, props (JSON), status, due, created, updated, realm` |
+| `nodes` | `id, type, title, body, props (JSON), status, due, created, updated, realm`, plus `cues` — a VIRTUAL generated column pulling the match-only props (`scenario`, `triggers`, `description`) into the FTS index ([search](search.md)) |
 | `edges` | `src, dst, rel, props` — unique on `(src, dst, rel)` |
-| `nodes_fts` | FTS5 index over `title` + `body`, kept in sync by triggers |
+| `nodes_fts` | FTS5 index over `title` + `body` + `cues`, kept in sync by triggers |
 
 Plus two local-only side tables: `outbox` (pending neo4j syncs) and
 `coactivation` (the Hebbian tally, below).

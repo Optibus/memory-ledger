@@ -5,11 +5,18 @@ difference between a 1,500-char answer and a 9,000-char one.
 
 ## The index
 
-A single FTS5 virtual table over `title` + `body`:
+A single FTS5 virtual table over `title` + `body` + `cues`:
 
 ```sql
+-- cues surfaces the match-only props as a real column so FTS5 can reach them
+ALTER TABLE nodes ADD COLUMN cues TEXT GENERATED ALWAYS AS (
+    ifnull(json_extract(props,'$.scenario'),'')    || ' ' ||
+    ifnull(json_extract(props,'$.triggers'),'')    || ' ' ||
+    ifnull(json_extract(props,'$.description'),'')
+) VIRTUAL;
+
 CREATE VIRTUAL TABLE nodes_fts USING fts5(
-    title, body, content='nodes', content_rowid='rowid'
+    title, body, cues, content='nodes', content_rowid='rowid'
 );
 ```
 
@@ -17,11 +24,32 @@ It is **contentless-synced**: the text lives in `nodes`, and three triggers
 (`nodes_ai`, `nodes_ad`, `nodes_au`) keep the index aligned on insert, delete and
 update. You never write to `nodes_fts` directly.
 
-Consequences worth knowing:
+### Why `cues` exists
 
-- `props` is **not indexed**. Searching for an assignee or a Jira key only works
-  if that text also appears in `title` or `body`. Filter on props with
-  `list --type` / the dashboard chips instead.
+`add-rule --scenario` and a skill's `triggers` / `description` are written
+precisely so a rule or skill fires on words its prose never uses. Until 2026-07-31
+none of them were reachable: the index covered `title` and `body` only, so
+`match-rules` and `match-skills` were matching on prose accident and every
+authored cue word was dead weight. FTS5 external-content tables can only index
+real columns of the content table, so the JSON is surfaced as one VIRTUAL
+generated column and indexed like any other.
+
+Notes for anyone touching this:
+
+- Detect the column with `PRAGMA table_xinfo`, **not** `table_info` — the latter
+  omits VIRTUAL generated columns, so the migration would re-run every connect.
+- `SELECT *` returns `cues`. `_node_dict` strips it; it is an index input, not
+  part of the node. The neo4j payload is built field-by-field and never sees it.
+- Changing the FTS column list drops and rebuilds the index and its triggers
+  automatically on next connect. `nodes` is the source of truth, so this is safe.
+- SQLite older than 3.31 cannot add a generated column. There the index falls back
+  to `title, body` and cue matching degrades to prose — it does not break.
+
+Other consequences worth knowing:
+
+- The rest of `props` is **not indexed**. Searching for an assignee or a Jira key
+  only works if that text also appears in `title`, `body` or a cue field. Filter
+  on props with `list --type` / the dashboard chips instead.
 - Deleting a node cascades to its edges (`ON DELETE CASCADE`) and to the FTS row.
 - The index is ~21% of the database file. That is the cost of instant search.
 

@@ -127,6 +127,75 @@ def connect():
     return con
 
 
+# The cue text a node is matched on, over and above its prose. `match-rules` reads
+# `props.scenario`, `match-skills` reads `props.triggers` / `props.description` —
+# authors write those fields precisely so a rule fires on words its body never uses.
+# FTS5 external-content tables can only index real columns of the content table, so
+# the JSON is surfaced as one VIRTUAL generated column and indexed like any other.
+# Without it every one of those cue words is dead weight (fixed 2026-07-31).
+_CUES_SQL = ("ifnull(json_extract(props,'$.scenario'),'') || ' ' || "
+             "ifnull(json_extract(props,'$.triggers'),'') || ' ' || "
+             "ifnull(json_extract(props,'$.description'),'')")
+
+
+def _generated_cols_ok() -> bool:
+    """Generated columns need SQLite 3.31 (2020). Older builds keep the
+    two-column index — cue matching degrades to prose, it does not break."""
+    import sqlite3
+    return sqlite3.sqlite_version_info >= (3, 31)
+
+
+def _ensure_fts(con) -> None:
+    """Create the FTS index and its sync triggers, migrating older brains.
+
+    Older databases have a two-column index (title, body) and triggers to match.
+    When the shape changes, the index and triggers are dropped and rebuilt from the
+    content table — cheap, since `nodes` is the source of truth and a personal brain
+    is small. Falls back to the two-column shape on SQLite older than 3.31, which
+    cannot add a generated column.
+    """
+    # table_xinfo, NOT table_info: the latter omits VIRTUAL generated columns, so
+    # `cues` would look missing on every connect and the ALTER would fail second run.
+    cols = [r[1] for r in con.execute("PRAGMA table_xinfo(nodes)").fetchall()]
+    if _generated_cols_ok() and "cues" not in cols:
+        con.execute("ALTER TABLE nodes ADD COLUMN cues TEXT "
+                    f"GENERATED ALWAYS AS ({_CUES_SQL}) VIRTUAL")
+        cols.append("cues")
+
+    want = ["title", "body"] + (["cues"] if "cues" in cols else [])
+    have = [r[1] for r in con.execute("PRAGMA table_info(nodes_fts)").fetchall()]
+    if have and have != want:                      # stale shape — rebuild it
+        con.executescript("DROP TRIGGER IF EXISTS nodes_ai;"
+                          "DROP TRIGGER IF EXISTS nodes_ad;"
+                          "DROP TRIGGER IF EXISTS nodes_au;"
+                          "DROP TABLE IF EXISTS nodes_fts;")
+        have = []
+    cl = ", ".join(want)
+    if not have:
+        con.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5("
+                    f"{cl}, content='nodes', content_rowid='rowid')")
+        con.execute("INSERT INTO nodes_fts(nodes_fts) VALUES('rebuild')")
+
+    # Triggers keep the index in step with writes. Generated columns are readable
+    # through NEW/OLD, so the same column list works here.
+    new = ", ".join(f"new.{c}" for c in want)
+    old = ", ".join(f"old.{c}" for c in want)
+    con.executescript(f"""
+        CREATE TRIGGER IF NOT EXISTS nodes_ai AFTER INSERT ON nodes BEGIN
+            INSERT INTO nodes_fts(rowid, {cl}) VALUES (new.rowid, {new});
+        END;
+        CREATE TRIGGER IF NOT EXISTS nodes_ad AFTER DELETE ON nodes BEGIN
+            INSERT INTO nodes_fts(nodes_fts, rowid, {cl})
+            VALUES ('delete', old.rowid, {old});
+        END;
+        CREATE TRIGGER IF NOT EXISTS nodes_au AFTER UPDATE ON nodes BEGIN
+            INSERT INTO nodes_fts(nodes_fts, rowid, {cl})
+            VALUES ('delete', old.rowid, {old});
+            INSERT INTO nodes_fts(rowid, {cl}) VALUES (new.rowid, {new});
+        END;
+    """)
+
+
 def _ensure_schema(con) -> None:
     con.executescript(
         """
@@ -155,31 +224,9 @@ def _ensure_schema(con) -> None:
         CREATE INDEX IF NOT EXISTS idx_nodes_due    ON nodes(due);
         CREATE INDEX IF NOT EXISTS idx_edges_src    ON edges(src);
         CREATE INDEX IF NOT EXISTS idx_edges_dst    ON edges(dst);
-
-        CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(
-            title, body, content='nodes', content_rowid='rowid'
-        );
         """
     )
-    # FTS triggers (contentless-synced). rowid maps to nodes.rowid.
-    con.executescript(
-        """
-        CREATE TRIGGER IF NOT EXISTS nodes_ai AFTER INSERT ON nodes BEGIN
-            INSERT INTO nodes_fts(rowid, title, body)
-            VALUES (new.rowid, new.title, new.body);
-        END;
-        CREATE TRIGGER IF NOT EXISTS nodes_ad AFTER DELETE ON nodes BEGIN
-            INSERT INTO nodes_fts(nodes_fts, rowid, title, body)
-            VALUES ('delete', old.rowid, old.title, old.body);
-        END;
-        CREATE TRIGGER IF NOT EXISTS nodes_au AFTER UPDATE ON nodes BEGIN
-            INSERT INTO nodes_fts(nodes_fts, rowid, title, body)
-            VALUES ('delete', old.rowid, old.title, old.body);
-            INSERT INTO nodes_fts(rowid, title, body)
-            VALUES (new.rowid, new.title, new.body);
-        END;
-        """
-    )
+    _ensure_fts(con)
     # --- realm (section) column + neo4j sync outbox ---
     cols = [r[1] for r in con.execute("PRAGMA table_info(nodes)").fetchall()]
     if "realm" not in cols:
@@ -359,6 +406,7 @@ def _after_write(con, nodes=(), edges=(), del_nodes=(), del_edges=()):
 
 def _node_dict(row) -> dict:
     d = dict(row)
+    d.pop("cues", None)   # generated FTS input, not part of the node (see _ensure_fts)
     try:
         d["props"] = json.loads(d.get("props") or "{}")
     except (json.JSONDecodeError, TypeError):
