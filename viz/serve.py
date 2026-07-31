@@ -121,8 +121,11 @@ def _sqlite_payload() -> dict:
         degree[e["dst"]] = degree.get(e["dst"], 0) + 1
 
     nodes = []
+    mutated = ""          # newest `updated` across the graph — the change signal
     for r in node_rows:
         d = graph._node_dict(r)
+        if d.get("updated", "") > mutated:
+            mutated = d["updated"]
         nodes.append({
             "id": d["id"], "type": d["type"], "title": d["title"],
             "status": d["status"], "due": d["due"], "body": d["body"],
@@ -146,8 +149,12 @@ def _sqlite_payload() -> dict:
                  "by_type": by_type, "by_realm": by_realm, "by_kind": by_kind,
                  "boot": BOOT, "generated": graph.now(),
                  "source": "sqlite (local)", "db": str(graph.db_path())},
-        # cheap change token so the client only re-lays-out when something moved
-        "version": f"sqlite-{len(nodes)}-{len(edges)}-{max((n['props'].get('updated_at','') for n in nodes), default='')}",
+        # Cheap change token so the client only re-lays-out when something moved.
+        # Reads the `updated` COLUMN: an in-place edit (a status flip, a new due
+        # date) leaves the node/edge counts alone, so a count-only token would make
+        # the write invisible to the poller. The old token read props["updated_at"],
+        # which only learn-skill ever writes.
+        "version": f"sqlite-{len(nodes)}-{len(edges)}-{mutated}",
     }
 
 
@@ -187,10 +194,13 @@ def _neo4j_payload():
         degree[s] = degree.get(s, 0) + 1
         degree[dst] = degree.get(dst, 0) + 1
     nodes, by_type, by_realm, by_kind = [], {}, {}, {}
+    mutated = ""          # newest `updated` — same change signal as the sqlite path
     for d in node_rows:
         p = d["row"][0] or {}
         nid = p.get("id")
         realm = brain_query.norm_realm(p.get("realm", ""))
+        if p.get("updated", "") > mutated:
+            mutated = p["updated"]
         props = {k: v for k, v in p.items() if k not in CORE}
         kind = brain_query.norm_kind(props)
         nodes.append({"id": nid, "type": p.get("type", ""), "title": p.get("title", ""),
@@ -206,7 +216,8 @@ def _neo4j_payload():
                  "by_realm": by_realm, "by_kind": by_kind, "boot": BOOT,
                  "generated": graph.now(),
                  "source": f"neo4j ({cfg['url']})"},
-        "version": f"neo4j-{len(nodes)}-{len(edges)}",
+        # had no mutation component at all, so an in-place write never moved it
+        "version": f"neo4j-{len(nodes)}-{len(edges)}-{mutated}",
     }
 
 

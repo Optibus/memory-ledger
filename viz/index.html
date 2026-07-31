@@ -349,6 +349,11 @@ function realmPalette(keys){
   return k => map[k] || "#8b949e";
 }
 const DONE = new Set(["done","cancelled"]);
+// Types that have a meaningful "done". Deliberately an allowlist rather than "has
+// a non-empty status": a `subtask` is created with an empty status and would be
+// wrongly excluded, a `skill` node carries status "active" and completing it would
+// break skill matching, and a `jira-issue` mirrors state owned elsewhere.
+const COMPLETABLE = new Set(["task","subtask","reminder"]);
 
 const cv = document.getElementById('canvas'), ctx = cv.getContext('2d');
 let DPR = Math.max(1, window.devicePixelRatio||1);
@@ -365,6 +370,11 @@ let kindsOff=new Set();
 let cascade=false, cascadeOff=new Set();   // see recomputeCascade()
 let selected=null, hover=null, dragNode=null, panning=false, last={x:0,y:0};
 let version=null, alpha=1, boot=null;
+// Server vocabulary + write capability, fetched once and shared by both tabs — the
+// payload can't change without a restart (and a restart reloads the page, see the
+// boot check in load()), so nothing re-polls it.
+let SRVMETA={rels:[],statuses:[],writable:false};
+let metaFailed=false;   // so "couldn't ask" is never reported as "--no-write"
 
 const S = p => ({x: p.x*view.scale+view.tx, y: p.y*view.scale+view.ty});   // world->screen
 const Wld = (sx,sy) => ({x:(sx-view.tx)/view.scale, y:(sy-view.ty)/view.scale});
@@ -422,7 +432,25 @@ function matches(n){
 }
 
 // ---- data load + live refresh ----
+let metaInFlight=null;
+async function loadMeta(){
+  if(!metaFailed && SRVMETA.statuses.length) return SRVMETA;   // already answered
+  if(metaInFlight) return metaInFlight;   // both tabs asking at once = one request
+  metaInFlight=(async()=>{
+    try{
+      const r=await fetch('/api/meta'); const m=await r.json();
+      if(m.ok){ SRVMETA=m; metaFailed=false; }
+      else { metaFailed=true; }
+    }catch(e){ metaFailed=true; }
+    metaInFlight=null;
+    return SRVMETA;
+  })();
+  return metaInFlight;
+}
 async function load(){
+  // A meta fetch that failed at startup (server still booting, or mid re-exec)
+  // would otherwise strand the map read-only forever — retry until it answers.
+  if(metaFailed) await loadMeta();
   try{
     const r = await fetch('/api/graph'); const d = await r.json();
     document.getElementById('err').style.display='none';
@@ -624,11 +652,39 @@ function renderDetail(){
     ${n.due?`<div class="kv"><b>due</b>: ${esc(n.due)}</div>`:''}
     <div class="kv"><b>connections</b>: ${out.length+inc.length}</div>
     ${props}
+    <div class="dact" id="mapact"></div>
     ${n.body?`<div class="body">${esc(n.body).slice(0,600)}</div>`:''}
     ${inc.length?`<h5>← incoming (${inc.length})</h5>${inc.join('')}`:''}
     ${out.length?`<h5>outgoing → (${out.length})</h5>${out.join('')}`:''}`;
   el.querySelectorAll('.rel').forEach(r=>r.onclick=()=>{ focusNode(r.dataset.id); });
+  completeAction(n, el.querySelector('#mapact'));
 }
+// Complete straight from the map card, so finishing something never means leaving
+// the graph for the Dashboard. Same POST the dashboard uses — archive, not delete
+// (CONVENTIONS §3): plain SQL, no model in the loop.
+function completeAction(n, bar){
+  if(!bar) return;
+  if(!COMPLETABLE.has(n.type)) return;
+  if(DONE.has(n.status||"")){ bar.appendChild(elWith("span","dnote","✓ archived")); return; }
+  if(!SRVMETA.writable){ bar.appendChild(elWith("span","dnote",
+    metaFailed ? "writes unavailable" : "read-only server (--no-write)")); return; }
+  const note=elWith("span","dnote","");
+  const ok=elWith("button","dbtn ok","✓ Complete");
+  ok.onclick=async()=>{
+    ok.disabled=true; note.className="dnote"; note.textContent="saving…";
+    let r;
+    try{
+      const res=await fetch("/api/complete",{method:"POST",
+        headers:{"Content-Type":"application/json"}, body:JSON.stringify({id:n.id})});
+      r=await res.json();
+    }catch(e){ r={ok:false,error:String(e)}; }
+    if(r.ok){ await load(); renderDetail(); }
+    else { ok.disabled=false; note.className="dnote err"; note.textContent=r.error||"failed"; }
+  };
+  bar.appendChild(ok); bar.appendChild(note);
+}
+function elWith(tag,cls,txt){ const e=document.createElement(tag);
+  if(cls)e.className=cls; if(txt!=null)e.textContent=txt; return e; }
 function focusNode(id){ const n=byId.get(id); if(!n)return;
   select(id); view.tx=W/2-n.x*view.scale; view.ty=H/2-n.y*view.scale; }
 function esc(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
@@ -787,7 +843,7 @@ const Dash = (function(){
   let REALMS={};      // realm -> {nodes, open_tasks}, from /api/realms
   let KINDS={};       // props.kind -> {nodes, open_tasks}, from /api/kinds
   let DEFAULT_REALM="";
-  let META={rels:[],statuses:[],writable:false};  // from /api/meta — never hardcoded here
+  let META={rels:[],statuses:[],writable:false};  // shared SRVMETA — never hardcoded here
   const $=s=>document.querySelector(s);
   const mk=(t,c,txt)=>{const e=document.createElement(t); if(c)e.className=c;
     if(txt!=null)e.textContent=txt; return e;};
@@ -1225,7 +1281,7 @@ const Dash = (function(){
         if(d.ok){ REALMS=d.realms||{}; DEFAULT_REALM=d.default||""; } }catch(e){}
       try{ const r=await fetch("/api/kinds"); const d=await r.json();
         if(d.ok) KINDS=d.kinds||{}; }catch(e){}
-      try{ const r=await fetch("/api/meta"); const m=await r.json(); if(m.ok) META=m; }catch(e){}
+      META=await loadMeta();   // one shared fetch — the map already asked at boot
       tabs(); ctl(); newBar(); built=true;
     }
     load();
@@ -1514,7 +1570,7 @@ function startPolling(ms){
   POLL=Math.max(1000, ms||POLL);
   clearInterval(pollTimer); pollTimer=setInterval(load, POLL);
 }
-load(); viewSummary(); startPolling(2000); requestAnimationFrame(draw);
+loadMeta(); load(); viewSummary(); startPolling(2000); requestAnimationFrame(draw);
 // the poll cadences are settings, so ask for them once at boot
 Settings.prefs().then(p=>{
   if(p.map_poll_seconds) startPolling(p.map_poll_seconds*1000);

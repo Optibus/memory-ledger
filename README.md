@@ -291,7 +291,10 @@ hamburger menu on the left (`m` toggles it):
 - **Map** — the live force-directed graph: zoom/pan, a search you can clear, and
   one multi-select dropdown per facet (node types / realms / kinds / display),
   each with its own **all** and **none**. Click any node to inspect every
-  connection and its direction. Polls the DB so changes appear in real time.
+  connection and its direction. Polls the DB so changes appear in real time. The
+  inspect card can also **complete** what it's showing — one `✓ Complete` on a
+  `task`, `subtask` or `reminder`, archived not deleted, so finishing something
+  never means leaving the graph. Hidden on a `--no-write` server.
 - **Dashboard** — the `brain_query.py` views (agenda / open / today / tomorrow /
   week / closed / range) as cards, over the same store. It is also a **full
   editor**: create tasks, tick them off, change status/assignee/due, rename them,
