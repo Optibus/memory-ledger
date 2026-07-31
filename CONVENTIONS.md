@@ -305,6 +305,15 @@ one toggle chip per distinct assignee, from `/api/assignees`). Distinct from
 `--mine`: `assignee=me` matches only tasks *explicitly* the owner's, not
 unassigned ones.
 
+**`--realm <r>[,…]`** — scope any view to one or more sections of life
+(`?realm=optibus,shared` on the dashboard). Omit it for every realm. A node with
+no realm counts as `$SECOND_BRAIN_REALM` (default `optibus`), the same default the
+engine writes with, so filtering never silently drops untagged nodes. **Realms are
+open vocabulary** — never hardcode the list. Read it from `/api/realms` (which also
+returns the server default) or `brain_query.realms()`; `graph.py sections` is the
+CLI equivalent. Same for node types: `/api/meta` returns `realms` and `types` from
+the brain precisely so nothing downstream ships a fixed list.
+
 **Relation flags + expand.** Each row carries `blocked_by` / `blocks` / `related`
 (derived from `blocked-by`/`depends-on`/`blocks`/`relates-to` edges) so the
 dashboard flags 🔒 blocked / ⛓ blocks / 🔗 related without the model. `/api/node?id=`

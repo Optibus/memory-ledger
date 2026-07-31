@@ -40,10 +40,26 @@ python3 scripts/brain_query.py agenda --mine
 python3 scripts/brain_query.py open --assignee me|unassigned|"<name>"
 ```
 
+### Realm filter
+
+`--realm` scopes any view to one or more domains (comma list). Omit it for every
+realm. Realms are open vocabulary — whatever you have written with `--realm` is
+what you can filter by, so nothing has a fixed list of them, including the web UI.
+
+```bash
+python3 scripts/brain_query.py agenda --realm personal
+python3 scripts/brain_query.py open --realm optibus,shared --mine
+```
+
+A node with no realm counts as the configured default (`$SECOND_BRAIN_REALM`,
+`optibus` out of the box) — the same convention the engine applies on write, so
+filtering never silently drops untagged nodes.
+
 ### Other flags
 
 | Flag | Effect |
 |---|---|
+| `--realm` | comma list of realms to keep (see above) |
 | `--tz` | IANA timezone for day bucketing (default `$SECOND_BRAIN_TZ`, else system) |
 | `--backend sqlite\|neo4j\|auto` | read the local mirror or the neo4j master |
 | `--json` | machine-readable instead of the text table |

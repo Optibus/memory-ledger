@@ -334,6 +334,42 @@ def assignees(backend="sqlite") -> dict:
     return counts
 
 
+def norm_realm(raw: str) -> str:
+    """A node with no realm belongs to the configured default — same convention
+    the engine applies on write, so filtering never silently drops those nodes."""
+    return (raw or "").strip().lower() or graph.DEFAULT_REALM
+
+
+def realms(backend="sqlite") -> dict:
+    """Every realm present in the brain, with two counts each.
+
+    Realms are open vocabulary — anyone can invent one with `--realm`, so the UI
+    must read them from here instead of shipping a list. `nodes` counts the whole
+    graph (what the map filters over); `open_tasks` counts only actionable rows
+    (what the dashboard filters over) so a chip's number matches the list it
+    produces. A realm with 40 nodes and 0 open tasks is real, and saying so beats
+    showing a count that filters down to nothing.
+    """
+    out: dict[str, dict] = {}
+    for n in _fetch(backend):
+        r = out.setdefault(norm_realm(n.get("realm", "")),
+                           {"nodes": 0, "open_tasks": 0})
+        r["nodes"] += 1
+        if n.get("type") in ("task", "subtask") and not _is_closed(n):
+            r["open_tasks"] += 1
+    return out
+
+
+def node_types(backend="sqlite") -> dict:
+    """Distinct node types (+counts). Open vocabulary, same as realms — the engine
+    never restricts `--type`, so the UI has no business hardcoding the list."""
+    counts: dict[str, int] = {}
+    for n in _fetch(backend):
+        t = n.get("type") or ""
+        counts[t] = counts.get(t, 0) + 1
+    return counts
+
+
 VIEWS = ["agenda", "open", "today", "tomorrow", "week", "closed", "range"]
 
 
@@ -347,16 +383,21 @@ def view_open(nodes, tz):
 
 
 def compute(view, *, date_from=None, date_to=None, status="any",
-            since_days=7, tz=None, backend="sqlite", mine=False, assignee=None):
+            since_days=7, tz=None, backend="sqlite", mine=False, assignee=None,
+            realm=None):
     """Run a view and return (title, rows, tz, ref). The single entry point both
     the CLI and the web/phone server call — no query logic lives anywhere else.
     `mine=True` keeps only tasks the owner needs to act on; `assignee` (comma list
-    of normalized tokens: me / unassigned / <name>) filters by owner. Rows are
-    annotated with blocked_by / blocks / related from the graph edges."""
+    of normalized tokens: me / unassigned / <name>) filters by owner; `realm`
+    (comma list) scopes to one or more domains. Rows are annotated with
+    blocked_by / blocks / related from the graph edges."""
     tzinfo = _local_tz(tz)
     ref = datetime.now(tzinfo).date()
     all_nodes = _fetch(backend)
     nodes = all_nodes
+    if realm:
+        wanted_realms = {w.strip().lower() for w in realm.split(",") if w.strip()}
+        nodes = [n for n in nodes if norm_realm(n.get("realm", "")) in wanted_realms]
     if mine:
         nodes = [n for n in nodes if is_mine_actionable(n)]
     if assignee:
@@ -404,6 +445,8 @@ def run_json(view, **opts) -> dict:
     title, rows, tz, ref = compute(view, **opts)
     if opts.get("mine"):
         title += "  · mine"
+    if opts.get("realm"):
+        title += f"  · {opts['realm']}"
     return {"ok": True, "view": view, "title": title, "ref": ref.isoformat(),
             "count": len(rows), "results": [_slim(d, tz) for d in rows]}
 
@@ -429,6 +472,9 @@ def main(argv=None):
                         "(assigned to me, not delegated, not parked waiting)")
     p.add_argument("--assignee",
                    help="comma list of assignee tokens to keep: me | unassigned | <name>")
+    p.add_argument("--realm",
+                   help="comma list of realms to keep (optibus | personal | ...); "
+                        "omit for every realm")
     p.add_argument("--json", action="store_true", help="emit JSON (for UI/phone backend)")
     args = p.parse_args(argv)
 
@@ -436,13 +482,16 @@ def main(argv=None):
         title, rows, tz, ref = compute(
             args.view, date_from=args.date_from, date_to=args.date_to,
             status=args.status, since_days=args.since_days, tz=args.tz,
-            backend=args.backend, mine=args.mine, assignee=args.assignee)
+            backend=args.backend, mine=args.mine, assignee=args.assignee,
+            realm=args.realm)
     except ValueError as e:
         p.error(str(e))
     if args.mine:
         title += "  · mine"
     if args.assignee:
         title += f"  · {args.assignee}"
+    if args.realm:
+        title += f"  · {args.realm}"
 
     if args.json:
         json.dump({"ok": True, "view": args.view, "title": title,

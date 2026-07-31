@@ -38,6 +38,10 @@
   .chip .sw{width:11px;height:11px;border-radius:3px;flex:none}
   .chip .ct{margin-left:auto;color:var(--muted);font-variant-numeric:tabular-nums}
   #legend .toggle{margin-top:8px;padding-top:8px;border-top:1px solid var(--border)}
+  #legend h4.sep{margin-top:10px;padding-top:9px;border-top:1px solid var(--border)}
+  #legend h4 .all{float:right;text-transform:none;letter-spacing:0;font-weight:400;
+    color:var(--muted);cursor:pointer;font-size:10px}
+  #legend h4 .all:hover{color:var(--fg)}
   #detail{top:64px;right:12px;width:300px;max-height:78vh;overflow:auto;padding:14px;
     display:none}
   #detail.show{display:block}
@@ -93,6 +97,8 @@
   .duepick{background:#0d1117;color:var(--fg);border:1px solid var(--accent);
     border-radius:6px;padding:2px 6px;font-size:11.5px}
   .minebtn.asg{opacity:.9}
+  .minebtn.rlm{opacity:.9;border-style:dashed}
+  .dsep{color:var(--border);user-select:none}
   .ddetail{margin-top:9px;padding-top:9px;border-top:1px solid var(--border)}
   .dbody{white-space:pre-wrap;color:#c9d1d9;background:#0d1117;border:1px solid var(--border);
     border-radius:7px;padding:9px;font-size:12.5px;max-height:220px;overflow:auto;margin-bottom:8px}
@@ -115,7 +121,7 @@
     padding:7px 9px;font-size:13px;font-family:inherit;width:100%}
   .nt textarea{min-height:56px;resize:vertical}
   .nt input:focus,.nt textarea:focus,.nt select:focus{outline:none;border-color:var(--accent)}
-  .ntgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px}
+  .ntgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(108px,1fr));gap:8px;margin-top:8px}
   .ntl{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);
     display:block;margin-bottom:3px}
   .ntfoot{display:flex;gap:8px;align-items:center;margin-top:10px}
@@ -179,10 +185,13 @@
 </div>
 
 <div id="legend" class="panel map-only">
-  <h4>Node types</h4>
+  <h4>Node types <span class="all" id="allTypes">all</span></h4>
   <div id="chips"></div>
+  <h4 class="sep">Realms <span class="all" id="allRealms">all</span></h4>
+  <div id="rchips"></div>
   <div class="toggle">
     <label class="chip"><input type="checkbox" id="hideDone"> hide done / archived</label>
+    <label class="chip" title="A node stays only while at least one thing still points at it. Hide every source and it goes too."><input type="checkbox" id="cascade"> drop unsupported <span class="ct" id="cascadeCt"></span></label>
   </div>
 </div>
 
@@ -206,7 +215,22 @@ const COLORS = {
   "writing-sample":"#79c0ff", association:"#a5d6ff", meeting:"#e3b341",
   "jira-issue":"#f778ba", resource:"#39c5cf", skill:"#ff7b72"
 };
-const colorFor = t => COLORS[t] || "#8b949e";
+// Types and realms are OPEN vocabulary — anyone can invent one, so the palette
+// above is a set of nice defaults, not the list. Anything unnamed gets a stable
+// colour derived from its own text: same word, same hue, every session.
+function hueOf(s){
+  let h=0; for(let i=0;i<s.length;i++) h=(h*31+s.charCodeAt(i))>>>0;
+  return Math.imul(h,2654435761)>>>0 ? (Math.imul(h,2654435761)>>>0)%360 : 0;
+}
+const colorFor = t => COLORS[t] || (t ? `hsl(${hueOf(t)} 55% 62%)` : "#8b949e");
+// Realms are few and always rendered as a set, so spacing them evenly around the
+// wheel beats hashing — hashing put optibus and personal 12° apart, which reads as
+// the same colour on an 11px swatch. Index-based means the set is always legible.
+function realmPalette(keys){
+  const step=360/Math.max(keys.length,1), map={};
+  keys.forEach((k,i)=>{ map[k]=`hsl(${Math.round(i*step+20)} 60% 60%)`; });
+  return k => map[k] || "#8b949e";
+}
 const DONE = new Set(["done","cancelled"]);
 
 const cv = document.getElementById('canvas'), ctx = cv.getContext('2d');
@@ -219,17 +243,57 @@ addEventListener('resize',resize); resize();
 // ---- state ----
 let nodes=[], edges=[], byId=new Map();
 let view={scale:1, tx:W/2, ty:H/2};
-let typesOff=new Set(), hideDone=false, query="";
+let typesOff=new Set(), realmsOff=new Set(), hideDone=false, query="";
+let cascade=false, cascadeOff=new Set();   // see recomputeCascade()
 let selected=null, hover=null, dragNode=null, panning=false, last={x:0,y:0};
 let version=null, alpha=1;
 
 const S = p => ({x: p.x*view.scale+view.tx, y: p.y*view.scale+view.ty});   // world->screen
 const Wld = (sx,sy) => ({x:(sx-view.tx)/view.scale, y:(sy-view.ty)/view.scale});
 
-function hidden(n){
+// what the chips / toggles hide directly, before any knock-on effect
+function directHidden(n){
   if(typesOff.has(n.type)) return true;
+  if(realmsOff.has(n.realm||"")) return true;
   if(hideDone && DONE.has(n.status)) return true;
   return false;
+}
+function hidden(n){ return directHidden(n) || cascadeOff.has(n.id); }
+
+// "drop unsupported": once you hide something, also drop whatever was only being
+// held up BY it. A node survives while at least one edge still points at it from
+// something visible; a node nothing points at is a root and only the chips can
+// hide it.
+//
+//   A -> B -> C -> D,  E -> C
+//   hide A       => B goes with it (A was its only support); C survives on E, so D does too
+//   hide A and E => B, then C, then D — the whole chain unwinds
+//
+// Run to a fixpoint because order matters: C has to fall before D can.
+// Cached in cascadeOff — hidden() is called per node per frame, this is not.
+function recomputeCascade(){
+  cascadeOff = new Set();
+  if(cascade){
+    const parents=new Map();          // dst -> [src...]
+    for(const e of edges){
+      if(e.src===e.dst) continue;     // a self-loop is not support
+      if(!parents.has(e.dst)) parents.set(e.dst,[]);
+      parents.get(e.dst).push(e.src);
+    }
+    const gone=id=>{ const n=byId.get(id); return !n || directHidden(n) || cascadeOff.has(id); };
+    for(let pass=0; pass<nodes.length; pass++){
+      let changed=false;
+      for(const n of nodes){
+        if(cascadeOff.has(n.id) || directHidden(n)) continue;
+        const src=parents.get(n.id);
+        if(!src || !src.length) continue;            // root: nothing to lose
+        if(src.every(gone)){ cascadeOff.add(n.id); changed=true; }
+      }
+      if(!changed) break;
+    }
+  }
+  const ct=document.getElementById('cascadeCt');
+  if(ct) ct.textContent = cascadeOff.size ? "+"+cascadeOff.size : "";
 }
 function matches(n){
   if(!query) return true;
@@ -249,6 +313,8 @@ async function load(){
     document.getElementById('stats').textContent =
       `${d.meta.nodes} nodes · ${d.meta.edges} edges`;
     buildChips(d.meta.by_type);
+    buildRealms(d.meta.by_realm);
+    recomputeCascade();          // edges may have changed under the filter
     alpha=Math.max(alpha,.6);                // reheat so new nodes settle
   }catch(e){
     const el=document.getElementById('err'); el.style.display='block';
@@ -427,6 +493,7 @@ function renderDetail(){
     <span class="type" style="background:${colorFor(n.type)}">${n.type}</span>
     <h3>${esc(n.title||n.id)}</h3>
     <div class="kv"><b>id</b>: ${esc(n.id)}</div>
+    ${n.realm?`<div class="kv"><b>realm</b>: ${esc(n.realm)}</div>`:''}
     ${n.status?`<div class="kv"><b>status</b>: ${esc(n.status)}</div>`:''}
     ${n.due?`<div class="kv"><b>due</b>: ${esc(n.due)}</div>`:''}
     <div class="kv"><b>connections</b>: ${out.length+inc.length}</div>
@@ -441,20 +508,40 @@ function focusNode(id){ const n=byId.get(id); if(!n)return;
 function esc(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
 // ---- legend / filters ----
-function buildChips(byType){
-  const box=document.getElementById('chips');
-  const types=Object.keys(byType).sort();
-  box.innerHTML=types.map(t=>`<div class="chip ${typesOff.has(t)?'off':''}" data-t="${t}">
-      <span class="sw" style="background:${colorFor(t)}"></span>${t}
-      <span class="ct">${byType[t]}</span></div>`).join('');
+// One implementation for both facets: the counts come from /api/graph meta, which
+// derives them from the brain, so a brand-new type or realm shows up on the next
+// poll with no code change.
+function buildFacet(boxId, counts, off){
+  const box=document.getElementById(boxId);
+  const keys=Object.keys(counts||{}).sort();
+  // a filter that was hiding something now gone stops counting as active
+  off.forEach(k=>{ if(!(k in (counts||{}))) off.delete(k); });
+  const swatch = boxId==='rchips' ? realmPalette(keys) : colorFor;
+  box.innerHTML=keys.map(k=>`<div class="chip ${off.has(k)?'off':''}" data-k="${esc(k)}">
+      <span class="sw" style="background:${swatch(k)}"></span>${esc(k)||'(none)'}
+      <span class="ct">${counts[k]}</span></div>`).join('');
   box.querySelectorAll('.chip').forEach(c=>c.onclick=()=>{
-    const t=c.dataset.t;
-    if(typesOff.has(t))typesOff.delete(t); else typesOff.add(t);
-    c.classList.toggle('off'); alpha=Math.max(alpha,.3);
+    const k=c.dataset.k;
+    if(off.has(k))off.delete(k); else off.add(k);
+    c.classList.toggle('off'); recomputeCascade(); alpha=Math.max(alpha,.3);
   });
 }
+function buildChips(byType){ buildFacet('chips', byType, typesOff); }
+function buildRealms(byRealm){ buildFacet('rchips', byRealm, realmsOff); }
+// "all" clears that facet's filter without touching the other one
+document.getElementById('allTypes').onclick=()=>{
+  typesOff.clear(); document.querySelectorAll('#chips .chip').forEach(c=>c.classList.remove('off'));
+  recomputeCascade(); alpha=Math.max(alpha,.3);
+};
+document.getElementById('allRealms').onclick=()=>{
+  realmsOff.clear(); document.querySelectorAll('#rchips .chip').forEach(c=>c.classList.remove('off'));
+  recomputeCascade(); alpha=Math.max(alpha,.3);
+};
 document.getElementById('search').addEventListener('input',e=>query=e.target.value.trim());
-document.getElementById('hideDone').addEventListener('change',e=>{hideDone=e.target.checked;alpha=Math.max(alpha,.3);});
+document.getElementById('hideDone').addEventListener('change',e=>{
+  hideDone=e.target.checked; recomputeCascade(); alpha=Math.max(alpha,.3);});
+document.getElementById('cascade').addEventListener('change',e=>{
+  cascade=e.target.checked; recomputeCascade(); alpha=Math.max(alpha,.3);});
 
 // ---- mode switch (Map <-> Dashboard) ----
 let mode='map';
@@ -472,8 +559,11 @@ document.querySelectorAll('#modebar button').forEach(b=>
 // ---- dashboard tab (scoped so nothing collides with the map globals) ----
 const Dash = (function(){
   const VIEWS=["agenda","open","today","tomorrow","week","closed","range"];
-  const st={ view:"agenda", from:"", to:"", status:"any", since_days:7, mine:false, assignees:[] };
+  const st={ view:"agenda", from:"", to:"", status:"any", since_days:7, mine:false,
+             assignees:[], realms:[] };
   let ASSIGNEES={};   // token -> count, for the assignee filter chips
+  let REALMS={};      // realm -> {nodes, open_tasks}, from /api/realms
+  let DEFAULT_REALM="";
   let META={rels:[],statuses:[],writable:false};  // from /api/meta — never hardcoded here
   const $=s=>document.querySelector(s);
   const mk=(t,c,txt)=>{const e=document.createElement(t); if(c)e.className=c;
@@ -498,6 +588,22 @@ const Dash = (function(){
       b.onclick=()=>{ st.assignees=on?st.assignees.filter(x=>x!==a):st.assignees.concat([a]); ctl(); load(); };
       c.appendChild(b);
     });
+    // realm filter chips (multi-select). None selected = every realm, which is
+    // why there is no "all" pseudo-chip to get out of sync with the real ones.
+    // Realms with no open tasks are still offered — the count says so honestly.
+    const rkeys=Object.keys(REALMS).sort();
+    if(rkeys.length>1){
+      c.appendChild(mk("span","dsep","·"));
+      rkeys.forEach(r=>{
+        const on=st.realms.includes(r);
+        const b=mk("button","minebtn rlm"+(on?" active":""), r+" ("+(REALMS[r].open_tasks||0)+")");
+        b.title=r+" — "+REALMS[r].nodes+" node"+(REALMS[r].nodes===1?"":"s")+
+                " total, "+(REALMS[r].open_tasks||0)+" open task"+
+                (REALMS[r].open_tasks===1?"":"s");
+        b.onclick=()=>{ st.realms=on?st.realms.filter(x=>x!==r):st.realms.concat([r]); ctl(); load(); };
+        c.appendChild(b);
+      });
+    }
     if(st.view==="range"){
       if(!st.from) st.from=isoAdd(0);
       if(!st.to) st.to=isoAdd(14);
@@ -523,6 +629,7 @@ const Dash = (function(){
     if(st.view==="closed") p.set("since_days",st.since_days);
     if(st.mine) p.set("mine","1");
     if(st.assignees.length) p.set("assignee", st.assignees.join(","));
+    if(st.realms.length) p.set("realm", st.realms.join(","));
     const s=p.toString(); return s?("?"+s):"";
   }
   async function load(){
@@ -613,8 +720,18 @@ const Dash = (function(){
       o.value=p; pri.appendChild(o);});
     const typ=mk("select"); ["task","subtask"].forEach(t=>{const o=mk("option",null,t);
       o.value=t; typ.appendChild(o);});
+    // realms come from the brain, defaulting to the one the engine writes with.
+    // If the filter has narrowed to exactly one realm, create there — the obvious
+    // intent when you are looking at a single domain.
+    const rlm=mk("select");
+    const rlmKeys=Object.keys(REALMS).sort();
+    if(!rlmKeys.length && DEFAULT_REALM) rlmKeys.push(DEFAULT_REALM);
+    const preferred=(st.realms.length===1?st.realms[0]:DEFAULT_REALM);
+    rlmKeys.forEach(r=>{ const o=mk("option",null,r); o.value=r;
+      if(r===preferred)o.selected=true; rlm.appendChild(o); });
     grid.appendChild(lbl("due",due)); grid.appendChild(lbl("assignee",asg));
     grid.appendChild(lbl("priority",pri)); grid.appendChild(lbl("type",typ));
+    grid.appendChild(lbl("realm",rlm));
     f.appendChild(grid);
     const body=mk("textarea"); body.placeholder="notes (optional)";
     const bw=lbl("details",body); bw.style.marginTop="8px"; f.appendChild(bw);
@@ -642,11 +759,11 @@ const Dash = (function(){
       const links=picks.filter(p=>p.on).map(p=>({id:p.id,rel:p.rel}));
       const d=await post("/api/add-task",{ title:title.value.trim(), body:body.value.trim(),
         due:due.value?(due.value+"T12:00:00"):"", assignee:asg.value.trim(),
-        priority:pri.value, type:typ.value, links });
+        priority:pri.value, type:typ.value, realm:rlm.value, links });
       if(!d.ok){ save.disabled=false; note.className="dnote err";
         note.textContent=d.error||"failed"; return; }
       f.remove(); btn.style.display="";
-      await refreshAssignees(); load();
+      await refreshFacets(); load();
     };
     title.focus();
   }
@@ -686,9 +803,15 @@ const Dash = (function(){
       box.appendChild(row);
     });
   }
-  async function refreshAssignees(){
+  // both facet vocabularies are re-read after a write, so a task created in a
+  // brand-new realm makes that realm filterable immediately
+  async function refreshFacets(){
     try{ const r=await fetch("/api/assignees"); const d=await r.json();
-      if(d.ok){ ASSIGNEES=d.assignees||{}; ctl(); } }catch(e){}
+      if(d.ok) ASSIGNEES=d.assignees||{}; }catch(e){}
+    try{ const r=await fetch("/api/realms"); const d=await r.json();
+      if(d.ok){ REALMS=d.realms||{}; DEFAULT_REALM=d.default||DEFAULT_REALM;
+        st.realms=st.realms.filter(x=>x in REALMS); } }catch(e){}
+    ctl();
   }
 
   function pickDue(chip,row){
@@ -780,7 +903,7 @@ const Dash = (function(){
     asg.onchange=async()=>{
       if(asg.value.trim()===asgWas.trim()) return;
       const r=await post("/api/set-assignee",{id:d.id,assignee:asg.value.trim()});
-      if(r.ok){ refreshAssignees(); load(); } else { note.className="dnote err";
+      if(r.ok){ refreshFacets(); load(); } else { note.className="dnote err";
         note.textContent=r.error; }
     };
     bar.appendChild(asg);
@@ -852,6 +975,8 @@ const Dash = (function(){
   async function show(){
     if(!built){
       try{ const r=await fetch("/api/assignees"); const d=await r.json(); if(d.ok) ASSIGNEES=d.assignees||{}; }catch(e){}
+      try{ const r=await fetch("/api/realms"); const d=await r.json();
+        if(d.ok){ REALMS=d.realms||{}; DEFAULT_REALM=d.default||""; } }catch(e){}
       try{ const r=await fetch("/api/meta"); const m=await r.json(); if(m.ok) META=m; }catch(e){}
       tabs(); ctl(); newBar(); built=true;
     }

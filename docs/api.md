@@ -46,24 +46,43 @@ disabled"}`.
 | `/api/graph` | nodes + edges for the map canvas |
 | `/api/views` | the dashboard view payloads |
 | `/api/assignees` | distinct assignees, for the filter chips |
+| `/api/realms` | every realm in the brain + `{nodes, open_tasks}` counts, and the server's `default` |
 | `/api/node?id=<id>` | one node in full plus its edges (the expand view) |
-| `/api/meta` | the vocabulary — node types, edge rels, statuses |
+| `/api/meta` | the vocabulary — node types, realms, edge rels, statuses |
 | `/api/suggest-links` | proposed edges awaiting acceptance |
 | `/api/search?q=<q>` | node picker results for the relation editor |
 | `/api/<view>?<params>` | any `brain_query.py` view: `agenda`, `open`, `today`, `tomorrow`, `week`, `closed`, `range` |
 
-`/api/meta` exists so the UI never hardcodes vocabulary — add a node type in
-`graph.py` and the dashboard picks it up.
+`/api/meta` exists so the UI never hardcodes vocabulary. Two of those sets are
+**closed** — `rels` and `statuses` are enforced on write — and two are **open**:
+`types` and `realms` are whatever the brain actually contains. Nobody's brain has
+the same list, so both are read at runtime and the UI renders what comes back.
+Invent a realm with `add-node --realm skunkworks` and it is a filter chip on the
+next poll, with no code change.
+
+`/api/realms` reports two counts per realm because they answer different
+questions: `nodes` is what the map filters over, `open_tasks` is what the
+dashboard filters over. A realm with 40 nodes and 0 open tasks is real, and the
+chip says so rather than showing a number that filters down to nothing.
+
+Nodes in `/api/graph` each carry a `realm`, and `meta.by_realm` gives the totals —
+that is what drives the map's realm legend.
 
 The dashboard views accept the same parameters as the CLI, as query string:
 
 ```
 /api/agenda?mine=1
 /api/open?assignee=unassigned
+/api/agenda?realm=personal
+/api/open?realm=optibus,shared&mine=1
 /api/range?from=2026-07-20&to=2026-07-31&status=open
 /api/closed?since_days=14
 /api/week?tz=America/Sao_Paulo
 ```
+
+`realm` takes a comma list; omitting it means every realm. An empty realm on a
+node is normalised to the configured default (`$SECOND_BRAIN_REALM`, `optibus`
+out of the box), so filtering never silently drops untagged nodes.
 
 ---
 
@@ -72,7 +91,7 @@ The dashboard views accept the same parameters as the CLI, as query string:
 | Endpoint | Body | Notes |
 |---|---|---|
 | `/api/set-due` | `{id, due}` | `due` is ISO; empty clears it |
-| `/api/add-task` | `{title, type?, assignee?, priority?}` | `type` must be `task` or `subtask` |
+| `/api/add-task` | `{title, type?, assignee?, priority?, realm?, due?, body?, links?}` | `type` must be `task` or `subtask`; `realm` defaults to the server's |
 | `/api/complete` | `{id, note?}` | moves to the archive; never deletes |
 | `/api/set-status` | `{id, status, waiting_on?}` | `status` must be one of `graph.TASK_STATUSES` |
 | `/api/set-assignee` | `{id, assignee}` | |
@@ -98,13 +117,39 @@ allowed set in the error string rather than being silently coerced.
 Two tabs over one dataset:
 
 - **Map** — a hand-written force simulation (`alpha *= 0.985` per frame, so it
-  needs a moment to settle). Legend chips filter by node type; clicking a node
-  shows its neighbourhood. High-volume types (`channel`, `capture`) are worth
-  hiding to make the rest legible.
+  needs a moment to settle). Legend chips filter by **node type** and by
+  **realm**, independently, each with its own `all` reset; clicking a node shows
+  its neighbourhood. High-volume types (`channel`, `capture`) are worth hiding to
+  make the rest legible.
 - **Dashboard** — the date views, with a "Mine · needs action" toggle, one chip
-  per assignee, and `blocked_by` / `blocks` / `related` badges from the edges.
-  Cards expand on click (`/api/node`), and the date chip opens a picker that
-  writes via `/api/set-due`.
+  per assignee, one per realm, and `blocked_by` / `blocks` / `related` badges from
+  the edges. Cards expand on click (`/api/node`), and the date chip opens a picker
+  that writes via `/api/set-due`.
+
+### drop unsupported
+
+The map's second toggle turns the filters from *hiding* into *unwinding*. Normally
+hiding a type or realm leaves its dependants floating with nothing attached. With
+**drop unsupported** on, a node survives only while at least one edge still points
+at it from something visible. A node nothing points at is a root, and only the
+chips can hide it.
+
+```
+A -> B -> C -> D,  E -> C
+
+hide A        B goes with it (A was its only support).
+              C survives on E, so D does too.
+hide A and E  B falls, then C, then D — the whole chain unwinds.
+```
+
+It runs to a fixpoint, because order matters: C has to fall before D can. Cycles
+hold each other up and so are never cascaded away on their own; a self-loop does
+not count as support. The result is cached in `cascadeOff` and recomputed only
+when a filter or the graph changes — never per frame. On an 830-node / 1393-edge
+brain a full recompute is under a millisecond.
+
+The chip's counter shows how many extra nodes the cascade took, so the toggle's
+effect is legible rather than mysterious.
 
 Every one of those interactions is SQL. Leaving the dashboard open costs nothing.
 
