@@ -174,6 +174,44 @@ python3 scripts/graph.py match-skills "a situation"            # recall: relevan
 python3 scripts/graph.py use-skill --id skill_triage-x         # reinforce
 ```
 
+## One person, one node
+
+The same colleague arrives through many doors: a Slack display name, an email local
+part, a first name in a meeting transcript, a surname in a Jira comment. Left alone
+that yields `Isa`, `Isadora` and `Isadora Martini` as three people, and quietly
+splits their work three ways.
+
+So person creation goes through an identity guard. A name is matched on its
+normalized parts — case, accents and punctuation folded, an email reduced to its
+local part — at two confidence levels, because the two possible mistakes do not cost
+the same. **Merging two real people is far worse than leaving a duplicate**: it
+silently reassigns work. So:
+
+| | example | what happens |
+|---|---|---|
+| **certain** | `isadora.martini@optibus.com`, `Martini, Isadora`, `Isadora Souza Martini` | resolves to the existing node |
+| **likely** | `Isa`, `Isadora`, `Martini` | resolves **only if exactly one** person fits |
+| **no match** | `Gabriel Nori` vs `Gabriela Nori` | stays a separate person |
+
+Two names that both carry a surname and disagree on it are different people, however
+much the first name matches. An ambiguous name is **refused with its candidates**
+rather than resolved by coin flip.
+
+```bash
+python3 scripts/graph.py people                        # the roster, one entry per human
+python3 scripts/graph.py who "Isa"                     # which node does this spelling mean?
+python3 scripts/graph.py person-dupes                  # report duplicates already in the graph
+python3 scripts/graph.py merge-person --into <keep> --from <dup>
+python3 scripts/graph.py add-alias --id <person> --alias "Bebel"   # what the heuristic can't infer
+python3 scripts/graph.py add-node --type person --title "..." --force-new   # two people really do share a name
+```
+
+A merge **never deletes and never rewrites a name that was already written down**.
+Edges move to the canonical node, the duplicate's spelling is pinned there as an
+alias, and the duplicate stays in the graph as a resolver (`superseded_by` plus an
+edge to follow). A capture that said "Isa" still says "Isa" — and still resolves to
+the right human, because identity is resolved when **read**.
+
 ## Recall behaves like memory
 
 `recall` is the retrieval path — prefer it over `search`. It seeds on full-text,
@@ -292,9 +330,17 @@ hamburger menu on the left (`m` toggles it):
   one multi-select dropdown per facet (node types / realms / kinds / display),
   each with its own **all** and **none**. Click any node to inspect every
   connection and its direction. Polls the DB so changes appear in real time. The
-  inspect card can also **complete** what it's showing — one `✓ Complete` on a
-  `task`, `subtask` or `reminder`, archived not deleted, so finishing something
-  never means leaving the graph. Hidden on a `--no-write` server.
+  inspect card is also where you **act on** what it's showing, so working in the
+  graph never means leaving it:
+  - `✓ Complete` on a `task`, `subtask` or `reminder` — archived, not deleted.
+  - `✎ Edit` on any node — title, body and realm, plus due, priority and
+    **assignee** on the actionable types. One save is one write.
+  - Assignee is a dropdown of **person nodes**, never a typed name (see
+    [One person, one node](#one-person-one-node)). Pick a human, and the card
+    writes both the `assignee` prop every query filters on and the `assigned-to`
+    edge the map draws.
+
+  All of it is hidden on a `--no-write` server.
 - **Dashboard** — the `brain_query.py` views (agenda / open / today / tomorrow /
   week / closed / range) as cards, over the same store. It is also a **full
   editor**: create tasks, tick them off, change status/assignee/due, rename them,

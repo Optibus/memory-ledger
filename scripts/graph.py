@@ -21,6 +21,7 @@ import os
 import re
 import secrets
 import sys
+import unicodedata
 import urllib.request
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -514,13 +515,52 @@ def cmd_add_node(args):
         aid, err = _resolve_area(con, area)
         if err:
             out(err); return
-    res = api_create_node(con, args.type, args.title, args.body,
-                          _parse_props(args.props), args.status, args.due,
-                          getattr(args, "realm", None), args.id)
+    # A person goes through the identity guard, because this is the door the
+    # ingest skills come through — the same colleague arrives under a nickname one
+    # week and a full name the next, and two nodes is how their tasks get split.
+    # --force-new is the escape hatch for two people who really do share a name.
+    if args.type == "person" and not getattr(args, "force_new", False) and not args.id:
+        res = api_create_person(con, args.title, args.body,
+                                _parse_props(args.props),
+                                getattr(args, "realm", None) or "")
+    else:
+        res = api_create_node(con, args.type, args.title, args.body,
+                              _parse_props(args.props), args.status, args.due,
+                              getattr(args, "realm", None), args.id)
     if aid and res.get("ok"):
         api_link(con, res["node"]["id"], aid, AREA_REL)
         res["area"] = aid
     out(res)
+
+
+def cmd_people(args):
+    con = connect()
+    people = person_rows(con, include_superseded=getattr(args, "all", False))
+    out({"ok": True, "count": len(people), "people": [
+        {"id": d["id"], "title": d["title"], "realm": d.get("realm", ""),
+         "aliases": person_aliases(d)[1:], "edges": _person_degree(con, d["id"]),
+         "superseded_by": (d["props"] or {}).get("superseded_by", "")}
+        for d in people]})
+
+
+def cmd_who(args):
+    """Which person node does this spelling mean? The read side of the guard."""
+    out(resolve_person(connect(), args.name))
+
+
+def cmd_person_dupes(args):
+    con = connect()
+    groups = person_duplicates(con)
+    out({"ok": True, "groups": len(groups), "duplicates": groups,
+         "hint": "graph.py merge-person --into <canonical> --from <duplicate>"})
+
+
+def cmd_merge_person(args):
+    out(api_merge_person(connect(), args.into, args.from_id))
+
+
+def cmd_add_alias(args):
+    out(api_add_alias(connect(), args.id, args.alias))
 
 
 def cmd_update_node(args):
@@ -1387,6 +1427,312 @@ def cmd_suggest_links(args):
     con = connect()
     res = suggest_links(con, args.text, int(args.limit), args.exclude or "")
     out({"ok": True, "count": len(res), "text": args.text, "suggestions": res})
+
+
+# ---------------------------------------------------------------------------
+# person identity — one human, one node
+# ---------------------------------------------------------------------------
+# The same colleague arrives through many doors: a Slack display name, an email
+# local part, a first name in a meeting transcript, a surname in a Jira comment.
+# Left alone that produces "Isa", "Isadora" and "Isadora Martini" as three people,
+# which quietly splits their tasks three ways.
+#
+# Two tiers, because the cost of the two mistakes is not the same. Merging two
+# real people is much worse than leaving a duplicate: it silently reassigns work.
+# So CERTAIN is narrow enough to act on unattended, LIKELY only ever resolves when
+# exactly one candidate fits, and anything ambiguous is handed back for a human to
+# decide rather than guessed at.
+#
+# Nothing here rewrites a name that was already written down (§ the rename rule):
+# a merge leaves the duplicate node in place as a resolver pointing at the
+# canonical one, and props.assignee keeps whatever string it was given. Identity
+# is resolved when READ, so old captures stay honest about their wording.
+_NAME_NOISE = {"mr", "mrs", "ms", "dr", "prof", "sr", "jr", "the"}
+
+
+def norm_name(raw: str) -> str:
+    """Casefold, strip accents, drop punctuation, collapse whitespace.
+    'Isadora  MARTINI' / 'isadora martini' / 'Isadóra Martini' all agree."""
+    s = unicodedata.normalize("NFKD", (raw or "").strip())
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    s = re.sub(r"[^\w\s@.]+", " ", s.lower())
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def name_parts(raw: str) -> list:
+    """A name reduced to comparable parts. An email becomes its local part split
+    on the usual separators, so isadora.martini@optibus.com -> [isadora, martini]."""
+    s = norm_name(raw)
+    if "@" in s:
+        s = s.split("@", 1)[0]
+    parts = [p for p in re.split(r"[\s._-]+", s) if len(p) >= 2 and p not in _NAME_NOISE]
+    return parts
+
+
+def name_match(a: str, b: str) -> str:
+    """How confidently two names denote one person: 'certain' | 'likely' | ''.
+
+    The load-bearing rule is the last one: two names that BOTH carry a surname and
+    disagree on it are different people, however much the first name matches.
+    Without it 'Gabriel Nori' and 'Gabriel Santos' collapse into one.
+    """
+    pa, pb = name_parts(a), name_parts(b)
+    if not pa or not pb:
+        return ""
+    if pa == pb:
+        return "certain"
+    sa, sb = set(pa), set(pb)
+    # one side is a bare single name — "Isa", or "Martini"
+    if len(pa) == 1 or len(pb) == 1:
+        short = (pa if len(pa) == 1 else pb)[0]
+        long_ = pb if len(pa) == 1 else pa
+        if short in set(long_):
+            return "likely"                      # a first name or a surname on its own
+        # a nickname clipped off the front: isa -> isadora, gab -> gabriel
+        if len(short) >= 3 and any(p.startswith(short) for p in long_):
+            return "likely"
+        return ""
+    # both sides carry at least two parts
+    if sa == sb:
+        return "certain"                         # "Martini, Isadora" — same parts, reordered
+    if pa[0] == pb[0] and pa[-1] == pb[-1]:
+        return "certain"                         # middle name added or dropped
+    # Deliberately NOT matching on a shared surname plus a matching first initial.
+    # It reads as a rule for "I. Martini", but that already reduces to a single
+    # token and is caught above; the only thing it actually catches is
+    # "Gabriel Nori" vs "Gabriela Nori" — two different people whose work would
+    # then be silently pooled. A duplicate node is much cheaper than that.
+    return ""
+
+
+def person_aliases(d: dict) -> list:
+    """Every spelling a person node answers to: pinned aliases plus its title.
+    props.aliases is the human's override for what the heuristic cannot infer —
+    a nickname sharing no letters with the name, a maiden name, a handle."""
+    raw = (d.get("props") or {}).get("aliases") or []
+    if isinstance(raw, str):
+        raw = [p for p in re.split(r"\s*[,;]\s*", raw) if p.strip()]
+    names = [d.get("title") or ""]
+    names += [str(x) for x in raw if str(x).strip()]
+    email = (d.get("props") or {}).get("email") or ""
+    if email:
+        names.append(str(email))
+    return [n for n in names if n.strip()]
+
+
+def person_rows(con, include_superseded=False) -> list:
+    """Every person node, newest write last. Superseded nodes are resolvers left
+    behind by a merge — real history, but not people to offer in a picker."""
+    rows = con.execute(
+        "SELECT * FROM nodes WHERE type='person' ORDER BY created"
+    ).fetchall()
+    out_ = []
+    for r in rows:
+        d = _node_dict(r)
+        if not include_superseded and (d["props"] or {}).get("superseded_by"):
+            continue
+        out_.append(d)
+    return out_
+
+
+def resolve_person(con, name: str) -> dict:
+    """Find the ONE person node `name` denotes.
+
+    Returns {"ok": True, "id": ...} on a confident single answer;
+    {"ok": False, "candidates": [...]} when the name is ambiguous or unknown, so
+    the caller can ask instead of guessing. A merged-away name still resolves,
+    via the alias the merge recorded on the canonical node.
+    """
+    if not (name or "").strip():
+        return {"ok": False, "error": "missing name", "candidates": []}
+    certain, likely = [], []
+    for d in person_rows(con):
+        best = ""
+        for alias in person_aliases(d):
+            m = name_match(name, alias)
+            if m == "certain":
+                best = "certain"
+                break
+            if m == "likely":
+                best = best or "likely"
+        if best == "certain":
+            certain.append(d)
+        elif best == "likely":
+            likely.append(d)
+    pool = certain or likely
+    brief = [{"id": d["id"], "title": d["title"],
+              "aliases": person_aliases(d)[1:]} for d in pool]
+    if len(pool) == 1:
+        return {"ok": True, "id": pool[0]["id"], "title": pool[0]["title"],
+                "confidence": "certain" if certain else "likely"}
+    if not pool:
+        return {"ok": False, "error": f"no person matches {name!r}", "candidates": []}
+    return {"ok": False, "error": f"{name!r} is ambiguous — {len(pool)} people match",
+            "candidates": brief}
+
+
+def person_duplicates(con) -> list:
+    """Groups of person nodes that look like one human. Read-only: this reports,
+    it never merges, because the ambiguous cases need a human."""
+    people = person_rows(con)
+    seen, groups = set(), []
+    for i, a in enumerate(people):
+        if a["id"] in seen:
+            continue
+        group = [a]
+        for b in people[i + 1:]:
+            if b["id"] in seen:
+                continue
+            if _best_match(a, b):
+                group.append(b)
+        if len(group) > 1:
+            for g in group:
+                seen.add(g["id"])
+            # the most connected node is the best canonical: it carries the history,
+            # so merging into it moves the fewest edges
+            ranked = sorted(group, key=lambda d: -_person_degree(con, d["id"]))
+            keep = ranked[0]
+            groups.append({
+                "canonical": {"id": keep["id"], "title": keep["title"],
+                              "edges": _person_degree(con, keep["id"])},
+                # scored against the CANONICAL, not against whichever node happened
+                # to anchor the scan — ranking reorders the group, so anything else
+                # mislabels the pair that is actually going to be merged
+                "duplicates": [{"id": d["id"], "title": d["title"],
+                                "edges": _person_degree(con, d["id"]),
+                                "confidence": _best_match(keep, d) or "likely"}
+                               for d in ranked[1:]],
+            })
+    return groups
+
+
+def _best_match(a: dict, b: dict) -> str:
+    """Strongest verdict over every pair of spellings the two nodes answer to."""
+    best = ""
+    for na in person_aliases(a):
+        for nb in person_aliases(b):
+            m = name_match(na, nb)
+            if m == "certain":
+                return "certain"
+            if m == "likely":
+                best = "likely"
+    return best
+
+
+def _person_degree(con, nid: str) -> int:
+    row = con.execute(
+        "SELECT (SELECT COUNT(*) FROM edges WHERE src=?) +"
+        "       (SELECT COUNT(*) FROM edges WHERE dst=?) AS n", (nid, nid)).fetchone()
+    return (dict(row) or {}).get("n", 0) or 0
+
+
+def api_add_alias(con, person_id: str, alias: str) -> dict:
+    """Pin a spelling onto a person, for what the heuristic cannot infer."""
+    row = con.execute("SELECT * FROM nodes WHERE id=?", (person_id,)).fetchone()
+    if not row:
+        return {"ok": False, "error": f"no node {person_id}"}
+    d = _node_dict(row)
+    alias = (alias or "").strip()
+    if not alias:
+        return {"ok": False, "error": "missing alias"}
+    have = (d["props"] or {}).get("aliases") or []
+    if isinstance(have, str):
+        have = [p for p in re.split(r"\s*[,;]\s*", have) if p.strip()]
+    if norm_name(alias) == norm_name(d["title"]) or \
+       any(norm_name(alias) == norm_name(x) for x in have):
+        return {"ok": True, "node": d, "added": False}   # already answers to it
+    res = api_update_node(con, person_id, props_patch={"aliases": have + [alias]})
+    if res.get("ok"):
+        res["added"] = True
+    return res
+
+
+def api_merge_person(con, canonical_id: str, duplicate_id: str) -> dict:
+    """Fold a duplicate person into the canonical one, without losing the wording.
+
+    Edges move to the canonical node, the duplicate's name is pinned there as an
+    alias, and the duplicate stays in the graph as a RESOLVER: superseded_by plus
+    an edge pointing at its replacement. Nothing is deleted and no already-written
+    name is rewritten, so an old capture that said "Isa" still says "Isa" and still
+    resolves to the right human.
+    """
+    if canonical_id == duplicate_id:
+        return {"ok": False, "error": "cannot merge a node into itself"}
+    keep = con.execute("SELECT * FROM nodes WHERE id=?", (canonical_id,)).fetchone()
+    drop = con.execute("SELECT * FROM nodes WHERE id=?", (duplicate_id,)).fetchone()
+    if not keep:
+        return {"ok": False, "error": f"no node {canonical_id}"}
+    if not drop:
+        return {"ok": False, "error": f"no node {duplicate_id}"}
+    keep_d, drop_d = _node_dict(keep), _node_dict(drop)
+    for d in (keep_d, drop_d):
+        if d["type"] != "person":
+            return {"ok": False, "error": f"{d['id']} is a {d['type']}, not a person"}
+    if (drop_d["props"] or {}).get("superseded_by"):
+        return {"ok": False, "error": f"{duplicate_id} is already merged away"}
+
+    moved, dropped = 0, 0
+    for e in con.execute("SELECT src,dst,rel FROM edges WHERE src=? OR dst=?",
+                         (duplicate_id, duplicate_id)).fetchall():
+        src, dst, rel = e["src"], e["dst"], e["rel"]
+        nsrc = canonical_id if src == duplicate_id else src
+        ndst = canonical_id if dst == duplicate_id else dst
+        con.execute("DELETE FROM edges WHERE src=? AND dst=? AND rel=?", (src, dst, rel))
+        if nsrc == ndst:
+            dropped += 1            # the merge made this edge a self-loop
+            continue
+        try:
+            con.execute("INSERT INTO edges(src,dst,rel,props,created) VALUES(?,?,?,?,?)",
+                        (nsrc, ndst, rel, "{}", now()))
+            moved += 1
+        except Exception:
+            dropped += 1            # canonical already had it — UNIQUE(src,dst,rel)
+    con.commit()
+
+    api_add_alias(con, canonical_id, drop_d["title"])
+    for extra in person_aliases(drop_d)[1:]:
+        api_add_alias(con, canonical_id, extra)
+    api_update_node(con, duplicate_id,
+                    props_patch={"superseded_by": canonical_id,
+                                 "superseded_at": now()})
+    api_link(con, duplicate_id, canonical_id, "relates-to")
+    _after_write(con, nodes=[canonical_id, duplicate_id])
+    row = con.execute("SELECT * FROM nodes WHERE id=?", (canonical_id,)).fetchone()
+    return {"ok": True, "canonical": _node_dict(row),
+            "merged": duplicate_id, "edges_moved": moved,
+            "edges_deduped": dropped}
+
+
+def api_create_person(con, title: str, body="", props=None, realm="") -> dict:
+    """Create a person, unless one already exists under any spelling.
+
+    The guard is the whole point: it returns the EXISTING node instead of a second
+    one, so the graph converges on one node per human even when the name arrives
+    differently each time. An ambiguous name is refused with its candidates rather
+    than resolved by coin flip.
+    """
+    title = (title or "").strip()
+    if not title:
+        return {"ok": False, "error": "missing title"}
+    hit = resolve_person(con, title)
+    if hit.get("ok"):
+        row = con.execute("SELECT * FROM nodes WHERE id=?", (hit["id"],)).fetchone()
+        res = {"ok": True, "node": _node_dict(row), "created": False,
+               "matched": hit.get("confidence")}
+        # the incoming spelling is new information — record it, do not overwrite
+        if norm_name(title) != norm_name(res["node"]["title"]):
+            api_add_alias(con, hit["id"], title)
+            row = con.execute("SELECT * FROM nodes WHERE id=?", (hit["id"],)).fetchone()
+            res["node"] = _node_dict(row)
+            res["alias_added"] = title
+        return res
+    if hit.get("candidates"):
+        return {"ok": False, "error": hit["error"], "candidates": hit["candidates"],
+                "hint": "merge them or pass an explicit alias"}
+    res = api_create_node(con, "person", title, body, props or {}, realm=realm)
+    if res.get("ok"):
+        res["created"] = True
+    return res
 
 
 # ---------------------------------------------------------------------------
@@ -2486,6 +2832,29 @@ def build_parser():
     a.add_argument("--realm", help="section: optibus | personal | ... (default $SECOND_BRAIN_REALM or optibus)")
     a.add_argument("--area", help="file under a domain area (hub_quote | quote | hub_health ...) "
                                  "— adds the part-of edge; errors if the area does not exist")
+    a.add_argument("--force-new", action="store_true",
+                   help="person only: skip the identity guard and create a second "
+                        "node even if the name matches an existing person")
+
+    a = sub.add_parser("people"); a.set_defaults(func=cmd_people)
+    a.add_argument("--all", action="store_true",
+                   help="include nodes merged away (resolvers), normally hidden")
+
+    a = sub.add_parser("who"); a.set_defaults(func=cmd_who)
+    a.add_argument("name", help="any spelling — nickname, surname, email")
+
+    a = sub.add_parser("person-dupes").set_defaults(func=cmd_person_dupes)
+
+    a = sub.add_parser("merge-person"); a.set_defaults(func=cmd_merge_person)
+    a.add_argument("--into", required=True, metavar="ID",
+                   help="the person node to KEEP (canonical)")
+    a.add_argument("--from", required=True, dest="from_id", metavar="ID",
+                   help="the duplicate to fold in — kept as a resolver, never deleted")
+
+    a = sub.add_parser("add-alias"); a.set_defaults(func=cmd_add_alias)
+    a.add_argument("--id", required=True)
+    a.add_argument("--alias", required=True,
+                   help="a spelling the heuristic cannot infer (a nickname, a handle)")
 
     a = sub.add_parser("flush").set_defaults(func=cmd_flush)
     sub.add_parser("neo4j-status").set_defaults(func=cmd_neo4j_status)

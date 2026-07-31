@@ -653,21 +653,42 @@ function renderDetail(){
     <div class="kv"><b>connections</b>: ${out.length+inc.length}</div>
     ${props}
     <div class="dact" id="mapact"></div>
-    ${n.body?`<div class="body">${esc(n.body).slice(0,600)}</div>`:''}
+    ${n.body?`<div class="body" id="mapbody">${esc(n.body).slice(0,600)}</div>`:''}
     ${inc.length?`<h5>← incoming (${inc.length})</h5>${inc.join('')}`:''}
     ${out.length?`<h5>outgoing → (${out.length})</h5>${out.join('')}`:''}`;
   el.querySelectorAll('.rel').forEach(r=>r.onclick=()=>{ focusNode(r.dataset.id); });
-  completeAction(n, el.querySelector('#mapact'));
+  cardActions(n, el.querySelector('#mapact'));
 }
+// Everything the card can DO lives in this one bar, and the bar only exists inside
+// the detail panel — there is no action on the canvas itself, where a stray click
+// is a pan or a select.
+function cardActions(n, bar){
+  if(!bar) return;
+  if(!SRVMETA.writable){
+    // Say which kind of no it is: a read-only server is a choice, a failed /api/meta
+    // is a fault that the next poll may clear.
+    bar.appendChild(elWith("span","dnote",
+      metaFailed ? "writes unavailable" : "read-only server (--no-write)"));
+    return;
+  }
+  completeAction(n, bar);
+  const edit=elWith("button","dbtn","✎ Edit");
+  edit.onclick=()=>openEditor(n, bar);
+  bar.appendChild(edit);
+}
+// Title, body and realm are meaningful on ANY node. Due, priority and assignee are
+// only meaningful on something someone has to DO — a person has no due date, and a
+// priority on one would just be a stray prop that nothing reads.
+const SCHEDULABLE = n => COMPLETABLE.has(n.type);
 // Complete straight from the map card, so finishing something never means leaving
 // the graph for the Dashboard. Same POST the dashboard uses — archive, not delete
 // (CONVENTIONS §3): plain SQL, no model in the loop.
+// Callers reach this only past cardActions' writable check, so there is no
+// read-only branch here.
 function completeAction(n, bar){
   if(!bar) return;
   if(!COMPLETABLE.has(n.type)) return;
   if(DONE.has(n.status||"")){ bar.appendChild(elWith("span","dnote","✓ archived")); return; }
-  if(!SRVMETA.writable){ bar.appendChild(elWith("span","dnote",
-    metaFailed ? "writes unavailable" : "read-only server (--no-write)")); return; }
   const note=elWith("span","dnote","");
   const ok=elWith("button","dbtn ok","✓ Complete");
   ok.onclick=async()=>{
@@ -685,6 +706,138 @@ function completeAction(n, bar){
 }
 function elWith(tag,cls,txt){ const e=document.createElement(tag);
   if(cls)e.className=cls; if(txt!=null)e.textContent=txt; return e; }
+
+// ---- the assignee roster ----
+// Assignee is a POINTER to a person node, never a typed name — typing is how the
+// same colleague ends up in the graph three times. Re-fetched each time an editor
+// opens, so a person added a minute ago is offered without a reload; the list is
+// already deduplicated server-side (one entry per human, merged-away nodes hidden).
+let PEOPLE=[];
+async function loadPeople(){
+  try{
+    const r=await fetch('/api/people'); const d=await r.json();
+    if(d.ok) PEOPLE=d.people||[];
+  }catch(e){}
+  return PEOPLE;
+}
+
+// ---- edit the selected node, in place in the card ----
+// One save = one POST, so it is one `updated` bump and one version-token move (the
+// poller needs that to notice, see /api/graph's token). Assignee is a second POST
+// only when it actually changed, because it also rewires an edge.
+function openEditor(n, bar){
+  const form=elWith("div","nt");
+  const mkf=(tag,cls)=>{ const e=document.createElement(tag); if(cls)e.className=cls; return e; };
+  const field=(label,input)=>{ const w=mkf("div");
+    w.appendChild(elWith("span","ntl",label)); w.appendChild(input); return w; };
+
+  const title=mkf("input"); title.type="text"; title.value=n.title||"";
+  form.appendChild(field("title",title));
+
+  const grid=mkf("div","ntgrid");
+  const sched=SCHEDULABLE(n);
+
+  let pri=null, due=null, asg=null;
+  if(sched){
+    pri=mkf("select");
+    ["","P1","P2","P3","P4"].forEach(p=>{ const o=elWith("option",null,p||"—");
+      o.value=p; if((n.props||{}).priority===p) o.selected=true; pri.appendChild(o); });
+    grid.appendChild(field("priority",pri));
+
+    due=mkf("input"); due.type="date";
+    due.value=(n.due||"").slice(0,10);      // the store may carry a time too
+    grid.appendChild(field("due",due));
+  }
+
+  const rlm=mkf("select");
+  // realms are an OPEN vocabulary read from the brain; the node's current realm is
+  // included even if it is not in the server's list, so editing never silently moves it
+  const realms=Array.from(new Set([...(SRVMETA.realms?Object.keys(SRVMETA.realms):[]),
+                                   ...(n.realm?[n.realm]:[]),
+                                   ...(SRVMETA.default_realm?[SRVMETA.default_realm]:[])]))
+                    .filter(Boolean).sort();
+  realms.forEach(r=>{ const o=elWith("option",null,r); o.value=r;
+    if(r===(n.realm||"")) o.selected=true; rlm.appendChild(o); });
+  grid.appendChild(field("realm",rlm));
+  form.appendChild(grid);
+
+  if(sched){
+    asg=mkf("select");
+    const rebuildAsg=()=>{
+      asg.innerHTML="";
+      const none=elWith("option",null,"— unassigned —"); none.value=""; asg.appendChild(none);
+      const cur=((n.props||{}).assignee||"").trim().toLowerCase();
+      let matched=false;
+      PEOPLE.forEach(p=>{
+        const o=elWith("option",null,p.title); o.value=p.id;
+        if(p.aliases&&p.aliases.length) o.title="also: "+p.aliases.join(", ");
+        // the stored assignee is a NAME; light up the person whose node it denotes,
+        // matching their aliases too so a task captured as "Isa" shows Isadora
+        const names=[p.title,...(p.aliases||[])].map(s=>String(s).toLowerCase());
+        if(cur && names.includes(cur)){ o.selected=true; matched=true; }
+        asg.appendChild(o);
+      });
+      // an assignee string that matches nobody is real data — show it rather than
+      // silently rendering the task as unassigned
+      if(cur && !matched){
+        const o=elWith("option",null,(n.props||{}).assignee+"  (not a person node)");
+        o.value="__stale__"; o.selected=true; asg.appendChild(o);
+      }
+    };
+    rebuildAsg();
+    const aw=field("assignee",asg); aw.style.marginTop="8px"; form.appendChild(aw);
+    loadPeople().then(rebuildAsg);      // refresh in case someone was just added
+  }
+
+  const body=mkf("textarea"); body.value=n.body||"";
+  const bw=field("body",body); bw.style.marginTop="8px"; form.appendChild(bw);
+
+  const foot=elWith("div","ntfoot");
+  const save=elWith("button","dbtn pri","Save");
+  const cancel=elWith("button","dbtn","Cancel");
+  const note=elWith("span","dnote","");
+  foot.appendChild(save); foot.appendChild(cancel);
+  foot.appendChild(elWith("span","sp")); foot.appendChild(note);
+  form.appendChild(foot);
+
+  // the body is in the textarea now — the read-only copy underneath would just be
+  // the same text twice, and stale the moment you type
+  const roBody=document.getElementById('mapbody');
+  if(roBody) roBody.style.display='none';
+
+  cancel.onclick=()=>renderDetail();
+  save.onclick=async()=>{
+    if(!title.value.trim()){ note.className="dnote err";
+      note.textContent="title cannot be empty"; return; }
+    save.disabled=true; cancel.disabled=true;
+    note.className="dnote"; note.textContent="saving…";
+    const payload={id:n.id, title:title.value.trim(), body:body.value, realm:rlm.value};
+    if(sched){ payload.priority=pri.value; payload.due=due.value; }
+    let r=await post("/api/update-node",payload);
+    // assignee is a separate write because it rewires an edge as well as a prop;
+    // "__stale__" means "leave the unrecognised string alone"
+    if(r.ok && asg && asg.value!=="__stale__"){
+      const before=PEOPLE.find(p=>{
+        const cur=((n.props||{}).assignee||"").trim().toLowerCase();
+        return cur && [p.title,...(p.aliases||[])].map(s=>String(s).toLowerCase()).includes(cur);
+      });
+      if((before?before.id:"")!==asg.value)
+        r=await post("/api/assign",{id:n.id, person_id:asg.value});
+    }
+    if(r.ok){ await load(); renderDetail(); }
+    else { save.disabled=false; cancel.disabled=false;
+           note.className="dnote err"; note.textContent=r.error||"failed"; }
+  };
+  bar.replaceWith(form);
+  title.focus(); title.select();
+}
+async function post(url,body){
+  try{
+    const res=await fetch(url,{method:"POST",
+      headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+    return await res.json();
+  }catch(e){ return {ok:false,error:String(e)}; }
+}
 function focusNode(id){ const n=byId.get(id); if(!n)return;
   select(id); view.tx=W/2-n.x*view.scale; view.ty=H/2-n.y*view.scale; }
 function esc(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }

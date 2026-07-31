@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -341,6 +342,19 @@ class Handler(BaseHTTPRequestHandler):
                 nid = (parse_qs(parsed.query).get("id") or [""])[0]
                 self._send(200, json.dumps(brain_query.node_detail(nid)),
                            "application/json")
+            elif path == "/api/people":  # person nodes, for the assignee dropdown
+                con = graph.connect()
+                people = graph.person_rows(con)
+                self._send(200, json.dumps({"ok": True, "people": [
+                    {"id": d["id"], "title": d["title"],
+                     "aliases": graph.person_aliases(d)[1:],
+                     "realm": d.get("realm", "")}
+                    for d in sorted(people, key=lambda x: x["title"].lower())]}),
+                    "application/json")
+            elif path == "/api/person-duplicates":   # the review list, read-only
+                self._send(200, json.dumps(
+                    {"ok": True, "duplicates": graph.person_duplicates(graph.connect())}),
+                    "application/json")
             elif path == "/api/kinds":   # props.kind — open vocabulary, same as realms
                 self._send(200, json.dumps({
                     "ok": True, "kinds": brain_query.kinds("auto"),
@@ -447,6 +461,8 @@ class Handler(BaseHTTPRequestHandler):
             "/api/complete": self._complete,
             "/api/set-status": self._set_status,
             "/api/set-assignee": self._set_assignee,
+            "/api/assign": self._assign,
+            "/api/merge-person": self._merge_person,
             "/api/update-node": self._update_node,
             "/api/link": self._link,
             "/api/unlink": self._unlink,
@@ -562,6 +578,10 @@ class Handler(BaseHTTPRequestHandler):
             graph.connect(), nid,
             props_patch={"assignee": self._str(data, "assignee", 60)})
 
+    # The priorities the UI offers. Open-ended in the store (it is just a prop), so
+    # a value already in the graph is left alone — this only gates what the UI writes.
+    PRIORITIES = ("", "P1", "P2", "P3", "P4")
+
     def _update_node(self, data):
         nid = self._str(data, "id", 200)
         if not nid:
@@ -575,11 +595,68 @@ class Handler(BaseHTTPRequestHandler):
         if isinstance(data.get("body"), str):
             fields["body"] = self._str(data, "body")
         if isinstance(data.get("priority"), str):
-            patch["priority"] = self._str(data, "priority", 20)
+            pri = self._str(data, "priority", 20)
+            if pri not in self.PRIORITIES:
+                return {"ok": False,
+                        "error": f"priority must be one of {', '.join(p or '(none)' for p in self.PRIORITIES)}"}
+            patch["priority"] = pri
+        # due and realm ride along so one edit in the card is one write — one
+        # `updated` bump, one neo4j sync, one version-token move for the poller.
+        if isinstance(data.get("due"), str):
+            due = self._str(data, "due", 40)
+            if due and not re.match(r"^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2})?", due):
+                return {"ok": False, "error": "due must be YYYY-MM-DD or YYYY-MM-DD HH:MM"}
+            fields["due"] = due
+        if isinstance(data.get("realm"), str):
+            realm = self._str(data, "realm", 40)
+            if realm:
+                fields["realm"] = realm      # "" would mean "keep", not "clear"
         if not fields and not patch:
             return {"ok": False, "error": "nothing to update"}
         return graph.api_update_node(graph.connect(), nid,
                                      props_patch=patch or None, **fields)
+
+    def _assign(self, data):
+        """Assign to an existing PERSON NODE, never a free-typed name.
+
+        Writes both halves of the truth: props.assignee (the string every query
+        path already filters on) and the structural assigned-to edge, so the map
+        shows the link. person_id="" un-assigns and drops the edge.
+        """
+        nid = self._str(data, "id", 200)
+        if not nid:
+            return {"ok": False, "error": "missing id"}
+        con = graph.connect()
+        prev = [e["dst"] for e in con.execute(
+            "SELECT dst FROM edges WHERE src=? AND rel='assigned-to'", (nid,)).fetchall()]
+        pid = self._str(data, "person_id", 200)
+        if not pid:
+            for old in prev:
+                graph.api_unlink(con, nid, old, "assigned-to")
+            return graph.api_update_node(con, nid, props_patch={"assignee": ""})
+        row = con.execute("SELECT * FROM nodes WHERE id=?", (pid,)).fetchone()
+        if not row:
+            return {"ok": False, "error": f"no node {pid}"}
+        person = graph._node_dict(row)
+        if person["type"] != "person":
+            return {"ok": False,
+                    "error": f"{pid} is a {person['type']}, not a person"}
+        if (person["props"] or {}).get("superseded_by"):
+            return {"ok": False, "error": f"{pid} was merged into "
+                    f"{person['props']['superseded_by']}; assign to that node"}
+        for old in prev:
+            if old != pid:
+                graph.api_unlink(con, nid, old, "assigned-to")
+        graph.api_link(con, nid, pid, "assigned-to")
+        # the person's own title is the token: norm_assignee lowercases it, so the
+        # dashboard's chips and the "mine" filter keep working unchanged
+        return graph.api_update_node(con, nid,
+                                     props_patch={"assignee": person["title"]})
+
+    def _merge_person(self, data):
+        return graph.api_merge_person(graph.connect(),
+                                      self._str(data, "canonical", 200),
+                                      self._str(data, "duplicate", 200))
 
     def _edge_args(self, data):
         src, dst = self._str(data, "src", 200), self._str(data, "dst", 200)
