@@ -1,0 +1,45 @@
+{
+  "_readme": [
+    "Cases for scripts/eval_cues.py. Copy this to ~/.second_brain/eval_cases.json",
+    "and replace with your own — the real file stays out of the repo because it",
+    "names your rules and skills.",
+    "",
+    "Each top-level key is a named SET. Keep at least one you never tune cues",
+    "against, and quote that one: a set you can see while editing cues will score",
+    "near 100% and tell you nothing about phrasings you have not thought of.",
+    "",
+    "'query' is what a person would plausibly type. 'expect' is the node id that",
+    "must come back — copy it from `graph.py list --type rule`, since ids are",
+    "truncated to 48 characters and are easy to mistype (the runner checks)."
+  ],
+
+  "tuned": {
+    "rules": [
+      { "query": "this is a two minute job, I will do it Friday",
+        "expect": "rule_user_urgency-on-quick-tasks" },
+      { "query": "log that I am blocked waiting on someone",
+        "expect": "rule_user_verify-before-waiting" }
+    ],
+    "skills": [
+      { "query": "what should I work on today",
+        "expect": "skill_plan-my-day" },
+      { "query": "check my email",
+        "expect": "skill_read-email" }
+    ]
+  },
+
+  "fresh": {
+    "rules": [
+      { "query": "trivial change, I'll batch it with the rest on Monday",
+        "expect": "rule_user_urgency-on-quick-tasks" },
+      { "query": "mark this blocked, she owes me an answer",
+        "expect": "rule_user_verify-before-waiting" }
+    ],
+    "skills": [
+      { "query": "organise my morning",
+        "expect": "skill_plan-my-day" },
+      { "query": "scan my mailbox for anything important",
+        "expect": "skill_read-email" }
+    ]
+  }
+}

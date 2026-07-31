@@ -53,6 +53,45 @@ Other consequences worth knowing:
 - Deleting a node cascades to its edges (`ON DELETE CASCADE`) and to the FTS row.
 - The index is ~21% of the database file. That is the cost of instant search.
 
+### Measuring whether cues work
+
+Cue words are easy to tune into a number that means nothing, so there is a harness:
+
+```bash
+python3 scripts/eval_cues.py                 # every set
+python3 scripts/eval_cues.py --set fresh     # one set
+python3 scripts/eval_cues.py --min-hit3 80   # exit 1 below the threshold
+```
+
+Each case is a realistic phrasing plus the rule or skill that must come back. It
+reports **hit@1** and **hit@3**; hit@3 is the one to optimise, because several
+rules are returned and the model reads them all.
+
+The cases are **not in this repo** — they name a person's own rules and skills.
+They live at `~/.second_brain/eval_cases.json` (override with `--cases` or
+`$SECOND_BRAIN_EVAL_CASES`); `eval-cases.example.json` documents the format.
+
+**Keep a set you never tune against, and quote that one.** Measured on one real
+brain, 2026-07-31, over three sets of ~19 rule and ~24 skill cases:
+
+| | rules hit@1 | rules hit@3 | skills hit@1 | skills hit@3 |
+|---|---|---|---|---|
+| right after cues were first indexed | 68% | 89% | 75% | 95% |
+| after two rounds of cue expansion, on the **tuned** sets | 89% | 100% | 79% | 100% |
+| the same cues, on a **fresh** set written afterwards | 31% | 47% | 66% | 83% |
+
+That last row is the honest one. Cue expansion largely memorises the phrasings you
+thought of. It is still worth doing — synonym *families* were what moved the fresh
+number at all — but the ceiling is real.
+
+Skills generalise far better than rules, and the reason is structural: a skill
+fires on a **request**, which has a predictable verb ("remind me", "check my
+email"), so enumerating the verb family covers most of the space. A rule fires on a
+**situation** in open-ended prose ("six calls today, zero breaks" should reach the
+overload rule). There is no verb family to enumerate, and lexical FTS cannot bridge
+it. For a rule that must never be missed, `--non-negotiable` is the reliable path;
+it costs tokens on every request, so it stays rare.
+
 ## Term construction
 
 Both read paths build prefix queries, but differently:

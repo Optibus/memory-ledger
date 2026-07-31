@@ -10,3 +10,10 @@ __pycache__/
 # Generated deck: a 6 MB self-contained HTML + ~16 MB of screenshots. Rebuild it
 # with presentation/build/{capture,build,verify}.js instead of committing binaries.
 presentation/
+
+# Cue-matching eval cases (scripts/eval_cues.py). They name a person's own rules
+# and skills, so they are personal data. The real file lives at
+# ~/.second_brain/eval_cases.json; this covers an in-repo copy too.
+# eval-cases.example.json IS committed — it documents the format.
+eval-cases.json
+eval_cases.json
