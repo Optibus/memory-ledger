@@ -16,34 +16,61 @@
   #canvas.grabbing{cursor:grabbing}
   .panel{position:fixed;background:var(--panel);border:1px solid var(--border);
     border-radius:10px;backdrop-filter:blur(8px);box-shadow:0 6px 24px #0008}
-  #top{top:12px;left:12px;right:12px;display:flex;gap:10px;align-items:center;
-    padding:8px 10px}
+  #top{top:12px;left:60px;right:12px;display:flex;flex-wrap:wrap;gap:8px;
+    align-items:center;padding:8px 10px;z-index:15}
   #top .title{font-weight:600;letter-spacing:.2px;white-space:nowrap}
   #top .title b{color:var(--accent)}
+  /* the clear button lives INSIDE the field, so the input keeps its full width */
+  .searchwrap{position:relative;flex:1;min-width:160px;display:flex}
   #search{flex:1;min-width:80px;background:#0d1117;border:1px solid var(--border);
-    color:var(--fg);border-radius:7px;padding:6px 10px;outline:none}
+    color:var(--fg);border-radius:7px;padding:6px 26px 6px 10px;outline:none;
+    font-family:inherit;font-size:13px}
   #search:focus{border-color:var(--accent)}
+  #searchx{position:absolute;right:2px;top:0;bottom:0;width:24px;border:0;
+    background:none;color:var(--muted);cursor:pointer;font-size:14px;line-height:1;
+    display:none}
+  .searchwrap.has #searchx{display:block}
+  #searchx:hover{color:var(--fg)}
   #stats{color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
   .live{display:inline-flex;align-items:center;gap:5px;color:var(--muted)}
   .dot{width:8px;height:8px;border-radius:50%;background:#3fb950;
     box-shadow:0 0 6px #3fb950;animation:pulse 2s infinite}
   @keyframes pulse{50%{opacity:.35}}
-  #legend{top:64px;left:12px;max-width:190px;padding:10px;max-height:70vh;overflow:auto}
-  #legend h4{margin:0 0 8px;font-size:11px;text-transform:uppercase;
-    letter-spacing:.6px;color:var(--muted)}
-  .chip{display:flex;align-items:center;gap:7px;padding:3px 5px;border-radius:6px;
+  /* ---- filter dropdowns (one per facet, multi-select) ---- */
+  #facets{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .dd{position:relative}
+  .dd>.ddb{display:flex;align-items:center;gap:6px;background:#0d1117;
+    border:1px solid var(--border);color:var(--fg);border-radius:7px;
+    padding:6px 9px;font:inherit;font-size:12.5px;cursor:pointer;white-space:nowrap}
+  .dd>.ddb:hover{border-color:var(--accent)}
+  .dd.on>.ddb{border-color:var(--accent)}
+  .ddb .ddn{color:var(--muted);font-variant-numeric:tabular-nums}
+  .dd.on .ddb .ddn{color:var(--accent)}
+  .ddb .cv{font-size:9px;color:var(--muted)}
+  .ddm{display:none;position:absolute;top:calc(100% + 5px);left:0;min-width:216px;
+    max-width:290px;background:var(--panel);border:1px solid var(--border);
+    border-radius:9px;backdrop-filter:blur(8px);box-shadow:0 8px 28px #000a;
+    padding:7px;z-index:30}
+  .dd.open .ddm{display:block}
+  .ddhead{display:flex;align-items:center;gap:6px;padding:2px 4px 7px;
+    border-bottom:1px solid var(--border);margin-bottom:5px}
+  .ddhead .t{font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;
+    color:var(--muted);flex:1}
+  .ddhead button{background:#0d1117;border:1px solid var(--border);color:var(--muted);
+    border-radius:6px;padding:2px 8px;font:inherit;font-size:11px;cursor:pointer}
+  .ddhead button:hover{border-color:var(--accent);color:var(--fg)}
+  .ddopts{max-height:min(52vh,340px);overflow:auto}
+  .opt{display:flex;align-items:center;gap:7px;padding:3px 5px;border-radius:6px;
     cursor:pointer;user-select:none}
-  .chip:hover{background:#ffffff10}
-  .chip.off{opacity:.35}
-  .chip .sw{width:11px;height:11px;border-radius:3px;flex:none}
-  .chip .ct{margin-left:auto;color:var(--muted);font-variant-numeric:tabular-nums}
-  #legend .toggle{margin-top:8px;padding-top:8px;border-top:1px solid var(--border)}
-  #legend h4.sep{margin-top:10px;padding-top:9px;border-top:1px solid var(--border)}
-  #legend h4 .all{float:right;text-transform:none;letter-spacing:0;font-weight:400;
-    color:var(--muted);cursor:pointer;font-size:10px}
-  #legend h4 .all:hover{color:var(--fg)}
-  #legend .fnote{color:var(--muted);font-size:11px;line-height:1.35;padding:2px 5px}
-  #legend .fnote code{color:var(--fg);font-size:10.5px}
+  .opt:hover{background:#ffffff10}
+  .opt input{margin:0;accent-color:var(--accent)}
+  .opt .sw{width:11px;height:11px;border-radius:3px;flex:none}
+  .opt .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .opt .ct{margin-left:auto;color:var(--muted);font-variant-numeric:tabular-nums;
+    padding-left:6px}
+  .opt.wide{align-items:flex-start}
+  .fnote{color:var(--muted);font-size:11px;line-height:1.35;padding:3px 5px}
+  .fnote code{color:var(--fg);font-size:10.5px}
   #detail{top:64px;right:12px;width:300px;max-height:78vh;overflow:auto;padding:14px;
     display:none}
   #detail.show{display:block}
@@ -64,18 +91,44 @@
   #hint{bottom:12px;left:12px;color:var(--muted);padding:6px 10px;font-size:11px}
   #err{bottom:12px;right:12px;color:#f85149;padding:6px 10px;display:none}
 
-  /* ---- mode switcher (Map / Dashboard) ---- */
-  #modebar{top:12px;left:50%;transform:translateX(-50%);display:flex;gap:4px;
-    padding:4px;z-index:20}
-  #modebar button{border:0;background:transparent;color:var(--muted);cursor:pointer;
-    border-radius:7px;padding:6px 14px;font-size:13px;font-weight:600}
-  #modebar button.active{background:var(--accent);color:#0d1117}
+  /* ---- hamburger menu: the section switcher (Map / Dashboard / Settings) ----
+     A drawer, not a top bar: it keeps the sections out of the search bar's way
+     and leaves room for a Settings entry pinned at the bottom. */
+  #burger{position:fixed;top:12px;left:12px;width:36px;height:34px;z-index:40;
+    display:flex;align-items:center;justify-content:center;font-size:16px;
+    cursor:pointer;color:var(--fg);padding:0}
+  #scrim{position:fixed;inset:0;background:#0008;z-index:45;display:none}
+  body.nav-open #scrim{display:block}
+  #side{top:0;left:0;bottom:0;width:218px;border-radius:0;border-left:0;
+    border-top:0;border-bottom:0;z-index:50;display:flex;flex-direction:column;
+    padding:12px 10px;transform:translateX(-110%);transition:transform .16s ease}
+  body.nav-open #side{transform:none}
+  #side .sidehead{font-weight:600;letter-spacing:.2px;padding:6px 8px 12px;
+    display:flex;align-items:center;gap:8px}
+  #side .sidehead b{color:var(--accent)}
+  #side .sidehead .x{margin-left:auto;color:var(--muted);cursor:pointer;font-size:15px}
+  #side .sidehead .x:hover{color:var(--fg)}
+  #side nav{display:flex;flex-direction:column;gap:3px}
+  #side .foot{margin-top:auto;padding-top:9px;border-top:1px solid var(--border);
+    display:flex;flex-direction:column;gap:3px}
+  #side button{display:flex;align-items:center;gap:9px;text-align:left;border:0;
+    background:transparent;color:var(--fg);cursor:pointer;border-radius:8px;
+    padding:8px 9px;font:inherit;font-size:13.5px}
+  #side button:hover{background:#ffffff10}
+  #side button.active{background:var(--accent);color:#0d1117;font-weight:600}
+  #side .sub{color:var(--muted);font-size:11px;padding:2px 9px 6px}
+  #side button.active .k{color:#0d1117cc}
 
-  /* ---- dashboard tab ---- */
-  body.mode-dash{overflow:auto}
-  /* #detail.show is (1,1,0) and would beat a two-class hide — name the id here too */
-  body.mode-dash #canvas,body.mode-dash .map-only,body.mode-dash #detail{display:none}
-  body.mode-map #dash{display:none}
+  /* ---- section visibility ----
+     Every id'd panel is named here, not just `.map-only`: an id selector (1,0,0)
+     beats a class hide, so `#top{display:flex}` would keep the search bar on
+     screen in the dashboard and settings sections. */
+  body:not(.mode-map){overflow:auto}
+  body:not(.mode-map) #canvas,body:not(.mode-map) .map-only,
+  body:not(.mode-map) #top,body:not(.mode-map) #detail,
+  body:not(.mode-map) #hint,body:not(.mode-map) #err{display:none}
+  body:not(.mode-dash) #dash{display:none}
+  body:not(.mode-settings) #settings{display:none}
   #dash{max-width:840px;margin:0 auto;padding:64px 16px 60px}
   #dnav{display:flex;gap:6px;overflow-x:auto;padding:6px 0 14px;position:sticky;top:0;
     background:var(--bg);z-index:2}
@@ -171,34 +224,82 @@
   .dwait{color:var(--muted);font-size:12.5px;margin-top:6px}
   .dwait b{color:var(--fg);font-weight:500}
   .dempty{color:var(--muted);text-align:center;padding:44px 0}
+
+  /* ---- settings page ---- */
+  #settings{max-width:760px;margin:0 auto;padding:64px 16px 60px}
+  #settings h2{margin:0 0 4px;font-size:19px}
+  #settings .lead{color:var(--muted);margin:0 0 18px;font-size:12.5px}
+  .scard{background:var(--panel);border:1px solid var(--border);border-radius:11px;
+    padding:14px;margin-bottom:12px}
+  .scard h3{margin:0 0 3px;font-size:14px}
+  .scard .hint{color:var(--muted);font-size:12px;margin:0 0 11px;line-height:1.45}
+  .scard .hint code{color:var(--fg)}
+  .srow{display:flex;flex-wrap:wrap;gap:9px;align-items:flex-end}
+  .sfield{display:flex;flex-direction:column;gap:3px;min-width:150px;flex:1}
+  .sfield.sm{flex:0 0 128px;min-width:128px}
+  .sfield label{font-size:11px;text-transform:uppercase;letter-spacing:.5px;
+    color:var(--muted)}
+  .sfield input,.sfield select{background:#0d1117;color:var(--fg);
+    border:1px solid var(--border);border-radius:7px;padding:7px 9px;font-size:13px;
+    font-family:inherit;width:100%}
+  .sfield input:focus,.sfield select:focus{outline:none;border-color:var(--accent)}
+  .sfoot{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:11px}
+  .skv{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;font-size:12.5px;
+    margin-bottom:11px}
+  .skv .k{color:var(--muted)}
+  .skv .v{font-family:ui-monospace,monospace;word-break:break-all}
+  .badge{display:inline-block;border:1px solid var(--border);border-radius:999px;
+    padding:1px 8px;font-size:11px;color:var(--muted)}
+  .badge.ok{color:#3fb950;border-color:#3fb950}
+  .badge.bad{color:#f0883e;border-color:#f0883e}
+  .warn{color:#f0883e;font-size:12px;margin-top:8px}
+  .out{white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:11.5px;
+    background:#0d1117;border:1px solid var(--border);border-radius:7px;padding:9px;
+    margin-top:10px;max-height:230px;overflow:auto;color:#c9d1d9;display:none}
+  .out.show{display:block}
 </style>
 </head>
 <body class="mode-map">
 <canvas id="canvas"></canvas>
 
-<div id="modebar" class="panel">
-  <button data-mode="map" class="active">🗺 Map</button>
-  <button data-mode="dash">📋 Dashboard</button>
-</div>
+<button id="burger" class="panel" title="sections (M)">☰</button>
+<div id="scrim"></div>
+
+<aside id="side" class="panel">
+  <div class="sidehead">🧠 second-<b>brain</b><span class="x" id="navclose">✕</span></div>
+  <nav>
+    <button data-mode="map">🗺 <span>Map</span></button>
+    <button data-mode="dash">📋 <span>Dashboard</span></button>
+  </nav>
+  <div class="foot">
+    <button data-mode="settings">⚙ <span>Settings</span></button>
+  </div>
+</aside>
 
 <div id="top" class="panel map-only">
-  <span class="title">🧠 second-<b>brain</b></span>
-  <input id="search" placeholder="search nodes… (title, type, id)">
+  <div class="searchwrap">
+    <input id="search" placeholder="search nodes… (title, type, id)">
+    <button id="searchx" title="clear search (Esc)">✕</button>
+  </div>
+  <!-- the three facet dropdowns are generated (FACET_DEFS) — they differ only by
+       name, so writing them out three times invites the label and the filter to
+       drift apart. Display is hand-written: its options are toggles, not a
+       vocabulary read from the brain. -->
+  <div id="facets">
+    <div class="dd" id="ddView">
+      <button class="ddb">Display <span class="ddn">default</span><span class="cv">▾</span></button>
+      <div class="ddm">
+        <div class="ddhead"><span class="t">Display</span></div>
+        <label class="opt"><input type="checkbox" id="hideDone">
+          <span class="nm">hide done / archived</span></label>
+        <label class="opt" title="A node stays only while at least one thing still points at it. Hide every source and it goes too.">
+          <input type="checkbox" id="cascade">
+          <span class="nm">drop unsupported</span><span class="ct" id="cascadeCt"></span></label>
+      </div>
+    </div>
+  </div>
   <span id="stats">—</span>
   <span class="live"><span class="dot"></span><span id="livetxt">live</span></span>
-</div>
-
-<div id="legend" class="panel map-only">
-  <h4>Node types <span class="all" id="allTypes">all</span></h4>
-  <div id="chips"></div>
-  <h4 class="sep">Realms <span class="all" id="allRealms">all</span></h4>
-  <div id="rchips"></div>
-  <h4 class="sep">Kinds <span class="all" id="allKinds">all</span></h4>
-  <div id="kchips"></div>
-  <div class="toggle">
-    <label class="chip"><input type="checkbox" id="hideDone"> hide done / archived</label>
-    <label class="chip" title="A node stays only while at least one thing still points at it. Hide every source and it goes too."><input type="checkbox" id="cascade"> drop unsupported <span class="ct" id="cascadeCt"></span></label>
-  </div>
 </div>
 
 <div id="detail" class="panel map-only"></div>
@@ -212,6 +313,16 @@
   <div id="dnewbar"></div>
   <p id="dmeta"></p>
   <div id="dlist"></div>
+</div>
+
+<!-- Settings: preferences that live in <home>/settings.json, plus store upkeep.
+     Written server-side, not in the browser — a timezone set here has to hold for
+     the CLI, the hooks and any cron reading the same brain. -->
+<div id="settings">
+  <h2>Settings</h2>
+  <p class="lead">Saved to the brain's home directory, so every path into it —
+    CLI, hooks, cron, this page — reads the same answer.</p>
+  <div id="scards"></div>
 </div>
 
 <script>
@@ -522,12 +633,32 @@ function focusNode(id){ const n=byId.get(id); if(!n)return;
   select(id); view.tx=W/2-n.x*view.scale; view.ty=H/2-n.y*view.scale; }
 function esc(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
-// ---- legend / filters ----
-// One implementation for both facets: the counts come from /api/graph meta, which
-// derives them from the brain, so a brand-new type or realm shows up on the next
-// poll with no code change.
-function buildFacet(boxId, counts, off){
-  const box=document.getElementById(boxId);
+// ---- filters: one dropdown per facet, multi-select ----
+// One implementation for all three facets: the counts come from /api/graph meta,
+// which derives them from the brain, so a brand-new type, realm or kind shows up
+// on the next poll with no code change.
+//
+// A dropdown rather than one long scrolling list: the three vocabularies grow
+// independently (types are fixed-ish, realms few, kinds unbounded), and stacked
+// in one panel the tail of the list was unreachable without scrolling past the
+// other two. Each menu carries its own "all" / "none", which tick or clear every
+// option in THAT scope only.
+const FACET_DEFS=[['types','Node types'],['realms','Realms'],['kinds','Kinds']];
+const FACET_OFF={types:typesOff, realms:realmsOff, kinds:kindsOff};
+const FACET_COUNTS={types:null, realms:null, kinds:null};
+const facetEl=name=>document.querySelector('.dd[data-facet="'+name+'"]');
+document.getElementById('facets').insertAdjacentHTML('afterbegin',
+  FACET_DEFS.map(([name,label])=>`<div class="dd" data-facet="${name}">
+    <button class="ddb">${label} <span class="ddn">all</span><span class="cv">▾</span></button>
+    <div class="ddm">
+      <div class="ddhead"><span class="t">${label}</span>
+        <button data-act="all">all</button><button data-act="none">none</button></div>
+      <div class="ddopts"></div>
+    </div></div>`).join(''));
+
+function buildFacet(name, counts){
+  FACET_COUNTS[name]=counts;
+  const dd=facetEl(name), box=dd.querySelector('.ddopts'), off=FACET_OFF[name];
   // index.html is re-read from disk on every request but serve.py is not — an
   // older server process serves this newer page and simply omits a facet it does
   // not know about. Say so, rather than rendering an empty list that reads as a
@@ -535,56 +666,117 @@ function buildFacet(boxId, counts, off){
   if(counts==null){
     box.innerHTML='<div class="fnote">not sent by this server &mdash; '+
                   'restart <code>viz/serve.py</code> to pick up new filters</div>';
-    return;
+    summarise(name,[]); return;
   }
   const keys=Object.keys(counts).sort();
   // a filter that was hiding something now gone stops counting as active
   off.forEach(k=>{ if(!(k in counts)) off.delete(k); });
-  if(!keys.length){ box.innerHTML='<div class="fnote">none</div>'; return; }
-  const swatch = (boxId==='rchips'||boxId==='kchips') ? realmPalette(keys) : colorFor;
-  box.innerHTML=keys.map(k=>`<div class="chip ${off.has(k)?'off':''}" data-k="${esc(k)}">
-      <span class="sw" style="background:${swatch(k)}"></span>${esc(k)||'(none)'}
-      <span class="ct">${counts[k]}</span></div>`).join('');
-  box.querySelectorAll('.chip').forEach(c=>c.onclick=()=>{
-    const k=c.dataset.k;
-    if(off.has(k))off.delete(k); else off.add(k);
-    c.classList.toggle('off'); recomputeCascade(); alpha=Math.max(alpha,.3);
+  if(!keys.length){ box.innerHTML='<div class="fnote">none</div>'; summarise(name,keys); return; }
+  const swatch = name==='types' ? colorFor : realmPalette(keys);
+  box.innerHTML=keys.map(k=>`<label class="opt">
+      <input type="checkbox" data-k="${esc(k)}"${off.has(k)?'':' checked'}>
+      <span class="sw" style="background:${swatch(k)}"></span>
+      <span class="nm">${esc(k)||'(none)'}</span>
+      <span class="ct">${counts[k]}</span></label>`).join('');
+  box.querySelectorAll('input').forEach(cb=>cb.onchange=()=>{
+    const k=cb.dataset.k;
+    if(cb.checked) off.delete(k); else off.add(k);
+    summarise(name,keys); applyFilter();
   });
+  summarise(name,keys);
 }
-function buildChips(byType){ buildFacet('chips', byType, typesOff); }
-function buildRealms(byRealm){ buildFacet('rchips', byRealm, realmsOff); }
-function buildKinds(byKind){ buildFacet('kchips', byKind, kindsOff); }
-// "all" clears that facet's filter without touching the other one
-document.getElementById('allTypes').onclick=()=>{
-  typesOff.clear(); document.querySelectorAll('#chips .chip').forEach(c=>c.classList.remove('off'));
-  recomputeCascade(); alpha=Math.max(alpha,.3);
-};
-document.getElementById('allRealms').onclick=()=>{
-  realmsOff.clear(); document.querySelectorAll('#rchips .chip').forEach(c=>c.classList.remove('off'));
-  recomputeCascade(); alpha=Math.max(alpha,.3);
-};
-document.getElementById('allKinds').onclick=()=>{
-  kindsOff.clear(); document.querySelectorAll('#kchips .chip').forEach(c=>c.classList.remove('off'));
-  recomputeCascade(); alpha=Math.max(alpha,.3);
-};
-document.getElementById('search').addEventListener('input',e=>query=e.target.value.trim());
-document.getElementById('hideDone').addEventListener('change',e=>{
-  hideDone=e.target.checked; recomputeCascade(); alpha=Math.max(alpha,.3);});
-document.getElementById('cascade').addEventListener('change',e=>{
-  cascade=e.target.checked; recomputeCascade(); alpha=Math.max(alpha,.3);});
+// the button has to say what the closed menu is doing — "all", "none", or "4/9"
+function summarise(name, keys){
+  const dd=facetEl(name), off=FACET_OFF[name];
+  const on=keys.filter(k=>!off.has(k)).length;
+  dd.querySelector('.ddn').textContent =
+    !keys.length ? '—' : off.size===0 ? 'all' : on===0 ? 'none' : on+'/'+keys.length;
+  dd.classList.toggle('on', off.size>0);
+}
+function setFacetAll(name, on){
+  const counts=FACET_COUNTS[name]; if(counts==null) return;
+  const off=FACET_OFF[name];
+  off.clear();
+  if(!on) Object.keys(counts).forEach(k=>off.add(k));
+  buildFacet(name, counts);            // re-render every checkbox from the set
+  applyFilter();
+}
+function applyFilter(){ recomputeCascade(); alpha=Math.max(alpha,.3); }
+function buildChips(byType){ buildFacet('types', byType); }
+function buildRealms(byRealm){ buildFacet('realms', byRealm); }
+function buildKinds(byKind){ buildFacet('kinds', byKind); }
 
-// ---- mode switch (Map <-> Dashboard) ----
-let mode='map';
-function setMode(m){
-  mode=m;
-  document.body.className='mode-'+m;
-  document.querySelectorAll('#modebar button').forEach(b=>
-    b.classList.toggle('active', b.dataset.mode===m));
-  if(m==='map'){ alpha=Math.max(alpha,.5); }          // reheat physics on return
-  else { Dash.show(); }                                // (re)load current view
+function closeDropdowns(){
+  document.querySelectorAll('.dd.open').forEach(d=>d.classList.remove('open'));
 }
-document.querySelectorAll('#modebar button').forEach(b=>
+document.querySelectorAll('.dd').forEach(dd=>{
+  dd.querySelector('.ddb').onclick=e=>{
+    e.stopPropagation();
+    const was=dd.classList.contains('open');
+    closeDropdowns();
+    if(!was) dd.classList.add('open');
+  };
+  // ticking a box must not close the menu — you are usually setting several
+  dd.querySelector('.ddm').onclick=e=>e.stopPropagation();
+  dd.querySelectorAll('.ddhead button').forEach(b=>b.onclick=()=>
+    setFacetAll(dd.dataset.facet, b.dataset.act==='all'));
+});
+document.addEventListener('click',closeDropdowns);
+
+// ---- search, with a way out of it ----
+const searchEl=document.getElementById('search');
+const searchWrap=document.querySelector('.searchwrap');
+function setQuery(v){
+  query=(v||'').trim();
+  searchWrap.classList.toggle('has', !!(searchEl.value||'').length);
+}
+function clearSearch(){ searchEl.value=''; setQuery(''); searchEl.focus(); }
+searchEl.addEventListener('input',e=>setQuery(e.target.value));
+searchEl.addEventListener('keydown',e=>{ if(e.key==='Escape'){ e.stopPropagation(); clearSearch(); }});
+document.getElementById('searchx').onclick=clearSearch;
+
+// ---- display toggles (same dropdown pattern, but they are not a vocabulary) ----
+function viewSummary(){
+  const n=(hideDone?1:0)+(cascade?1:0), dd=document.getElementById('ddView');
+  dd.querySelector('.ddn').textContent = n? n+' on' : 'default';
+  dd.classList.toggle('on', n>0);
+}
+document.getElementById('hideDone').addEventListener('change',e=>{
+  hideDone=e.target.checked; viewSummary(); applyFilter();});
+document.getElementById('cascade').addEventListener('change',e=>{
+  cascade=e.target.checked; viewSummary(); applyFilter();});
+
+// ---- sections (Map / Dashboard / Settings), behind the hamburger ----
+let mode='map';
+const MODES=['map','dash','settings'];
+function setMode(m){
+  if(!MODES.includes(m)) m='map';
+  mode=m;
+  MODES.forEach(x=>document.body.classList.toggle('mode-'+x, x===m));
+  document.querySelectorAll('#side button[data-mode]').forEach(b=>
+    b.classList.toggle('active', b.dataset.mode===m));
+  closeNav(); closeDropdowns();
+  if(location.hash.slice(1)!==m) history.replaceState(null,'','#'+m);
+  if(m==='map'){ alpha=Math.max(alpha,.5); }          // reheat physics on return
+  else if(m==='dash'){ Dash.show(); }                  // (re)load current view
+  else { Settings.show(); }
+  if(m!=='map') scrollTo(0,0);
+}
+function closeNav(){ document.body.classList.remove('nav-open'); }
+document.getElementById('burger').onclick=e=>{
+  e.stopPropagation(); document.body.classList.toggle('nav-open'); };
+document.getElementById('navclose').onclick=closeNav;
+document.getElementById('scrim').onclick=closeNav;
+document.querySelectorAll('#side button[data-mode]').forEach(b=>
   b.onclick=()=>setMode(b.dataset.mode));
+addEventListener('keydown',e=>{
+  const typing=/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
+  if(e.key==='Escape'){ closeNav(); closeDropdowns(); }
+  else if((e.key==='m'||e.key==='M') && !typing && !e.metaKey && !e.ctrlKey){
+    document.body.classList.toggle('nav-open');
+  }
+});
+addEventListener('hashchange',()=>setMode(location.hash.slice(1)||'map'));
 
 // ---- dashboard tab (scoped so nothing collides with the map globals) ----
 const Dash = (function(){
@@ -1019,7 +1211,13 @@ const Dash = (function(){
     },260); };
     return wrap;
   }
-  let built=false, timer=null;
+  let built=false, timer=null, REFRESH=120000;
+  function arm(){
+    clearInterval(timer);
+    timer=setInterval(()=>{ if(mode==='dash') load(); }, REFRESH);
+  }
+  // the refresh cadence is a setting (Settings › interface), not a constant
+  function setRefresh(ms){ REFRESH=Math.max(5000, ms||REFRESH); if(timer) arm(); }
   async function show(){
     if(!built){
       try{ const r=await fetch("/api/assignees"); const d=await r.json(); if(d.ok) ASSIGNEES=d.assignees||{}; }catch(e){}
@@ -1031,13 +1229,298 @@ const Dash = (function(){
       tabs(); ctl(); newBar(); built=true;
     }
     load();
-    clearInterval(timer); timer=setInterval(()=>{ if(mode==='dash') load(); }, 120000);
+    arm();
   }
-  return { show };
+  return { show, setRefresh };
+})();
+
+// ---- settings tab (preferences, store health, upkeep) ----
+// Everything here is server-side state: POST /api/settings writes
+// <home>/settings.json, which the CLI, the hooks and any cron read too. Nothing
+// is kept in localStorage — a preference only one browser knows is not a setting.
+const Settings = (function(){
+  const $=s=>document.querySelector(s);
+  let PREFS=null, STATUS=null, ZONES=[], REALMS={}, prefsReq=null;
+
+  // the map/dashboard need the intervals before anyone opens this page
+  function prefs(){
+    if(!prefsReq) prefsReq=fetch('/api/settings').then(r=>r.json())
+      .then(d=>{ if(d.ok){ PREFS=d; } return (d.ok&&d.effective)||{}; })
+      .catch(()=>({}));
+    return prefsReq;
+  }
+
+  async function show(){
+    const box=$('#scards');
+    box.innerHTML='<p class="lead">loading…</p>';
+    const [s,st] = await Promise.all([
+      fetch('/api/settings').then(r=>r.json()).catch(e=>({ok:false,error:String(e)})),
+      fetch('/api/status').then(r=>r.json()).catch(e=>({ok:false,error:String(e)})),
+    ]);
+    if(!s.ok){
+      box.innerHTML='<div class="scard"><h3>Settings unavailable</h3>'+
+        '<p class="hint">'+esc(s.error||'this server does not serve /api/settings — '+
+        'restart viz/serve.py')+'</p></div>';
+      return;
+    }
+    PREFS=s; STATUS=st.ok?st:null;
+    if(!ZONES.length){
+      try{ const z=await fetch('/api/timezones').then(r=>r.json());
+        if(z.ok) ZONES=z.zones||[]; }catch(e){}
+    }
+    try{ const r=await fetch('/api/realms'); const d=await r.json();
+      if(d.ok) REALMS=d.realms||{}; }catch(e){}
+    render();
+  }
+
+  function render(){
+    const eff=PREFS.effective||{}, env=PREFS.env||{}, ro=!PREFS.writable;
+    const box=$('#scards');
+    box.innerHTML='';
+    if(ro) box.appendChild(note('Read-only server',
+      'Started with <code>--no-write</code>: you can read every setting here, but '+
+      'saving, flushing and pruning are refused.'));
+    box.appendChild(tzCard(eff,env,ro));
+    box.appendChild(prefCard(eff,env,ro));
+    box.appendChild(dbCard(ro));
+    box.appendChild(maintCard(ro));
+  }
+  function card(title,hint){
+    const c=document.createElement('div'); c.className='scard';
+    c.innerHTML='<h3>'+esc(title)+'</h3><p class="hint">'+hint+'</p>';
+    return c;
+  }
+  function note(title,hint){ return card(title,hint); }
+  function field(label,el,small){
+    const w=document.createElement('div'); w.className='sfield'+(small?' sm':'');
+    const l=document.createElement('label'); l.textContent=label;
+    w.appendChild(l); w.appendChild(el); return w;
+  }
+  function input(value,ph,type){
+    const i=document.createElement('input'); i.type=type||'text';
+    i.value=value==null?'':value; if(ph)i.placeholder=ph; return i;
+  }
+  function btn(text,cls){
+    const b=document.createElement('button'); b.className='dbtn'+(cls?' '+cls:'');
+    b.textContent=text; return b;
+  }
+  function row(){ const r=document.createElement('div'); r.className='srow';
+    [].slice.call(arguments).forEach(x=>r.appendChild(x)); return r; }
+  function foot(){ const f=document.createElement('div'); f.className='sfoot';
+    [].slice.call(arguments).forEach(x=>f.appendChild(x)); return f; }
+  function kv(pairs){
+    const g=document.createElement('div'); g.className='skv';
+    pairs.forEach(([k,v])=>{
+      const a=document.createElement('span'); a.className='k'; a.textContent=k;
+      const b=document.createElement('span'); b.className='v';
+      if(v instanceof Node) b.appendChild(v); else b.textContent=v==null?'—':String(v);
+      g.appendChild(a); g.appendChild(b);
+    });
+    return g;
+  }
+  function badge(text,kind){
+    const s=document.createElement('span'); s.className='badge'+(kind?' '+kind:'');
+    s.textContent=text; return s;
+  }
+  function out(el,text){ el.className='out show'; el.textContent=text; }
+  async function post(path,body){
+    try{
+      const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(body||{})});
+      return await r.json();
+    }catch(e){ return {ok:false,error:String(e)}; }
+  }
+  function datalist(id,values){
+    let dl=document.getElementById(id);
+    if(dl) dl.remove();
+    dl=document.createElement('datalist'); dl.id=id;
+    values.forEach(v=>{ const o=document.createElement('option'); o.value=v;
+      dl.appendChild(o); });
+    return dl;
+  }
+
+  // ---- timezone: which calendar day "today" means -----------------------
+  function tzCard(eff,env,ro){
+    const c=card('Time zone',
+      'Every date bucket — today, tomorrow, this week, overdue — is decided in '+
+      'this zone. Leave it empty to follow the machine. Saved for the CLI and any '+
+      'cron reading the same brain, not just this page.');
+    const i=input(PREFS.settings.tz||'', 'system default ('+(eff.system_tz||'')+')');
+    i.setAttribute('list','tzlist');
+    if(ZONES.length) c.appendChild(datalist('tzlist',ZONES));
+    c.appendChild(row(field('IANA name (e.g. America/Sao_Paulo)',i)));
+    c.appendChild(kv([
+      ['in effect', (eff.tz||eff.system_tz||'—')+'  ('+(eff.tz_source||'system')+')'],
+      ['local time now', eff.now||'—'],
+    ]));
+    if(env.tz) c.appendChild(warn('<code>$SECOND_BRAIN_TZ='+esc(env.tz)+'</code> is set '+
+      'in this server\'s environment and overrides whatever you save here.'));
+    const save=btn('Save','pri'); save.disabled=ro;
+    const res=document.createElement('div'); res.className='out';
+    save.onclick=async()=>{
+      save.disabled=true;
+      const d=await post('/api/settings',{tz:i.value.trim()});
+      save.disabled=false;
+      if(!d.ok){ out(res,d.error||'failed'); return; }
+      PREFS=d; render();
+    };
+    c.appendChild(foot(save));
+    c.appendChild(res);
+    return c;
+  }
+  function warn(html){
+    const w=document.createElement('div'); w.className='warn'; w.innerHTML=html;
+    return w;
+  }
+
+  // ---- defaults + interface --------------------------------------------
+  function prefCard(eff,env,ro){
+    const c=card('Defaults & interface',
+      'The realm new nodes are filed under when nothing says otherwise, and how '+
+      'often each tab re-reads the brain.');
+    const rl=input(PREFS.settings.realm||'', eff.realm||'optibus');
+    rl.setAttribute('list','realmlist');
+    c.appendChild(datalist('realmlist',Object.keys(REALMS).sort()));
+    const mp=input(PREFS.settings.map_poll_seconds||'', String(eff.map_poll_seconds||2),'number');
+    const dr=input(PREFS.settings.dash_refresh_seconds||'', String(eff.dash_refresh_seconds||120),'number');
+    mp.min=1; mp.max=600; dr.min=5; dr.max=3600;
+    c.appendChild(row(field('default realm',rl),
+                      field('map poll (s)',mp,true),
+                      field('dash refresh (s)',dr,true)));
+    if(env.realm) c.appendChild(warn('<code>$SECOND_BRAIN_REALM='+esc(env.realm)+
+      '</code> overrides the default realm.'));
+    const save=btn('Save','pri'); save.disabled=ro;
+    const res=document.createElement('div'); res.className='out';
+    save.onclick=async()=>{
+      save.disabled=true;
+      const d=await post('/api/settings',{realm:rl.value.trim().toLowerCase(),
+        map_poll_seconds:mp.value, dash_refresh_seconds:dr.value});
+      save.disabled=false;
+      if(!d.ok){ out(res,d.error||'failed'); return; }
+      PREFS=d;
+      const e=d.effective||{};
+      startPolling((e.map_poll_seconds||2)*1000);
+      Dash.setRefresh((e.dash_refresh_seconds||120)*1000);
+      render();
+    };
+    c.appendChild(foot(save));
+    c.appendChild(res);
+    return c;
+  }
+
+  // ---- the store: local mirror + neo4j master --------------------------
+  function dbCard(ro){
+    const c=card('Database connection',
+      'The local SQLite file is always the durable mirror. Point this at a neo4j '+
+      'master and the map, the dashboard and every write use it, falling back to '+
+      'the mirror whenever it is unreachable.');
+    if(!STATUS){
+      c.appendChild(warn('This server does not serve <code>/api/status</code> — '+
+        'restart <code>viz/serve.py</code>.'));
+      return c;
+    }
+    const n=STATUS.neo4j||{};
+    c.appendChild(kv([
+      ['brain file', STATUS.db],
+      ['home', STATUS.home],
+      ['contents', STATUS.nodes+' nodes · '+STATUS.edges+' edges'],
+      ['reading from', n.reading_from||'sqlite (local mirror)'],
+      ['master', n.configured
+        ? badge(n.up?'reachable':'unreachable', n.up?'ok':'bad')
+        : badge('not configured')],
+      ['queued writes', STATUS.pending_ops],
+    ]));
+    const url=input(n.url||'', 'http://neo4j-host:7474');
+    const db=input(n.db||'', 'neo4j');
+    const user=input(n.user||'', 'neo4j');
+    const pw=input('', n.password_set?'unchanged':'password','password');
+    c.appendChild(row(field('neo4j HTTP url',url)));
+    c.appendChild(row(field('database',db,true),field('user',user,true),
+                      field('password',pw)));
+    if((n.env||[]).length) c.appendChild(warn('Set in this server\'s environment '+
+      'and overriding the file: <code>'+esc(n.env.join(', '))+'</code>.'));
+    const res=document.createElement('div'); res.className='out';
+    const save=btn('Save connection','pri'); save.disabled=ro;
+    const test=btn('Test');
+    const flush=btn('Flush queued'+(STATUS.pending_ops?' ('+STATUS.pending_ops+')':''));
+    flush.disabled=ro||!STATUS.pending_ops;
+    save.onclick=async()=>{
+      save.disabled=true;
+      const d=await post('/api/neo4j-config',{url:url.value.trim(),db:db.value.trim(),
+        user:user.value.trim(),password:pw.value});
+      save.disabled=false;
+      if(!d.ok){ out(res,d.error||'failed'); return; }
+      out(res, d.cleared ? 'neo4j config removed — reading the local mirror only.'
+        : (d.reachable ? 'saved · connection works.'
+                       : 'saved · but the master did not answer: '+(d.error||'unreachable')));
+      pw.value=''; show();
+    };
+    test.onclick=async()=>{
+      test.disabled=true; out(res,'testing…');
+      const d=await post('/api/neo4j-test',{});
+      test.disabled=false;
+      out(res, !d.ok ? (d.error||'failed')
+        : d.reachable ? 'reachable: '+d.url
+                      : 'no answer from '+d.url+' — '+(d.error||'unreachable'));
+    };
+    flush.onclick=async()=>{
+      flush.disabled=true; out(res,'flushing…');
+      const d=await post('/api/flush',{});
+      out(res, JSON.stringify(d,null,2));
+      show();
+    };
+    c.appendChild(foot(save,test,flush));
+    c.appendChild(res);
+    return c;
+  }
+
+  // ---- upkeep ----------------------------------------------------------
+  function maintCard(ro){
+    const c=card('Maintenance · prune',
+      'Consolidates old captures into one digest per day so reads stay small as '+
+      'the brain grows. <b>Nothing is deleted</b> — the originals stay searchable '+
+      'and linked; what shrinks is how much a recall has to read. Safe to run '+
+      'twice, safe to schedule.');
+    if(STATUS) c.appendChild(kv([
+      ['loose captures', STATUS.loose_captures+' not behind a digest yet'],
+    ]));
+    const keep=input(2,'2','number'); keep.min=0; keep.max=365;
+    c.appendChild(row(field('keep last N days loose',keep,true)));
+    const run=btn('Run prune','pri'); run.disabled=ro;
+    const res=document.createElement('div'); res.className='out';
+    run.onclick=async()=>{
+      run.disabled=true; out(res,'pruning… (this can take a moment)');
+      const d=await post('/api/prune',{keep_days:keep.value});
+      run.disabled=ro;
+      if(!d.ok){ out(res,d.error||'failed'); return; }
+      out(res, ['days consolidated: '+(d.days_consolidated!=null?d.days_consolidated:'—'),
+        'newly consolidated: '+(d.newly_consolidated!=null?d.newly_consolidated:'—'),
+        'still loose: '+(d.still_loose!=null?d.still_loose:'—'),
+        'read reduction: '+(d.read_reduction||'n/a'),
+        'reversed edges repaired: '+(d.reversed_edges_repaired!=null?d.reversed_edges_repaired:'—'),
+        '', JSON.stringify(d,null,2)].join('\n'));
+      show();
+    };
+    c.appendChild(foot(run));
+    c.appendChild(res);
+    return c;
+  }
+  return { show, prefs };
 })();
 
 // ---- go ----
-load(); setInterval(load, 2000); requestAnimationFrame(draw);
+let POLL=2000, pollTimer=null;
+function startPolling(ms){
+  POLL=Math.max(1000, ms||POLL);
+  clearInterval(pollTimer); pollTimer=setInterval(load, POLL);
+}
+load(); viewSummary(); startPolling(2000); requestAnimationFrame(draw);
+// the poll cadences are settings, so ask for them once at boot
+Settings.prefs().then(p=>{
+  if(p.map_poll_seconds) startPolling(p.map_poll_seconds*1000);
+  if(p.dash_refresh_seconds) Dash.setRefresh(p.dash_refresh_seconds*1000);
+});
+setMode(location.hash.slice(1)||'map');
 </script>
 </body>
 </html>

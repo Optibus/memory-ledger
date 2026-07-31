@@ -30,8 +30,10 @@ def _env(name: str, default: str = "") -> str:
     return os.environ.get("SECOND_BRAIN_" + name) or default
 
 
-# Default section (realm) for new nodes; override with $SECOND_BRAIN_REALM or --realm.
-DEFAULT_REALM = _env("REALM", "optibus")
+# Default section (realm) for new nodes; override with $SECOND_BRAIN_REALM or
+# --realm, or set it once in <home>/settings.json. Assigned below, after the
+# settings reader it depends on — see `settings()`.
+DEFAULT_REALM = "optibus"
 
 # ---------------------------------------------------------------------------
 # vocabulary (soft — not enforced, just documented + used for defaults)
@@ -109,6 +111,61 @@ def learned_skills_dir() -> Path:
     a SKILL.md). This is the plastic layer — the brain writes new abilities here
     and records in the graph when to fire them."""
     return home_dir() / "learned_skills"
+
+
+# ---------------------------------------------------------------------------
+# settings: preferences that outlive one shell
+#
+# Env vars are per-process, so `export SECOND_BRAIN_TZ=…` only holds for the
+# terminal that ran it — a cron, a hook, or the web server never sees it. This
+# file is the machine-wide answer, and the web UI's Settings page edits it.
+# Precedence everywhere: explicit flag > env var > this file > built-in default.
+# ---------------------------------------------------------------------------
+SETTING_KEYS = ["tz", "realm", "map_poll_seconds", "dash_refresh_seconds"]
+
+
+def settings_path() -> Path:
+    return home_dir() / "settings.json"
+
+
+def settings() -> dict:
+    """Read the preferences file. Missing or corrupt reads as empty — a bad
+    settings file must never stop the brain from answering."""
+    try:
+        val = json.loads(settings_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return val if isinstance(val, dict) else {}
+
+
+def save_settings(patch: dict) -> dict:
+    """Merge `patch` into the file and return the whole result. A value of ""
+    or None REMOVES the key, which is how you go back to the env/system default
+    rather than pinning an empty string."""
+    cur = settings()
+    for k, v in (patch or {}).items():
+        if k not in SETTING_KEYS:
+            continue
+        if v in (None, ""):
+            cur.pop(k, None)
+        else:
+            cur[k] = v
+    p = settings_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(cur, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return cur
+
+
+def setting(name: str, default: str = "") -> str:
+    """One setting, env first. Same order as everything else in the engine."""
+    val = _env(name.upper())
+    if val:
+        return val
+    val = settings().get(name)
+    return str(val) if val not in (None, "") else default
+
+
+DEFAULT_REALM = setting("realm", "optibus")
 
 
 def slugify(text: str) -> str:

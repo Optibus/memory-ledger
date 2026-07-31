@@ -132,7 +132,7 @@ removing/renaming the brain home (`~/.second_brain`); the hooks then no-op.
 | `complete-task` | Mark a task done → move to the archive (never delete). |
 | `follow-up` | Surface every open loop (tasks, PRs, emails, messages) and drive it toward closed. |
 | `learn-skill` | Grow a new skill at runtime, recall it, reinforce it (neuroplasticity). |
-| `visualize` | Open the live brain UI in the browser — graph **map** + query **dashboard** (two tabs). |
+| `visualize` | Open the live brain UI in the browser — graph **map**, query **dashboard**, and **settings**. |
 | `remind` | Set a real alarm (scheduled routine) that DMs you on Slack. |
 | `calendar` | Read/create Google Calendar events; time-block tasks. |
 | `read-email` | Read & triage Gmail; turn action items into tasks. |
@@ -219,7 +219,8 @@ not someone else), and never delegated or parked waiting/blocked. Rows carry
 card's date chip → date picker (writes token-free via `/api/set-due`). Captured
 to-dos get their **assignee inferred** (mine / a named person / unassigned — never
 blindly "me"; "ask/chase <Name>" stays *yours*).
-Local-tz buckets via `--tz` / `$SECOND_BRAIN_TZ`; `--backend sqlite|neo4j|auto`.
+Local-tz buckets via `--tz`, `$SECOND_BRAIN_TZ`, or Settings › Time zone;
+`--backend sqlite|neo4j|auto`.
 Recall stays free — reach for this (or `graph.py search` / `open-loops`) instead
 of asking the model to remember.
 
@@ -284,15 +285,22 @@ done
 
 ## Visualize the brain
 
-A dependency-free local server serves one page with **two tabs**:
+A dependency-free local server serves one page with **three sections**, behind a
+hamburger menu on the left (`m` toggles it):
 
-- **Map** — the live force-directed graph: zoom/pan, search, type filters, and
-  click-to-inspect showing every connection and its direction. Polls the DB so
-  changes appear in real time.
+- **Map** — the live force-directed graph: zoom/pan, a search you can clear, and
+  one multi-select dropdown per facet (node types / realms / kinds / display),
+  each with its own **all** and **none**. Click any node to inspect every
+  connection and its direction. Polls the DB so changes appear in real time.
 - **Dashboard** — the `brain_query.py` views (agenda / open / today / tomorrow /
   week / closed / range) as cards, over the same store. It is also a **full
   editor**: create tasks, tick them off, change status/assignee/due, rename them,
   and add or remove relations — all token-free (see below).
+- **Settings** — timezone (which day "today" means), default realm, poll
+  intervals, the database connection (local mirror + neo4j master, with a test
+  and a queue flush), and **prune**. Preferences are saved to
+  `~/.second_brain/settings.json`, so the CLI, the hooks and any cron read the
+  same answer as the page — not to the browser.
 
 ### Feed the brain without the model
 

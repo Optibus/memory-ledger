@@ -24,8 +24,9 @@ Views:
   closed           recently closed/archived items (by completion/update time)
   range --from --to [--status open|done|any]   any date window, filtered
 
-Dates are bucketed in your LOCAL timezone (override with --tz "America/Sao_Paulo"
-or $SECOND_BRAIN_TZ). DB location follows the same rules as graph.py
+Dates are bucketed in your LOCAL timezone (override with --tz "America/Sao_Paulo",
+$SECOND_BRAIN_TZ, or the `tz` setting in <home>/settings.json — the web UI's
+Settings page writes that one). DB location follows the same rules as graph.py
 ($SECOND_BRAIN_DB / $SECOND_BRAIN_HOME).
 """
 
@@ -47,8 +48,10 @@ import graph  # noqa: E402
 # ---------------------------------------------------------------------------
 def _local_tz(name: str | None):
     """Resolve the timezone used to decide which calendar day a due-date is on.
-    Order: explicit --tz / $SECOND_BRAIN_TZ (IANA name), else the system local tz."""
-    name = name or graph._env("TZ")
+    Order: explicit --tz, then $SECOND_BRAIN_TZ, then the `tz` setting in
+    <home>/settings.json (what the web UI's Settings page writes), else the
+    system local tz."""
+    name = name or graph.setting("tz")
     if name:
         try:
             from zoneinfo import ZoneInfo

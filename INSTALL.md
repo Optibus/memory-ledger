@@ -74,8 +74,10 @@ python3 ~/dev/second-brain/scripts/graph.py init
 
 - Home dir: `~/.second_brain` (override with `$SECOND_BRAIN_HOME`; exact DB file with
   `$SECOND_BRAIN_DB`).
-- Set your timezone once so date views bucket correctly, e.g. in your shell rc:
-  `export SECOND_BRAIN_TZ="America/Sao_Paulo"`.
+- Set your timezone once so date views bucket correctly — either in the UI
+  (**Settings › Time zone**, which writes `~/.second_brain/settings.json` and is
+  read by the CLI, the hooks and any cron too), or in your shell rc:
+  `export SECOND_BRAIN_TZ="America/Sao_Paulo"`. The env var wins over the file.
 - `$SECOND_BRAIN_*` is the **only** config prefix, and `~/.second_brain` the only
   default home. Since v0.1.1 there is no fallback to the pre-rebrand `WORK_BRAIN_*`
   vars or `~/.work_brain` home — if you still have an old home dir, move it to
@@ -137,14 +139,16 @@ python3 scripts/graph.py open-loops            # everything still awaiting actio
 ### Map + dashboard (optional UI)
 
 ```
-SECOND_BRAIN_TZ="America/Sao_Paulo" python3 viz/serve.py       # http://127.0.0.1:8770
-SECOND_BRAIN_TZ="America/Sao_Paulo" python3 viz/serve.py --no-write   # read-only
+python3 viz/serve.py                 # http://127.0.0.1:8770
+python3 viz/serve.py --no-write      # read-only
 ```
-One page, two tabs: **Map** (live graph) and **Dashboard** (the query views). The
-dashboard also **edits** the brain — create tasks with auto-recognised links,
-complete them, change status/assignee/due, rename, and add/remove relations — all
-token-free (no model). Add `--host 0.0.0.0` to reach it from your phone on the LAN
-/ a tunnel; because the write API is **unauthenticated**, pair that with
+One page, three sections behind the hamburger menu (`m`): **Map** (live graph),
+**Dashboard** (the query views), and **Settings** (timezone, default realm,
+database connection, prune). The dashboard also **edits** the brain — create tasks
+with auto-recognised links, complete them, change status/assignee/due, rename, and
+add/remove relations — all token-free (no model). Set the timezone once in
+Settings rather than per command. Add `--host 0.0.0.0` to reach it from your phone
+on the LAN / a tunnel; because the write API is **unauthenticated**, pair that with
 `--no-write` unless you trust every device on the network.
 
 ## 4. Verify

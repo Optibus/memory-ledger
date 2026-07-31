@@ -21,6 +21,7 @@ import sys
 import threading
 import time
 import webbrowser
+from datetime import datetime
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
@@ -215,6 +216,85 @@ def graph_payload() -> dict:
     return _neo4j_payload() or _sqlite_payload()
 
 
+# ---------------------------------------------------------------------------
+# settings + store health — what the Settings page reads and writes
+#
+# Preferences live in <home>/settings.json (see graph.settings), NOT in the
+# browser: a timezone the UI sets has to hold for the cron, the hooks, and the
+# CLI too, and localStorage cannot do that.
+# ---------------------------------------------------------------------------
+def timezones() -> list:
+    try:
+        from zoneinfo import available_timezones
+        return sorted(available_timezones())
+    except Exception:
+        return []
+
+
+def _int_setting(name: str, default: int) -> int:
+    """A hand-edited settings.json (or a stray env var) must not 500 this page."""
+    try:
+        return int(graph.setting(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def settings_payload() -> dict:
+    """Stored values, plus what is ACTUALLY in effect. They differ whenever an
+    env var overrides the file, and a settings page that hides that is lying —
+    so `env` names every key the shell has taken over."""
+    stored = graph.settings()
+    env = {k: os.environ["SECOND_BRAIN_" + k.upper()]
+           for k in graph.SETTING_KEYS
+           if os.environ.get("SECOND_BRAIN_" + k.upper())}
+    tz = graph.setting("tz")
+    return {
+        "ok": True, "writable": WRITABLE, "keys": graph.SETTING_KEYS,
+        "settings": stored, "env": env, "path": str(graph.settings_path()),
+        "effective": {
+            "tz": tz, "tz_source": ("env" if "tz" in env else
+                                    "settings" if stored.get("tz") else "system"),
+            "system_tz": str(datetime.now().astimezone().tzinfo),
+            "now": datetime.now(brain_query._local_tz(None)).isoformat(
+                timespec="seconds"),
+            "realm": graph.DEFAULT_REALM,
+            "map_poll_seconds": _int_setting("map_poll_seconds", 2),
+            "dash_refresh_seconds": _int_setting("dash_refresh_seconds", 120),
+        },
+    }
+
+
+def status_payload() -> dict:
+    """Where the data lives and whether the master is reachable."""
+    con = graph.connect()
+    nodes = con.execute("SELECT COUNT(*) c FROM nodes").fetchone()["c"]
+    edges = con.execute("SELECT COUNT(*) c FROM edges").fetchone()["c"]
+    pending = con.execute("SELECT COUNT(*) c FROM outbox").fetchone()["c"]
+    captures = con.execute(
+        "SELECT COUNT(*) c FROM nodes WHERE type='capture'"
+        " AND json_extract(props,'$.consolidated_into') IS NULL").fetchone()["c"]
+    cfg = graph._neo4j_cfg()
+    up = graph._neo4j_up() if cfg["url"] else False
+    return {
+        "ok": True, "writable": WRITABLE, "boot": BOOT,
+        "db": str(graph.db_path()), "home": str(graph.home_dir()),
+        "nodes": nodes, "edges": edges, "pending_ops": pending,
+        "loose_captures": captures,
+        "neo4j": {
+            "url": cfg["url"], "db": cfg["db"], "user": cfg["user"],
+            "password_set": bool(cfg["password"]),
+            "configured": bool(cfg["url"] and cfg["password"]),
+            "up": up, "reading_from": "neo4j" if up else "sqlite (local mirror)",
+            "file": str(graph.home_dir() / "neo4j.json"),
+            # the file is only half the story — a shell that exports these wins
+            "env": sorted(k for k in ("SECOND_BRAIN_NEO4J_URL", "SECOND_BRAIN_NEO4J_DB",
+                                      "SECOND_BRAIN_NEO4J_USER",
+                                      "SECOND_BRAIN_NEO4J_PASSWORD")
+                          if os.environ.get(k)),
+        },
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, code, body, ctype):
         data = body.encode("utf-8") if isinstance(body, str) else body
@@ -254,6 +334,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, json.dumps({
                     "ok": True, "kinds": brain_query.kinds("auto"),
                     "none_token": brain_query.NO_KIND}), "application/json")
+            elif path == "/api/settings":   # what the Settings page reads
+                self._send(200, json.dumps(settings_payload()), "application/json")
+            elif path == "/api/timezones":  # the IANA list, from the stdlib
+                self._send(200, json.dumps({"ok": True, "zones": timezones()}),
+                           "application/json")
+            elif path == "/api/status":     # store health, for the Settings page
+                self._send(200, json.dumps(status_payload()), "application/json")
             elif path == "/api/meta":   # vocabulary, so the UI never hardcodes it
                 # rels and statuses are closed sets the engine enforces; realms and
                 # types are OPEN — read from the brain, because they differ per person.
@@ -352,6 +439,11 @@ class Handler(BaseHTTPRequestHandler):
             "/api/update-node": self._update_node,
             "/api/link": self._link,
             "/api/unlink": self._unlink,
+            "/api/settings": self._save_settings,
+            "/api/neo4j-config": self._save_neo4j,
+            "/api/neo4j-test": self._test_neo4j,
+            "/api/flush": self._flush,
+            "/api/prune": self._prune,
         }
         handler = routes.get(path)
         try:
@@ -494,6 +586,129 @@ class Handler(BaseHTTPRequestHandler):
     def _unlink(self, data):
         args, err = self._edge_args(data)
         return err or graph.api_unlink(graph.connect(), *args)
+
+    # -------------------------------------------------- settings + maintenance
+    def _save_settings(self, data):
+        """Write <home>/settings.json. Every value is validated here, because a
+        bad timezone would otherwise silently fall back to the system one and
+        look like the setting did nothing."""
+        patch = {}
+        if "tz" in data:
+            tz = self._str(data, "tz", 60)
+            if tz:
+                try:
+                    from zoneinfo import ZoneInfo
+                    ZoneInfo(tz)
+                except Exception:
+                    return {"ok": False, "error": f"unknown timezone: {tz}"}
+            patch["tz"] = tz
+        if "realm" in data:
+            realm = self._str(data, "realm", 40).lower()
+            if realm and realm != graph.slugify(realm):
+                return {"ok": False,
+                        "error": "realm must be lowercase letters, digits and dashes"}
+            patch["realm"] = realm
+        for key, lo, hi in (("map_poll_seconds", 1, 600),
+                            ("dash_refresh_seconds", 5, 3600)):
+            if key not in data:
+                continue
+            raw = data.get(key)
+            if raw in (None, ""):
+                patch[key] = ""
+                continue
+            try:
+                val = int(raw)
+            except (TypeError, ValueError):
+                return {"ok": False, "error": f"{key} must be a whole number"}
+            if not lo <= val <= hi:
+                return {"ok": False, "error": f"{key} must be between {lo} and {hi}"}
+            patch[key] = val
+        if not patch:
+            return {"ok": False, "error": "nothing to save"}
+        graph.save_settings(patch)
+        # This process read DEFAULT_REALM once, at import. Re-resolve it so a
+        # realm changed in the browser applies to the next write, not the next
+        # restart.
+        graph.DEFAULT_REALM = graph.setting("realm", "optibus")
+        return settings_payload()
+
+    def _save_neo4j(self, data):
+        """Write <home>/neo4j.json — the master-store connection. An empty url
+        removes the file, which is how you go back to sqlite-only."""
+        url = self._str(data, "url", 300)
+        if url and not url.startswith(("http://", "https://")):
+            return {"ok": False,
+                    "error": "url must be the neo4j HTTP endpoint, e.g. "
+                             "http://host:7474"}
+        f = graph.home_dir() / "neo4j.json"
+        if not url:
+            try:
+                f.unlink()
+            except FileNotFoundError:
+                pass
+            return {"ok": True, "cleared": True, **status_payload()}
+        cur = graph._neo4j_cfg()
+        cfg = {"url": url,
+               "db": self._str(data, "db", 60) or "neo4j",
+               "user": self._str(data, "user", 60) or "neo4j"}
+        # The password is never sent TO the browser, so a blank field means
+        # "leave it alone" rather than "erase it".
+        pw = self._str(data, "password", 200)
+        cfg["password"] = pw or cur["password"]
+        if not cfg["password"]:
+            return {"ok": False, "error": "password required"}
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+        try:
+            f.chmod(0o600)      # it holds a password
+        except OSError:
+            pass
+        ok, err = graph._neo4j_call([{"statement": "RETURN 1"}])
+        return {"ok": True, "saved": True, "reachable": ok, "error": err,
+                **status_payload()}
+
+    def _test_neo4j(self, _data):
+        cfg = graph._neo4j_cfg()
+        if not (cfg["url"] and cfg["password"]):
+            return {"ok": False, "error": "neo4j not configured"}
+        ok, err = graph._neo4j_call([{"statement": "RETURN 1"}])
+        return {"ok": True, "reachable": ok, "error": err, "url": cfg["url"]}
+
+    def _flush(self, _data):
+        con = graph.connect()
+        pending = con.execute("SELECT COUNT(*) c FROM outbox").fetchone()["c"]
+        res = graph._flush(con)
+        res.setdefault("ok", True)
+        res["was_pending"] = pending
+        return res
+
+    def _prune(self, data):
+        """Run `graph.py maintain` — consolidate old captures into per-day
+        digests so reads stay small. NON-DESTRUCTIVE: nothing is deleted, the
+        digest just stands in for the raw turns (CONVENTIONS §2a).
+
+        Shelled out rather than called in-process because cmd_maintain reports
+        by printing JSON, and this way a long run can't wedge the server's own
+        connection."""
+        import subprocess
+        keep = data.get("keep_days", 2)
+        try:
+            keep = max(0, min(365, int(keep)))
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "keep_days must be a whole number"}
+        cmd = [sys.executable, str(HERE.parent / "scripts" / "graph.py"),
+               "maintain", "--keep-days", str(keep)]
+        try:
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "error": "prune timed out after 5 minutes"}
+        if p.returncode != 0:
+            return {"ok": False,
+                    "error": (p.stderr or p.stdout or "maintain failed").strip()[-400:]}
+        try:
+            return json.loads(p.stdout)
+        except ValueError:
+            return {"ok": False, "error": (p.stdout or "no output").strip()[-400:]}
 
     def log_message(self, *_):  # quiet
         pass

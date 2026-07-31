@@ -75,7 +75,7 @@ invisible to the filter.
 |---|---|
 | `--realm` | comma list of realms to keep (see above) |
 | `--kind` | comma list of `props.kind` values to keep (see above) |
-| `--tz` | IANA timezone for day bucketing (default `$SECOND_BRAIN_TZ`, else system) |
+| `--tz` | IANA timezone for day bucketing (default `$SECOND_BRAIN_TZ`, then the `tz` setting in `<home>/settings.json`, else system) |
 | `--backend sqlite\|neo4j\|auto` | read the local mirror or the neo4j master |
 | `--json` | machine-readable instead of the text table |
 | `--status open\|done\|any` | `range` only |

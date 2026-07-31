@@ -290,8 +290,9 @@ The date views (today/week/…) only show **dated** tasks; use **`open`** to see
 undated ones (e.g. another person's tasks) — it's the right view for the assignee filter.
 
 Prefer it (or `graph.py search` / `open-loops`) over asking the model to recall —
-recall is free. `--backend sqlite|neo4j|auto`, local-tz buckets via `--tz` /
-`$SECOND_BRAIN_TZ`. The dashboard tab of `viz/serve.py` is this same layer over HTTP.
+recall is free. `--backend sqlite|neo4j|auto`, local-tz buckets via `--tz`,
+`$SECOND_BRAIN_TZ`, or the `tz` setting in `<home>/settings.json` (§2g) — in that
+order. The dashboard tab of `viz/serve.py` is this same layer over HTTP.
 
 **`--mine` — only what the owner must act on.** Any view takes `--mine` (the
 dashboard's "🙋 Mine · needs action" toggle → `?mine=1`) to keep ONLY the owner's
@@ -345,6 +346,10 @@ guarantee as the read layer.
 | Remove a relation | `POST /api/unlink` | The `×` on any row under **Related**. |
 | Read the vocabulary | `GET /api/meta` | Relations + statuses + `writable`; the UI never hardcodes them. |
 | Find a node to link | `GET /api/search?q=` | Title substring, for the relation picker. |
+| Change a preference | `POST /api/settings` | `tz`, `realm`, `map_poll_seconds`, `dash_refresh_seconds` → `<home>/settings.json`. |
+| Point at the master | `POST /api/neo4j-config` / `/api/neo4j-test` | Writes `<home>/neo4j.json` (mode 600) and probes it. Empty url = sqlite only. |
+| Drain the queue | `POST /api/flush` | Pushes the outbox to neo4j. |
+| Prune | `POST /api/prune` | Runs `maintain` — consolidates old captures, deletes nothing (§2a). |
 
 **Link recognition — the brain guesses the relation, you confirm it.** As you
 type a task title the composer calls `suggest-links`, which scans the text for
@@ -367,6 +372,25 @@ for nothing.
 expose the UI (`--host 0.0.0.0` for phone access), pass **`--no-write`**: every
 `POST` then returns 403 and the UI hides its editing controls (`/api/meta`
 reports `writable: false`).
+
+**Three sections, behind one hamburger: Map, Dashboard, Settings.** The sections
+live in a left drawer (`m` toggles it, Settings pinned at the bottom) so nothing
+sits on top of the search bar, and each section owns the whole viewport. The map's
+facet filters — node types, realms, kinds, and the display toggles — are one
+dropdown each, multi-select, with an **all** / **none** that applies to that scope
+only; the button says what the closed menu is doing (`all`, `none`, `4/9`). Nothing
+in there is hardcoded: the options and their counts come from `/api/graph` meta, so
+a realm or kind invented today is a filter on the next poll.
+
+**Settings are server-side, in `<home>/settings.json`.** `tz`, `realm`,
+`map_poll_seconds`, `dash_refresh_seconds` — read by the CLI, the hooks and any
+cron over the same brain, because a preference only one browser knows is not a
+preference. Precedence is the engine's usual **flag > env > file > default**, and
+`GET /api/settings` reports which keys an env var has taken over so the page can
+say the save will not take effect. The Settings section also manages the store
+(db path, master reachability, queued writes, credentials — the password is never
+sent to the browser) and runs **prune**, which is `maintain`: consolidating, never
+deleting (§2a).
 
 ## 2h. Memory dynamics — how recall behaves like memory
 

@@ -52,6 +52,9 @@ disabled"}`.
 | `/api/meta` | the vocabulary — node types, realms, kinds, edge rels, statuses |
 | `/api/suggest-links` | proposed edges awaiting acceptance |
 | `/api/search?q=<q>` | node picker results for the relation editor |
+| `/api/settings` | stored preferences, plus what is actually `effective` and which keys the environment has overridden |
+| `/api/timezones` | every IANA zone name, for the timezone picker |
+| `/api/status` | where the data lives: db path, home, node/edge counts, queued writes, loose captures, and the neo4j master's reachability |
 | `/api/<view>?<params>` | any `brain_query.py` view: `agenda`, `open`, `today`, `tomorrow`, `week`, `closed`, `range` |
 
 `/api/meta` exists so the UI never hardcodes vocabulary. Two of those sets are
@@ -108,6 +111,11 @@ since the dashboard lists tasks and a kind with none would be dead UI.
 | `/api/update-node` | `{id, title?, body?, props?}` | empty `title` is rejected |
 | `/api/link` | `{src, dst, rel}` | |
 | `/api/unlink` | `{src, dst, rel}` | |
+| `/api/settings` | `{tz?, realm?, map_poll_seconds?, dash_refresh_seconds?}` | writes `<home>/settings.json`; only these keys, each validated. `""` **removes** a key (back to env/system default) |
+| `/api/neo4j-config` | `{url, db?, user?, password?}` | writes `<home>/neo4j.json` (mode 600) and reports whether the master answered. Blank `password` keeps the stored one; empty `url` deletes the file (sqlite-only) |
+| `/api/neo4j-test` | `{}` | runs `RETURN 1` against the configured master |
+| `/api/flush` | `{}` | drains the outbox to the master |
+| `/api/prune` | `{keep_days?}` | runs `graph.py maintain` (default `2`). Non-destructive — consolidates, never deletes |
 
 Example:
 
@@ -119,6 +127,34 @@ curl -s localhost:8770/api/set-due \
 
 Validation is server-side and explicit — an invalid `status` comes back with the
 allowed set in the error string rather than being silently coerced.
+
+---
+
+## Settings
+
+Preferences live in **`<home>/settings.json`**, not in the browser. A timezone is
+only useful if the CLI, the hooks and any cron reading the same brain agree with
+the page that set it, and `localStorage` cannot do that. Four keys, all optional:
+
+| Key | Effect |
+|---|---|
+| `tz` | IANA name deciding which calendar day a due date falls on (`today`, `week`, overdue) |
+| `realm` | default realm for new nodes when nothing else says |
+| `map_poll_seconds` | how often the map re-reads `/api/graph` (default 2) |
+| `dash_refresh_seconds` | how often the dashboard re-runs its view (default 120) |
+
+Precedence is the same everywhere in the engine: **explicit flag > env var > this
+file > built-in default**. `GET /api/settings` returns the stored values, the
+`effective` ones, and an `env` map naming every key a shell variable has taken
+over — the Settings page shows that as a warning rather than pretending the save
+took effect.
+
+`realm` is re-resolved in-process on save, so it applies to the next write instead
+of after a restart.
+
+**The neo4j password is never sent to the browser.** `/api/status` reports
+`password_set` only, and an empty `password` on `POST /api/neo4j-config` means
+"keep the stored one". The file is written mode 600.
 
 ---
 
