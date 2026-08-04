@@ -270,6 +270,10 @@ def settings_payload() -> dict:
             "now": datetime.now(brain_query._local_tz(None)).isoformat(
                 timespec="seconds"),
             "realm": graph.DEFAULT_REALM,
+            # what a CLI read (`brain_query.py`) uses when given no --backend.
+            # This page and the map always ask for "auto", so they are unaffected.
+            "backend": brain_query.default_backend(),
+            "backends": list(graph.BACKENDS),
             "map_poll_seconds": _int_setting("map_poll_seconds", 2),
             "dash_refresh_seconds": _int_setting("dash_refresh_seconds", 120),
         },
@@ -696,6 +700,12 @@ class Handler(BaseHTTPRequestHandler):
                 return {"ok": False,
                         "error": "realm must be lowercase letters, digits and dashes"}
             patch["realm"] = realm
+        if "backend" in data:
+            be = self._str(data, "backend", 10).lower()
+            if be and be not in graph.BACKENDS:
+                return {"ok": False,
+                        "error": "backend must be one of " + ", ".join(graph.BACKENDS)}
+            patch["backend"] = be
         for key, lo, hi in (("map_poll_seconds", 1, 600),
                             ("dash_refresh_seconds", 5, 3600)):
             if key not in data:
@@ -734,6 +744,10 @@ class Handler(BaseHTTPRequestHandler):
                 f.unlink()
             except FileNotFoundError:
                 pass
+            # Leaving `backend: neo4j` behind would break every CLI read with no
+            # master to read from, so removing the master resets the default too.
+            if graph.settings().get("backend") in ("neo4j", "auto"):
+                graph.save_settings({"backend": "sqlite"})
             return {"ok": True, "cleared": True, **status_payload()}
         cur = graph._neo4j_cfg()
         cfg = {"url": url,

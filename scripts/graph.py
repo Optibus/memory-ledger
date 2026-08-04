@@ -122,7 +122,13 @@ def learned_skills_dir() -> Path:
 # file is the machine-wide answer, and the web UI's Settings page edits it.
 # Precedence everywhere: explicit flag > env var > this file > built-in default.
 # ---------------------------------------------------------------------------
-SETTING_KEYS = ["tz", "realm", "map_poll_seconds", "dash_refresh_seconds"]
+SETTING_KEYS = ["tz", "realm", "backend", "map_poll_seconds", "dash_refresh_seconds"]
+
+# `backend` is where READS come from by default (writes always hit SQLite first
+# and mirror onward, whatever this says). `auto` is the honest setting for a
+# container that can be stopped: neo4j when it answers, the local mirror when it
+# does not. `scripts/neo4j_local.py up` writes it.
+BACKENDS = ("sqlite", "neo4j", "auto")
 
 
 def settings_path() -> Path:

@@ -233,6 +233,23 @@ unless you configure it. When the mirror is unreachable the change is queued in 
 - The visualizer (`viz/serve.py`) reads the mirror when one is reachable, else the
   local file.
 
+**A local graph server in one command.** `scripts/neo4j_local.py up` (slash command
+`/neo4j-up`) runs neo4j in Docker with `--restart unless-stopped`, the store
+bind-mounted at `<home>/neo4j/{data,logs}`, bound to `127.0.0.1`, a generated
+password written to `neo4j.json` (chmod 600, **never printed** — capture would store
+it), the `backend` setting flipped, and the existing brain backfilled. Idempotent;
+`status` / `down` / `down --remove` alongside it. It **refuses to repoint an
+already-configured master** without `--switch` (or `--keep-config`), because
+silently moving where writes mirror is how two stores drift. Optional — SQLite is
+the product (see [docs/neo4j.md](docs/neo4j.md) for the measured cost).
+
+**The `backend` setting** decides where a read goes when nothing says otherwise:
+`sqlite` (default), `auto` (mirror when the master is down), or `neo4j`. It lives in
+`<home>/settings.json` so the CLI, hooks and cron share one answer; `$SECOND_BRAIN_BACKEND`
+wins over it, and an explicit `--backend` wins over both. `graph.py` always reads
+the local mirror regardless — the mirror is written first on every mutation, so it
+is never behind.
+
 Node `type` is a property in the mirror, not a label, so changing a node's type
 needs no label surgery — re-emitting the node through the API is enough.
 
@@ -290,9 +307,10 @@ The date views (today/week/…) only show **dated** tasks; use **`open`** to see
 undated ones (e.g. another person's tasks) — it's the right view for the assignee filter.
 
 Prefer it (or `graph.py search` / `open-loops`) over asking the model to recall —
-recall is free. `--backend sqlite|neo4j|auto`, local-tz buckets via `--tz`,
-`$SECOND_BRAIN_TZ`, or the `tz` setting in `<home>/settings.json` (§2g) — in that
-order. The dashboard tab of `viz/serve.py` is this same layer over HTTP.
+recall is free. `--backend sqlite|neo4j|auto` (with no flag: the `backend` setting,
+§2d, default `sqlite`), local-tz buckets via `--tz`, `$SECOND_BRAIN_TZ`, or the `tz`
+setting in `<home>/settings.json` (§2g) — in that order. The dashboard tab of
+`viz/serve.py` is this same layer over HTTP.
 
 **`--mine` — only what the owner must act on.** Any view takes `--mine` (the
 dashboard's "🙋 Mine · needs action" toggle → `?mine=1`) to keep ONLY the owner's
@@ -346,8 +364,8 @@ guarantee as the read layer.
 | Remove a relation | `POST /api/unlink` | The `×` on any row under **Related**. |
 | Read the vocabulary | `GET /api/meta` | Relations + statuses + `writable`; the UI never hardcodes them. |
 | Find a node to link | `GET /api/search?q=` | Title substring, for the relation picker. |
-| Change a preference | `POST /api/settings` | `tz`, `realm`, `map_poll_seconds`, `dash_refresh_seconds` → `<home>/settings.json`. |
-| Point at the master | `POST /api/neo4j-config` / `/api/neo4j-test` | Writes `<home>/neo4j.json` (mode 600) and probes it. Empty url = sqlite only. |
+| Change a preference | `POST /api/settings` | `tz`, `realm`, `backend`, `map_poll_seconds`, `dash_refresh_seconds` → `<home>/settings.json`. |
+| Point at the master | `POST /api/neo4j-config` / `/api/neo4j-test` | Writes `<home>/neo4j.json` (mode 600) and probes it. Empty url = sqlite only, and resets `backend` to `sqlite`. The **default read backend** select (§2d) sits in this card. |
 | Drain the queue | `POST /api/flush` | Pushes the outbox to neo4j. |
 | Prune | `POST /api/prune` | Runs `maintain` — consolidates old captures, deletes nothing (§2a). |
 

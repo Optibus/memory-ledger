@@ -11,6 +11,10 @@ __pycache__/
 # with presentation/build/{capture,build,verify}.js instead of committing binaries.
 presentation/
 
+# Shareable zips built by scripts/bundle.py — regenerate them, never commit them
+# (a stale bundle in git is worse than no bundle).
+dist/
+
 # Cue-matching eval cases (scripts/eval_cues.py). They name a person's own rules
 # and skills, so they are personal data. The real file lives at
 # ~/.second_brain/eval_cases.json; this covers an in-repo copy too.

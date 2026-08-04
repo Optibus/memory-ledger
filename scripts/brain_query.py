@@ -10,8 +10,10 @@ the stdlib.
 
 It reuses the same engine + store as `graph.py` (the SQLite mirror `graph.py`
 keeps in sync on every write), so it always sees current state. A `--backend
-neo4j` mode reads the unified master over HTTP for the server case; the default
-`sqlite` backend is local, instant, and offline-friendly.
+neo4j` mode reads the unified master over HTTP for the server case; the
+`sqlite` backend is local, instant, and offline-friendly. With no flag the
+backend is the `backend` setting (`<home>/settings.json`, written by the UI's
+Settings page or by `scripts/neo4j_local.py up`), falling back to `sqlite`.
 
 Output is a compact text table by default (read it with your eyes, no tokens);
 pass `--json` to feed the web UI / phone backend.
@@ -108,7 +110,18 @@ def _fetch_neo4j() -> list[dict]:
     return nodes
 
 
-def _fetch(backend: str) -> list[dict]:
+def default_backend() -> str:
+    """No flag, no argument → the `backend` setting (env first, then
+    <home>/settings.json), else the SQLite mirror. Written by the Settings page
+    and by `neo4j_local.py up`; an unknown value degrades to sqlite rather than
+    failing a read."""
+    val = graph.setting("backend", "sqlite")
+    return val if val in graph.BACKENDS else "sqlite"
+
+
+def _fetch(backend: str | None) -> list[dict]:
+    if backend is None:
+        backend = default_backend()
     if backend == "neo4j":
         return _fetch_neo4j()
     if backend == "auto":
@@ -412,7 +425,7 @@ def view_open(nodes, tz):
 
 
 def compute(view, *, date_from=None, date_to=None, status="any",
-            since_days=7, tz=None, backend="sqlite", mine=False, assignee=None,
+            since_days=7, tz=None, backend=None, mine=False, assignee=None,
             realm=None, kind=None):
     """Run a view and return (title, rows, tz, ref). The single entry point both
     the CLI and the web/phone server call — no query logic lives anywhere else.
@@ -500,8 +513,10 @@ def main(argv=None):
     p.add_argument("--since-days", type=int, default=7,
                    help="closed: look back this many days (default 7)")
     p.add_argument("--tz", help="IANA tz for day buckets (default $SECOND_BRAIN_TZ / system)")
-    p.add_argument("--backend", choices=["sqlite", "neo4j", "auto"], default="sqlite",
-                   help="where to read (default sqlite mirror; neo4j = master over HTTP)")
+    p.add_argument("--backend", choices=list(graph.BACKENDS), default=None,
+                   help="where to read: sqlite mirror · neo4j master over HTTP · "
+                        "auto (neo4j when reachable, else the mirror). Default is "
+                        "the `backend` setting, else sqlite.")
     p.add_argument("--mine", action="store_true",
                    help="only tasks the owner ($SECOND_BRAIN_OWNER) needs to act on "
                         "(assigned to me, not delegated, not parked waiting)")

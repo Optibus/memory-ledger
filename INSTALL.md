@@ -46,6 +46,8 @@ claude --plugin-dir ~/dev/second-brain
 
 Restart the session (or run `/reload-plugins`) after installing.
 
+**From a zip** (no GitHub access needed — see [below](#no-repo-access-install-from-a-zip)).
+
 ### Runs on every session (user-level)
 
 Installing via `/plugin install` enables the plugin at **user level**, so it's
@@ -85,6 +87,37 @@ python3 ~/dev/second-brain/scripts/graph.py init
 
 To **disable** the brain anywhere, unset/rename that dir — the hooks detect it and
 go quiet.
+
+### Optional: a local neo4j, in one command
+
+Also not required. SQLite is the default and is enough for one person's brain;
+neo4j buys **query shape** (variable-depth paths, shortest path, centrality), not
+speed — measured, it costs ~850 MiB resident against 26 MiB. Read
+[docs/neo4j.md](docs/neo4j.md) before turning it on.
+
+```
+python3 ~/dev/second-brain/scripts/neo4j_local.py up     # or /neo4j-up in Claude Code
+```
+
+Idempotent, and it does the whole job: a `neo4j:5` container with
+**`--restart unless-stopped`**, the store bind-mounted at
+`~/.second_brain/neo4j/{data,logs}`, bound to `127.0.0.1` only, a password
+generated into `~/.second_brain/neo4j.json` (chmod 600, never printed), the
+`backend` setting flipped to `auto`, and the existing brain backfilled into it.
+Needs Docker; nothing else.
+
+```
+python3 ~/dev/second-brain/scripts/neo4j_local.py status
+python3 ~/dev/second-brain/scripts/neo4j_local.py down      # stops, and stays stopped
+```
+
+If a master is **already** configured, `up` refuses to repoint it until you pass
+`--switch` (the old config is backed up first) or `--keep-config`.
+
+The `backend` setting it writes is where `brain_query.py` reads from when no
+`--backend` flag is given: `auto` (neo4j when reachable, else the local mirror),
+`neo4j` (master only), or `sqlite`. Change it any time in the UI's
+**Settings › Database connection**.
 
 ### Optional: mirror one brain across machines
 
@@ -163,9 +196,51 @@ Then send any message and check it landed:
 python3 scripts/graph.py list --type capture --all --limit 5
 ```
 
+## No repo access? Install from a zip
+
+`/plugin marketplace add Optibus/second-brain` needs the person to be able to read
+the GitHub repo. Until that access exists, hand them a zip — Claude Code installs a
+plugin from a **directory**, so unzipping *is* the install.
+
+Build one:
+
+```
+python3 scripts/bundle.py                  # dist/second-brain-<version>.zip
+python3 scripts/bundle.py --list           # what would go in
+python3 scripts/bundle.py --out ~/Desktop
+```
+
+It packs **git-tracked files only** — so `.gitignore` decides what is excluded and
+no brain data, eval cases or generated deck can ride along — under a single
+top-level `second-brain/` directory, and generates two files into the archive:
+`INSTALL-FROM-ZIP.md` (the recipient's whole procedure) and `BUNDLE.txt` (version,
+commit, file list). Anything untracked is reported as a warning and left out, so
+`git add` new files before building.
+
+The recipient runs:
+
+```
+unzip second-brain-<version>.zip -d ~/dev
+```
+then, in Claude Code:
+```
+/plugin marketplace add ~/dev/second-brain
+/plugin install second-brain@second-brain
+```
+`mkdir -p ~/.second_brain && python3 ~/dev/second-brain/scripts/graph.py init`, and
+they are running. No admin, no marketplace, no repo permission. When repo access
+lands they can clone over it and get updates with `git pull`; `~/.second_brain` is
+outside the repo, so the brain survives the swap.
+
+The bundle carries no memory of yours. If you want to share **rules** rather than
+code, that is [docs/optibus-team-rules.md](docs/optibus-team-rules.md) — a curated
+export with a paste block that loads them into the recipient's own brain.
+
 ## Uninstall
 
 ```
 /plugin uninstall second-brain@second-brain
 ```
 Your brain data in `~/.second_brain` is left untouched (delete that dir to remove it).
+A local neo4j container is separate: `python3 scripts/neo4j_local.py down --remove`,
+and delete `~/.second_brain/neo4j` to drop its copy of the graph.

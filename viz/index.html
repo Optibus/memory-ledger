@@ -1509,6 +1509,14 @@ const Settings = (function(){
     const i=document.createElement('input'); i.type=type||'text';
     i.value=value==null?'':value; if(ph)i.placeholder=ph; return i;
   }
+  function select(value,options){
+    const s=document.createElement('select');
+    options.forEach(([v,label])=>{
+      const o=document.createElement('option'); o.value=v; o.textContent=label;
+      if(v===value) o.selected=true; s.appendChild(o);
+    });
+    return s;
+  }
   function btn(text,cls){
     const b=document.createElement('button'); b.className='dbtn'+(cls?' '+cls:'');
     b.textContent=text; return b;
@@ -1646,6 +1654,16 @@ const Settings = (function(){
     c.appendChild(row(field('neo4j HTTP url',url)));
     c.appendChild(row(field('database',db,true),field('user',user,true),
                       field('password',pw)));
+    // Which store a CLI read defaults to. This page and the map always ask for
+    // "auto", so this setting is about `brain_query.py`, the hooks and any cron.
+    const eff=PREFS.effective||{};
+    const be=select(eff.backend||'sqlite',[
+      ['sqlite','sqlite — always the local mirror'],
+      ['auto','auto — neo4j when it answers, else the mirror'],
+      ['neo4j','neo4j — master only (fails when it is down)']]);
+    c.appendChild(row(field('default read backend (CLI)',be)));
+    if((PREFS.env||{}).backend) c.appendChild(warn('<code>$SECOND_BRAIN_BACKEND='+
+      esc(PREFS.env.backend)+'</code> overrides what you save here.'));
     if((n.env||[]).length) c.appendChild(warn('Set in this server\'s environment '+
       'and overriding the file: <code>'+esc(n.env.join(', '))+'</code>.'));
     const res=document.createElement('div'); res.className='out';
@@ -1655,9 +1673,12 @@ const Settings = (function(){
     flush.disabled=ro||!STATUS.pending_ops;
     save.onclick=async()=>{
       save.disabled=true;
+      const p=await post('/api/settings',{backend:be.value});
+      if(p.ok) PREFS=p;
       const d=await post('/api/neo4j-config',{url:url.value.trim(),db:db.value.trim(),
         user:user.value.trim(),password:pw.value});
       save.disabled=false;
+      if(!p.ok){ out(res,p.error||'failed to save the backend'); return; }
       if(!d.ok){ out(res,d.error||'failed'); return; }
       out(res, d.cleared ? 'neo4j config removed — reading the local mirror only.'
         : (d.reachable ? 'saved · connection works.'

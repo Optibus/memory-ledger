@@ -147,6 +147,8 @@ removing/renaming the brain home (`~/.second_brain`); the hooks then no-op.
 Front door in Claude Code: **`/ledger <anything>`** routes to all of the above.
 **`/plan-today`** picks up only *your* actionable tasks (token-free) and blocks
 them into your calendar's free windows, ending with one clear first action.
+**`/neo4j-up`** stands up the optional local graph database (Docker, one command,
+data under `~/.second_brain/neo4j`) and points the brain at it.
 
 ## The graph engine
 
@@ -257,8 +259,11 @@ not someone else), and never delegated or parked waiting/blocked. Rows carry
 card's date chip → date picker (writes token-free via `/api/set-due`). Captured
 to-dos get their **assignee inferred** (mine / a named person / unassigned — never
 blindly "me"; "ask/chase <Name>" stays *yours*).
-Local-tz buckets via `--tz`, `$SECOND_BRAIN_TZ`, or Settings › Time zone;
-`--backend sqlite|neo4j|auto`.
+Local-tz buckets via `--tz`, `$SECOND_BRAIN_TZ`, or Settings › Time zone.
+`--backend sqlite|neo4j|auto` picks the store; with no flag it follows the
+**`backend` setting** (`$SECOND_BRAIN_BACKEND`, then `<home>/settings.json`,
+default `sqlite`) — so the CLI, the hooks and any cron share one default, set
+once in Settings › Database connection or by `neo4j_local.py up`.
 Recall stays free — reach for this (or `graph.py search` / `open-loops`) instead
 of asking the model to remember.
 
@@ -395,6 +400,20 @@ invoke skills by name.
 **Claude app** — upload the skill folders as Agent Skills. The same graph engine
 runs in the sandbox; keep memory portable via `~/.second_brain/` or a connected
 persistent location.
+
+**No repo access** — `python3 scripts/bundle.py` builds
+`dist/second-brain-<version>.zip` from the git-tracked files (no brain data), with
+an `INSTALL-FROM-ZIP.md` inside. Unzipping is the install: a plugin loads from a
+directory, so `/plugin marketplace add ~/dev/second-brain` works on a local copy
+with no marketplace or GitHub permission.
+
+**A local neo4j (optional)** — `/neo4j-up`, or
+`python3 scripts/neo4j_local.py up`: a Docker `neo4j:5` with
+`--restart unless-stopped`, its store bind-mounted at `~/.second_brain/neo4j`,
+localhost-only, password generated into `neo4j.json`, made the default read
+backend, and the existing brain backfilled into it. SQLite remains the durable
+mirror — see [docs/neo4j.md](docs/neo4j.md) for why you would, and why you might
+not.
 
 ## Connected machines
 

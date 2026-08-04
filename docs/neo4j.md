@@ -61,21 +61,70 @@ afternoon of graph questions and turn it off again**.
 
 ## Setting it up
 
-### 1. Run a local neo4j
+### The one command
 
 ```bash
-docker run -d --name brain-neo4j \
-  -p 7474:7474 -p 7687:7687 \
-  -e NEO4J_AUTH=neo4j/<a-strong-password> \
-  -v "$HOME/.second_brain/neo4j-data:/data" \
-  neo4j:5
+python3 scripts/neo4j_local.py up      # or /neo4j-up inside Claude Code
 ```
+
+That does the whole of this page's manual setup, idempotently:
+
+| | |
+|---|---|
+| store | `~/.second_brain/neo4j/{data,logs}` — a bind mount inside the brain home, so the graph is a directory you can back up beside `graph.db` |
+| container | `neo4j:5` named `second-brain-neo4j`, **`--restart unless-stopped`** (survives reboots, stays down when you stop it deliberately) |
+| ports | `127.0.0.1:7474` (HTTP) and `127.0.0.1:7687` (Bolt) — **localhost only**, because the HTTP endpoint is cleartext |
+| memory | heap 512m, page cache 256m (`--heap` / `--pagecache`) — deliberately modest; see the cost table above |
+| auth | a password generated once into `~/.second_brain/neo4j.json` (chmod 600) and **never printed**. It reaches docker through the environment, not argv, so it stays out of the process list |
+| config | writes `neo4j.json` and sets `backend: auto` — see "The `backend` setting" below |
+| backfill | runs `brain_sync.py` and drains the outbox, so the new master is not an empty graph |
+
+It **refuses to silently repoint an existing master**: if `neo4j.json` already
+names a different host, it stops and tells you to pass `--switch` (repoint, old
+config backed up first) or `--keep-config` (run the container, leave config
+alone). Other flags: `--http-port` / `--bolt-port` (port taken), `--image`,
+`--name`, `--bind` (only widen it behind TLS), `--password`, `--no-sync`,
+`--default-backend`, `--dry-run`.
+
+Then:
+
+```bash
+python3 scripts/neo4j_local.py status               # container + config + outbox
+python3 scripts/neo4j_local.py down                # stop it; it stays stopped
+python3 scripts/neo4j_local.py down --remove        # drop the container, keep the graph
+```
+
+`down` leaves the config in place: with `backend: auto` reads fall back to the
+SQLite mirror and writes queue in the outbox, draining on the next `up`. That is
+the pattern this page recommends — **on for an afternoon of graph questions, off
+again.**
 
 Browser at <http://localhost:7474>. The HTTP transactional endpoint this project
 uses is on **7474**, not the Bolt port — the code speaks HTTP with stdlib only, so
 there is no driver to install.
 
-### 2. Point the brain at it
+### Doing it by hand
+
+The equivalent of what the command runs, if you would rather own it:
+
+```bash
+mkdir -p "$HOME/.second_brain/neo4j/data" "$HOME/.second_brain/neo4j/logs"
+docker run -d --name second-brain-neo4j \
+  --restart unless-stopped \
+  --user "$(id -u):$(id -g)" \
+  -p 127.0.0.1:7474:7474 -p 127.0.0.1:7687:7687 \
+  -e NEO4J_AUTH=neo4j/<a-strong-password> \
+  -v "$HOME/.second_brain/neo4j/data:/data" \
+  -v "$HOME/.second_brain/neo4j/logs:/logs" \
+  neo4j:5
+```
+
+`--user` is not optional with bind mounts: the image's `neo4j` user (uid 7474)
+cannot write a directory owned by you, and the container crash-loops with
+"Folder /logs is not accessible for user". The other trap is a store path the
+Docker VM cannot share — keep it under your home directory.
+
+### Point the brain at it
 
 Config lives in the **private brain home**, never in the repo:
 
@@ -100,7 +149,10 @@ export SECOND_BRAIN_NEO4J_USER=neo4j
 export SECOND_BRAIN_NEO4J_PASSWORD=...
 ```
 
-### 3. Backfill and verify
+(Both are what `neo4j_local.py up` writes for you — same file, same shape the
+UI's **Settings › Database connection** writes.)
+
+### Backfill and verify
 
 ```bash
 python3 scripts/brain_sync.py --dry-run    # show what would be sent
@@ -112,12 +164,32 @@ python3 scripts/graph.py flush             # drain pending writes
 `brain_sync.py` is idempotent — it `MERGE`s on `id`, so re-running updates rather
 than duplicating.
 
-### 4. Read from it
+### Read from it
 
 ```bash
 python3 scripts/brain_query.py agenda --backend neo4j
 python3 scripts/brain_query.py open --backend auto     # neo4j if up, else sqlite
 ```
+
+### The `backend` setting
+
+With no `--backend` flag, `brain_query.py` reads the **`backend` setting** in
+`~/.second_brain/settings.json` (env `$SECOND_BRAIN_BACKEND` wins), falling back
+to `sqlite`. So the default is machine-wide — the CLI, the hooks and any cron
+agree, rather than each caller passing a flag.
+
+| value | means |
+|---|---|
+| `sqlite` | always the local mirror (the default when nothing is set) |
+| `auto` | neo4j when it answers, the mirror when it does not — what `neo4j_local.py up` writes |
+| `neo4j` | master only; reads **fail** when it is down |
+
+Set it in the UI (**Settings › Database connection › default read backend**) or
+by `up`. Two deliberate behaviours: clearing the neo4j config from the Settings
+page resets this to `sqlite` (a `neo4j` default with no master would break every
+read), and `graph.py` itself always reads the local mirror regardless — the mirror
+is written first on every mutation, so it is never behind. The map and dashboard
+always prefer the master when it answers, whatever this says.
 
 ---
 
@@ -196,6 +268,13 @@ actual argument for neo4j.
 - Keep `neo4j.json` at `chmod 600`. It holds a password in plaintext.
 - Do not commit it — it lives in `~/.second_brain/`, outside the repo, and the
   repo ignores the brain home for exactly this reason.
+- `neo4j_local.py` binds to `127.0.0.1` by default and generates the password
+  itself so you never type it. It also **never prints it** — neither does
+  `/neo4j-up`, because every prompt and answer in a session is captured into the
+  graph, and a printed password would become a stored one. Read it out of
+  `neo4j.json` when you need it for the browser.
+- Widening `--bind` publishes cleartext credentials on your network. Put TLS in
+  front of it first.
 
 ---
 
@@ -204,4 +283,10 @@ actual argument for neo4j.
 There is nothing to undo. Remove `neo4j.json` (or unset the env vars) and the
 brain goes back to SQLite-only; the outbox stops draining and `neo4j-status`
 reports it down. The SQLite mirror was never behind — it is written first, every
-time.
+time. (Clearing it from the Settings page also resets `backend` to `sqlite`.)
+
+For the local container specifically: `neo4j_local.py down` stops it,
+`down --remove` deletes the container while leaving the graph in
+`~/.second_brain/neo4j` for a later `up`, and deleting that directory removes the
+neo4j copy entirely — the SQLite brain is untouched, and the next `up` refills a
+fresh store from it.
