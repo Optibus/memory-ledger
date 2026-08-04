@@ -20,6 +20,13 @@ current directory.
 **It contains no brain data.** The graph lives in `~/.second_brain`, outside the
 repo, and this only packs tracked repo files — the recipient gets the engine and
 the skills, and starts with an empty brain of their own.
+
+`--include <path>` rides an extra file along that is deliberately NOT in the
+repo. The plugin is company-agnostic, so anything company-specific — an exported
+set of team rules, an internal runbook — lives outside it (`~/.second_brain/…`)
+and is attached at bundle time:
+
+    python3 scripts/bundle.py --include ~/.second_brain/exports/team-rules.md
 """
 
 from __future__ import annotations
@@ -35,10 +42,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 PLUGIN_JSON = REPO / ".claude-plugin" / "plugin.json"
 
-# Docs a person reads first, in the order they need them. Named so BUNDLE.txt can
-# point at them and so a missing one is a visible error rather than a silent gap.
-ENTRY_DOCS = ["INSTALL-FROM-ZIP.md", "INSTALL.md", "README.md",
-              "docs/optibus-team-rules.md", "CONVENTIONS.md"]
+# Docs a person reads first, in the order they need them. Named so a missing one
+# is a visible error rather than a silent gap.
+ENTRY_DOCS = ["INSTALL-FROM-ZIP.md", "INSTALL.md", "README.md", "CONVENTIONS.md"]
 
 
 def version() -> str:
@@ -139,9 +145,7 @@ python3 ~/dev/second-brain/scripts/graph.py list --type capture --all --limit 5
   `~/.second_brain/neo4j`, restarts unless stopped):
   `python3 ~/dev/second-brain/scripts/neo4j_local.py up` — or `/neo4j-up` inside
   Claude Code. Entirely optional; SQLite is the default and is enough.
-- **The team's working rules:** `docs/optibus-team-rules.md` — thirteen rules,
-  with a paste block at the end that loads them into your own brain so your
-  agent pulls only the ones that apply.
+{extras_note}
 
 ## Updating later
 
@@ -156,7 +160,19 @@ brain survives either way.)
 """
 
 
-def manifest(files: list[str], info: dict, ver: str) -> str:
+def extras_note(extras: list[str]) -> str:
+    """The INSTALL-FROM-ZIP bullet for `--include`d files. Empty when there are
+    none, because the plugin itself ships nothing company-specific."""
+    if not extras:
+        return ""
+    lines = ["- **Attached alongside the plugin** (not part of it — company-specific "
+             "material kept outside the repo):"]
+    lines += [f"  - `{name}`" for name in extras]
+    return "\n".join(lines)
+
+
+def manifest(files: list[str], info: dict, ver: str, extras: list[str] | None = None) -> str:
+    extras = extras or []
     lines = [
         "Memory Ledger (second-brain) — offline bundle",
         f"version      {ver}",
@@ -165,15 +181,20 @@ def manifest(files: list[str], info: dict, ver: str) -> str:
         + ("  (WITH UNCOMMITTED CHANGES)" if info.get("dirty") else ""),
         f"head date    {info.get('date', 'unknown')}",
         f"head subject {info.get('subject', 'unknown')}",
-        f"files        {len(files)} tracked + this manifest + INSTALL-FROM-ZIP.md",
+        f"files        {len(files)} tracked + this manifest + INSTALL-FROM-ZIP.md"
+        + (f" + {len(extras)} attached" if extras else ""),
         "",
         "START HERE   INSTALL-FROM-ZIP.md",
         "",
         "Contains no brain data: the graph lives in ~/.second_brain, outside the repo.",
+        "The plugin is company-agnostic; anything under 'Attached' below was added "
+        "with --include and is not part of it.",
         "",
         "Contents:",
     ]
     lines += [f"  {f}" for f in files]
+    if extras:
+        lines += ["", "Attached (--include):"] + [f"  {n}" for n in extras]
     return "\n".join(lines) + "\n"
 
 
@@ -182,6 +203,11 @@ def main(argv=None) -> int:
     p.add_argument("--out", default=str(REPO / "dist"),
                    help="output directory (default dist/)")
     p.add_argument("--name", help="archive filename (default second-brain-<version>.zip)")
+    p.add_argument("--include", action="append", default=[], metavar="PATH",
+                   help="attach a file that is NOT in the repo (repeatable) — e.g. an "
+                        "exported set of team rules from ~/.second_brain. It lands at "
+                        "the archive root and is listed as 'attached', never as part "
+                        "of the plugin.")
     p.add_argument("--list", action="store_true", dest="list_only",
                    help="print what would be packed and exit")
     args = p.parse_args(argv)
@@ -198,8 +224,22 @@ def main(argv=None) -> int:
         print("warning: expected doc(s) not tracked, so not in the bundle: "
               + ", ".join(missing), file=sys.stderr)
 
+    attached = []
+    for raw in args.include:
+        src = Path(raw).expanduser()
+        if not src.is_file():
+            print(f"--include: not a file: {src}", file=sys.stderr)
+            return 1
+        if src.name in {Path(f).name for f in files} or src.name in ("BUNDLE.txt",
+                                                                    "INSTALL-FROM-ZIP.md"):
+            print(f"--include: {src.name} collides with a bundled file — rename it "
+                  "first.", file=sys.stderr)
+            return 1
+        attached.append(src)
+    extras = [s.name for s in attached]
+
     if args.list_only:
-        print(manifest(files, info, ver))
+        print(manifest(files, info, ver, extras))
         return 0
 
     out_dir = Path(args.out).expanduser()
@@ -208,18 +248,23 @@ def main(argv=None) -> int:
     root = "second-brain"          # single top-level dir: unzip never spills
 
     install = INSTALL_FROM_ZIP.format(version=ver, commit=info.get("commit", "unknown"),
-                                      date=(info.get("date") or "unknown")[:10])
+                                      date=(info.get("date") or "unknown")[:10],
+                                      extras_note=extras_note(extras))
     with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as z:
         for rel in files:
             src = REPO / rel
             if not src.exists():        # tracked but deleted in the working tree
                 continue
             z.write(src, f"{root}/{rel}")
+        for src in attached:
+            z.write(src, f"{root}/{src.name}")
         z.writestr(f"{root}/INSTALL-FROM-ZIP.md", install)
-        z.writestr(f"{root}/BUNDLE.txt", manifest(files, info, ver))
+        z.writestr(f"{root}/BUNDLE.txt", manifest(files, info, ver, extras))
 
     size = target.stat().st_size / 1024
-    print(f"{target}  ({size:.0f} KiB, {len(files) + 2} files)")
+    print(f"{target}  ({size:.0f} KiB, {len(files) + len(attached) + 2} files)")
+    for name in extras:
+        print(f"  attached: {name}  (not part of the plugin)")
     if info.get("dirty"):
         print("note: the working tree has uncommitted changes. Tracked files are "
               "packed AS THEY ARE ON DISK, so those changes are in the zip while the "

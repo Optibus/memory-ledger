@@ -208,6 +208,7 @@ Build one:
 python3 scripts/bundle.py                  # dist/second-brain-<version>.zip
 python3 scripts/bundle.py --list           # what would go in
 python3 scripts/bundle.py --out ~/Desktop
+python3 scripts/bundle.py --include ~/.second_brain/exports/<your-doc>.md
 ```
 
 It packs **git-tracked files only** — so `.gitignore` decides what is excluded and
@@ -216,6 +217,12 @@ top-level `second-brain/` directory, and generates two files into the archive:
 `INSTALL-FROM-ZIP.md` (the recipient's whole procedure) and `BUNDLE.txt` (version,
 commit, file list). Anything untracked is reported as a warning and left out, so
 `git add` new files before building.
+
+**`--include` for anything company-specific.** The plugin is agnostic — it holds no
+company's rules, runbooks or names. Material like that belongs outside the repo (in
+your brain home, which is never committed) and rides along at bundle time:
+`--include <path>` puts the file at the archive root and lists it under *attached*,
+so the recipient can tell the plugin from what you attached to it. Repeatable.
 
 The recipient runs:
 
@@ -232,9 +239,12 @@ they are running. No admin, no marketplace, no repo permission. When repo access
 lands they can clone over it and get updates with `git pull`; `~/.second_brain` is
 outside the repo, so the brain survives the swap.
 
-The bundle carries no memory of yours. If you want to share **rules** rather than
-code, that is [docs/optibus-team-rules.md](docs/optibus-team-rules.md) — a curated
-export with a paste block that loads them into the recipient's own brain.
+The bundle carries no memory of yours. To share **rules** rather than code, export
+the ones you want as a Markdown doc kept **outside this repo** (e.g.
+`~/.second_brain/exports/<team>-rules.md`) with a paste block of `graph.py add-rule`
+calls at the end, then attach it with `--include`. The recipient's agent then pulls
+only the rules that match what they are doing (`match-rules`) instead of reading the
+whole document.
 
 ## Uninstall
 

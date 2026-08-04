@@ -11,7 +11,6 @@ These pages are the reference: how it works and how to change it.
 | [api.md](api.md) | the local HTTP server — GET/POST surface and how to extend it |
 | [performance.md](performance.md) | measured latency, storage, growth projections, scaling, known limits |
 | [neo4j.md](neo4j.md) | running a real graph database instead of the SQLite mirror — `neo4j_local.py up` (Docker, one command), the `backend` setting, and whether it is worth it |
-| [optibus-team-rules.md](optibus-team-rules.md) | the working rules exported from one brain to share with the team, and how to load them into yours |
 | [comparison.md](comparison.md) | how this compares to MemPalace and other second brains, and measured SQLite vs neo4j vs ChromaDB |
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | setup, layout, how to add a node type / command / endpoint / skill |
 
