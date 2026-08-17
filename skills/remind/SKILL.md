@@ -29,7 +29,7 @@ not loaded yet — run `ingest-conventions` once, then re-query. See CONVENTIONS
    `CronCreate` tool under the hood) to create a routine that fires at the
    resolved time. The routine's prompt should be self-contained, e.g.:
 
-   > second-brain reminder firing. Use the `send-slack` skill to DM
+   > memory-ledger reminder firing. Use the `send-slack` skill to DM
    > `<slack target>`: "⏰ <message>". Then run
    > `python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" update-node --id <reminder id> --status done`
    > (skip the status update if it is a recurring reminder).

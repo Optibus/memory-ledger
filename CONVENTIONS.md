@@ -1,6 +1,6 @@
-# second-brain — shared conventions
+# memory-ledger — shared conventions
 
-Every second-brain skill reads this once per session before acting. It defines
+Every memory-ledger skill reads this once per session before acting. It defines
 (1) how we talk to the person, (2) the memory graph API, (3) the vocabulary.
 
 ---
@@ -125,7 +125,8 @@ Commands:
 
 | Command | Purpose |
 |---|---|
-| `init` | Create the DB (idempotent). |
+| `init` | Create the DB (idempotent). Bootstrap (`hooks/bootstrap.py`) already calls this on every `SessionStart`, so a manual `init` is no longer a required install step — it exists for scripting/tests. |
+| `disable` / `enable` | Turn capture off/on machine-wide by writing/removing `<home>/.disabled` (`/ledger off` / `/ledger on`). This is the only durable off switch — deleting the home dir is not (see §2d). |
 | `add-node --type T --title "..." [--body ...] [--props JSON] [--status S] [--due ISO] [--id ID] [--realm R] [--area A]` | Create a node. `--area` files it under a domain area in the same call (§2e) and **errors instead of creating an orphan** if the area does not exist. Returns the full node under `node` — read the new id from **`.node.id`**. There is **no `add-task` subcommand**: a task is `add-node --type task --status open` (the `add-task` *skill* wraps that and adds micro-steps; the web UI's is `POST /api/add-task`). |
 | `update-node --id ID [--title][--body][--props JSON][--status][--due]` | Update fields. `--props` MERGES into existing props. |
 | `get-node --id ID` | One node **plus all its edges** (neighbors named). |
@@ -219,6 +220,18 @@ still awaiting action, and it stays open until closed.
 **The brain is one local SQLite file, and that is the whole product.** It is
 durable, offline, fast to read, and portable — copy `graph.db` and the brain moves
 with it. Nothing about the brain requires a network.
+
+**Enabled means "not explicitly turned off."** `hooks/bootstrap.py` runs on every
+`SessionStart` and auto-creates the home dir + DB if they don't exist, so there is
+no manual init step and — just as importantly — deleting the home dir is **not**
+an off switch (bootstrap just recreates it next session). The brain is OFF only
+when `$MEMORY_LEDGER_OFF`/`$SECOND_BRAIN_OFF` is truthy for the current process, or
+`<home>/.disabled` exists; `graph.disabled()` / `graph.enabled()` in `scripts/
+graph.py` are the single source of truth for this check — read from there, never
+re-implement it. Toggle the marker with `graph.py disable` / `graph.py enable`
+(`/ledger off` / `/ledger on`). `scripts/doctor.py` (`/ledger doctor`) reports
+whether the brain is currently enabled, where the DB lives, and whether anything
+looks mis-wired — reach for it before assuming a broken install.
 
 **Optional graph mirror.** If a `graph` backend is configured, every mutation also
 pushes there, so several machines can share one brain. Configure it with

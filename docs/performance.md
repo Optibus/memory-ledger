@@ -194,7 +194,7 @@ and a ChromaDB store (the substrate MemPalace uses) built at increasing scale:
 
 | | Resident memory | Disk | Read latency |
 |---|---|---|---|
-| **second-brain (SQLite)** | **26 MiB** | **1.60 MiB** | 0.03–0.07 ms in-process |
+| **memory-ledger (SQLite)** | **26 MiB** | **1.60 MiB** | 0.03–0.07 ms in-process |
 | neo4j, same 623 nodes | 836–862 MiB | 516 MB | 7–17 ms over localhost HTTP |
 | ChromaDB, 50k documents | 262 MiB | 291 MB | ~1.0 ms |
 

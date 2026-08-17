@@ -24,19 +24,21 @@ dependency here is a dependency in everyone's shell startup path.
 ## Getting set up
 
 ```bash
-git clone git@github.com:Optibus/second-brain.git ~/dev/second-brain
-cd ~/dev/second-brain
-mkdir -p ~/.second_brain
-python3 scripts/graph.py init
+git clone git@github.com:Optibus/memory-ledger.git ~/dev/memory-ledger
+cd ~/dev/memory-ledger
 python3 scripts/graph.py stats
 ```
+
+`connect()` creates the home dir and schema on first use (the same auto-init
+`hooks/bootstrap.py` runs on every `SessionStart`), so there is no separate
+`init` step to run by hand — any command against a fresh `~/.second_brain`
+just works.
 
 Work against a scratch brain so you never corrupt your real one:
 
 ```bash
 export SECOND_BRAIN_HOME=/tmp/brain-dev
-mkdir -p "$SECOND_BRAIN_HOME"
-python3 scripts/graph.py init
+python3 scripts/graph.py stats
 ```
 
 Every path respects `SECOND_BRAIN_HOME`, so this is fully isolated.
@@ -44,7 +46,7 @@ Every path respects `SECOND_BRAIN_HOME`, so this is fully isolated.
 Try it in one session without installing:
 
 ```bash
-claude --plugin-dir ~/dev/second-brain
+claude --plugin-dir ~/dev/memory-ledger
 ```
 
 ## Layout
@@ -106,13 +108,16 @@ There is no test suite yet, which is the biggest gap in the project. Until there
 is, verify by hand against a scratch brain:
 
 ```bash
-export SECOND_BRAIN_HOME=/tmp/brain-test && mkdir -p "$SECOND_BRAIN_HOME"
-python3 scripts/graph.py init
+export SECOND_BRAIN_HOME=/tmp/brain-test
 python3 scripts/graph.py add-node --type task --title "probe" --status open
 python3 scripts/graph.py recall "probe"
 python3 scripts/graph.py open-loops
 python3 scripts/graph.py stats
 ```
+
+`python3 scripts/doctor.py` is the quick sanity check — it reports whether the
+ledger is enabled, where the DB lives, and whether hooks/settings look wired up
+correctly, using the same paths and env vars the engine itself reads.
 
 Check the hooks still emit valid JSON and nothing else — a stray `print` in a hook
 corrupts the protocol and breaks every session:

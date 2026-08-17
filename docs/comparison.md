@@ -2,7 +2,7 @@
 
 Two different questions get confused with each other:
 
-1. **Which second brain?** second-brain vs MemPalace vs the rest.
+1. **Which second brain?** memory-ledger vs MemPalace vs the rest.
 2. **Which storage engine?** SQLite vs neo4j vs a vector store.
 
 They are separable, and the answers are different. Everything below was measured
@@ -12,11 +12,11 @@ on 2026-07-30 on the same machine, with the recipes noted.
 
 ## The short version
 
-**MemPalace and second-brain are not competing implementations of the same idea.**
+**MemPalace and memory-ledger are not competing implementations of the same idea.**
 They answer different questions and the difference is architectural, not
 incidental.
 
-| | second-brain | MemPalace |
+| | memory-ledger | MemPalace |
 |---|---|---|
 | **The question it answers** | *What do I owe, to whom, by when?* | *Why did we do X? How did we handle Y?* |
 | Direction | **prospective** — records state as you work | **retrospective** — mines what already happened |
@@ -29,7 +29,7 @@ incidental.
 | Interface | plugin: hooks + skills + CLI + local dashboard | ~19 MCP tools + hooks |
 
 The one-line difference: **MemPalace can tell you what was decided; it cannot tell
-you that Isadora is waiting on you.** second-brain tracks *state* — status, due
+you that Isadora is waiting on you.** memory-ledger tracks *state* — status, due
 dates, who owes what, what is stale. MemPalace tracks *history*, and searches it by
 meaning rather than by keyword, which is something this project deliberately
 cannot do.
@@ -37,18 +37,18 @@ cannot do.
 They are complements, and Ilan's own onboarding kit says as much ("you can run more
 than one — just don't duplicate the same facts across both"). If you want one
 sentence of advice: **run MemPalace if your pain is "we solved this before and I
-can't find it"; run second-brain if your pain is "I've lost track of what I owe
+can't find it"; run memory-ledger if your pain is "I've lost track of what I owe
 people".**
 
 ---
 
 ## Measured: footprint and read cost
 
-Same machine, same day. second-brain measured on the real brain (623 nodes / 909
+Same machine, same day. memory-ledger measured on the real brain (623 nodes / 909
 edges); ChromaDB measured on synthetic corpora; neo4j measured with the real brain
 synced into it.
 
-| | second-brain (SQLite) | ChromaDB @ 50k docs | neo4j @ 623 nodes |
+| | memory-ledger (SQLite) | ChromaDB @ 50k docs | neo4j @ 623 nodes |
 |---|---|---|---|
 | Resident memory | **26 MiB** | **262 MiB** | **836–862 MiB** |
 | — of which baseline | ~10 MiB (bare Python) | 76 MiB (import only) | 512 m heap + 256 m pagecache configured |
@@ -87,11 +87,11 @@ Ilan reports **~252,000 drawers / ~2.5 GB**. Two checks against that:
   not a measurement, but it is not an estimate either — it follows from the vector
   count and dimensionality.
 
-For comparison, second-brain at its observed growth rate reaches ~20k nodes and
+For comparison, memory-ledger at its observed growth rate reaches ~20k nodes and
 ~55 MiB **after a year** (see [performance](performance.md#growth-and-long-term-storage)).
 The two systems are two to three orders of magnitude apart in size, because they
 are keeping different things: MemPalace keeps everything it can mine, and
-second-brain keeps what was worth typing.
+memory-ledger keeps what was worth typing.
 
 ---
 
@@ -140,11 +140,11 @@ So the crossover is about **query shape, not node count**:
   a real capability this project does not have and cannot get without an embedding
   step.
 - Bootstrapping from history. `/mempalace:mine` gives you a useful store on day
-  one; second-brain starts empty and fills as you work.
+  one; memory-ledger starts empty and fills as you work.
 - Breadth. It keeps everything it can reach, so the answer is probably in there
   somewhere.
 
-**second-brain is better at:**
+**memory-ledger is better at:**
 
 - State, not just recall. `status`, `due`, `assignee`, `waiting_on`, `blocked_by` —
   and therefore "what's overdue", "what's stale", "who owes me what". A vector
@@ -167,12 +167,12 @@ via hooks, and a knowledge-graph layer.
 ## A note on token cost
 
 Neither system spends model tokens *computing* retrieval — MemPalace embeds
-locally, second-brain uses SQL. Both spend tokens on the results that land in
+locally, memory-ledger uses SQL. Both spend tokens on the results that land in
 context, which is unavoidable.
 
 One structural difference worth knowing: MemPalace exposes ~19 MCP tools, and MCP
 tool schemas occupy context on every request unless the client defers them.
-second-brain adds no tools — it uses hooks that inject a fixed 208 bytes per prompt
+memory-ledger adds no tools — it uses hooks that inject a fixed 208 bytes per prompt
 plus skills that load only when invoked, and its read paths can be run **entirely
 off-model** in a terminal or the dashboard, where you read the answer yourself and
 the model never sees it. I have not measured MemPalace's schema overhead, so treat
@@ -203,5 +203,5 @@ print(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1024/1024)"
 # embedding model, which makes the result a deliberate lower bound.
 ```
 
-Full latency, storage and growth numbers for second-brain itself:
+Full latency, storage and growth numbers for memory-ledger itself:
 [performance.md](performance.md).

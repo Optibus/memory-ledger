@@ -6,7 +6,7 @@ description: Ingest a piece of context into the memory graph — a Google Meet t
 # ingest-context
 
 Turn a raw blob of context (a call, a thread, an email, or pasted text) into
-connected memory the rest of second-brain can use.
+connected memory the rest of memory-ledger can use.
 
 Load only the conventions that apply — not the whole file:
 `python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" match-rules "ingest a meeting transcript, extract decisions and action items"`

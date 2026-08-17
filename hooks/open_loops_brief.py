@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""second-brain — open-loops SessionStart brief (+ daily consolidation).
+"""memory-ledger — open-loops SessionStart brief (+ daily consolidation).
 
 At the start of a session (when the brain is enabled), surface the open loops
 AND the thread that was in play, so the session opens knowing what's hanging and
@@ -23,13 +23,15 @@ import json
 import subprocess
 import datetime
 
-home = (os.environ.get("SECOND_BRAIN_HOME")
-        or os.path.expanduser("~/.second_brain"))
-if not os.path.isdir(home):
-    sys.exit(0)  # brain disabled -> silent
-
 root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.dirname(
     os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(root, "scripts"))
+import graph as _graph  # noqa: E402  (the engine — shared enablement contract)
+
+if _graph.disabled():
+    sys.exit(0)  # brain explicitly off -> silent (bootstrap.py owns dir creation)
+
+home = str(_graph.home_dir())
 graph = os.path.join(root, "scripts", "graph.py")
 
 
@@ -41,9 +43,12 @@ def consolidate_daily():
     fire-and-forget: consolidation must never delay a session start, and it is
     non-destructive (originals are kept and linked), so a missed or interrupted
     run costs nothing — the next session picks it up. Opt out with
-    $SECOND_BRAIN_NO_CONSOLIDATE.
+    $MEMORY_LEDGER_NO_CONSOLIDATE (legacy $SECOND_BRAIN_NO_CONSOLIDATE also works).
     """
-    if os.environ.get("SECOND_BRAIN_NO_CONSOLIDATE"):
+    # Via the engine's _env() rather than os.environ, so this honours BOTH
+    # prefixes like every other config lookup. Reading os.environ directly here
+    # is how an opt-out silently stops working for anyone using the new name.
+    if _graph._env("NO_CONSOLIDATE"):
         return
     stamp = os.path.join(home, ".last_consolidate")
     today = datetime.date.today().isoformat()
@@ -77,7 +82,7 @@ except Exception:
 n = d.get("count", 0)
 if not n:
     print(json.dumps({"additionalContext":
-                      "[second-brain] State: no open loops — all clear."}))
+                      "[memory-ledger] State: no open loops — all clear."}))
     sys.exit(0)
 
 lines = []
@@ -107,7 +112,7 @@ focus_block = ("\nIn play when you left off:\n" + "\n".join(focus_lines)
                if focus_lines else "")
 
 msg = (
-    f"[second-brain] STATE — {n} open loops "
+    f"[memory-ledger] STATE — {n} open loops "
     f"({d.get('overdue', 0)} overdue, {d.get('stale', 0)} stale). They stay open "
     f"until closed; surface these and nudge the user to close the top ones ASAP "
     f"(open tasks, PRs to move, emails/messages to answer):\n"
