@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""second-brain off-token query layer.
+"""memory-ledger off-token query layer.
 
 Read-only, dependency-free views over the brain that answer the everyday
 questions — *what's due today / tomorrow / this week*, *what did I close*,

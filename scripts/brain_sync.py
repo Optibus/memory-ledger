@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""brain-sync — push the local second-brain graph into a neo4j master.
+"""brain-sync — push the local memory-ledger graph into a neo4j master.
 
 Reads the local SQLite graph (via the graph engine) and upserts every node and
 edge into neo4j using its HTTP transactional Cypher endpoint (stdlib only — no
@@ -37,10 +37,14 @@ def load_cfg() -> dict:
     if f.exists():
         cfg = json.loads(f.read_text())
     return {
-        "url": os.environ.get("SECOND_BRAIN_NEO4J_URL", cfg.get("url", "")),
-        "db": os.environ.get("SECOND_BRAIN_NEO4J_DB", cfg.get("db", "neo4j")),
-        "user": os.environ.get("SECOND_BRAIN_NEO4J_USER", cfg.get("user", "neo4j")),
-        "password": os.environ.get("SECOND_BRAIN_NEO4J_PASSWORD", cfg.get("password", "")),
+        # Via graph._env(), not os.environ, so both the canonical MEMORY_LEDGER_*
+        # and the legacy SECOND_BRAIN_* prefixes resolve here exactly as they do
+        # in the engine — the same credentials must not depend on which file
+        # happens to read them.
+        "url": graph._env("NEO4J_URL", cfg.get("url", "")),
+        "db": graph._env("NEO4J_DB", cfg.get("db", "neo4j")),
+        "user": graph._env("NEO4J_USER", cfg.get("user", "neo4j")),
+        "password": graph._env("NEO4J_PASSWORD", cfg.get("password", "")),
     }
 
 

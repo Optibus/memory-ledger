@@ -1,11 +1,11 @@
 ---
 name: slack-inbox
-description: Read the person's Slack (a DM, a channel, a thread) and act on it — this is the Slack-as-input entrypoint. Use for "check my Slack", "what did X send me", "handle my DMs", or when the person is driving second-brain from Slack. Reads recent messages, figures out the intent of each, and routes it to the right second-brain skill.
+description: Read the person's Slack (a DM, a channel, a thread) and act on it — this is the Slack-as-input entrypoint. Use for "check my Slack", "what did X send me", "handle my DMs", or when the person is driving memory-ledger from Slack. Reads recent messages, figures out the intent of each, and routes it to the right memory-ledger skill.
 ---
 
 # slack-inbox
 
-Slack is the person's inbox to second-brain. This skill reads messages and turns
+Slack is the person's inbox to memory-ledger. This skill reads messages and turns
 each into the right action, so they can just talk and the brain does the routing.
 
 ## When to use
@@ -17,7 +17,7 @@ is driving the brain from Slack rather than the terminal.
 
 - **The Slack source**: `slack_read_channel`, `slack_read_thread`, or
   `slack_search_public_and_private`. With nothing specified, default to the
-  person's DM with themselves or the second-brain channel.
+  person's DM with themselves or the memory-ledger channel.
 - **The intent of each message**, which is what determines where it goes:
   a thing to do or a deadline to `add-task`, an alarm to `remind`, a fact or
   decision or person to `remember`, a question about state to `recall`, a lookup

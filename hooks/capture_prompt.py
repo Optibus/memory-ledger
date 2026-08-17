@@ -68,7 +68,7 @@ def main():
     except Exception:
         return  # never break the session
 
-    note = ("[second-brain] Turn auto-captured to the brain (Python/SQL, no model call)"
+    note = ("[memory-ledger] Turn auto-captured to the brain (Python/SQL, no model call)"
             + (f"; {made} task(s) created" if made else "")
             + ". Recall is free via scripts/brain_query.py / graph.py search — "
               "don't spend tokens re-storing this turn.")

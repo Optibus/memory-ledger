@@ -6,7 +6,7 @@ description: Ingest a piece of context into the memory graph — a Google Meet t
 # ingest-context
 
 Turn a raw blob of context, a call, a thread, an email or pasted text, into
-connected memory the rest of second-brain can use.
+connected memory the rest of memory-ledger can use.
 
 ## When to use
 

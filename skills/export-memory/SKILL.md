@@ -1,6 +1,6 @@
 ---
 name: export-memory
-description: Export the entire second-brain memory graph to portable files — human-readable Markdown (with wikilinks) and/or JSON (nodes + edges). Use for "export my memory", "back up my brain", "give me my notes as files", "dump the graph". The whole memory is one SQLite file, so it's already portable; this makes it readable and shareable.
+description: Export the entire memory-ledger memory graph to portable files — human-readable Markdown (with wikilinks) and/or JSON (nodes + edges). Use for "export my memory", "back up my brain", "give me my notes as files", "dump the graph". The whole memory is one SQLite file, so it's already portable; this makes it readable and shareable.
 ---
 
 # export-memory

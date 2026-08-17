@@ -7,8 +7,9 @@ next-steps, sets real alarms, and reaches your other tools. It records as you
 work and keeps what is still open: what you owe, to whom, by when.
 
 > **Install:** see [INSTALL.md](INSTALL.md) — `/plugin marketplace add` this repo,
-> `/plugin install memory-ledger@memory-ledger`, then `mkdir -p ~/.second_brain`.
-> The command is `/ledger`.
+> `/plugin install memory-ledger@memory-ledger`. The home dir and DB are created
+> automatically on first session (no manual `mkdir`/`init` step); the command is
+> `/ledger`.
 >
 > **Renamed in 0.7.0.** The repo, the marketplace and the plugin id were all
 > `second-brain` until 0.6.0 and are now `memory-ledger`, matching the product
@@ -127,8 +128,10 @@ free, not literally zero. Full accounting in [What it costs](#what-it-costs).
 
 So a simple answered question becomes a recallable node on its own, and you get it
 back by running `graph.py search` / `brain_query.py` — those run outside the
-conversation, so recall itself costs nothing. Disable the whole thing by
-removing/renaming the brain home (`~/.second_brain`); the hooks then no-op.
+conversation, so recall itself costs nothing. Disable the whole thing with
+`graph.py disable` (`/ledger off`) — deleting the brain home no longer works as an
+off switch, since the bootstrap hook recreates it on the next session; see
+`graph.disabled()` in `scripts/graph.py` for the authoritative check.
 
 ## Skills
 
@@ -477,7 +480,7 @@ hamburger menu on the left (`m` toggles it):
 ### Feed the brain without the model
 
 The dashboard is a complete CRUD client, so the AI is one way in, not the only
-one. Click **＋ New task** and type; as you write, second-brain scans your title
+one. Click **＋ New task** and type; as you write, memory-ledger scans your title
 for things it already knows and proposes how they connect:
 
 ```
@@ -550,9 +553,11 @@ use `--host 0.0.0.0` (behind a tunnel) to reach it from your phone. The dashboar
 See **[INSTALL.md](INSTALL.md)** for the full flow. In short:
 
 **Claude Code** — install as a plugin (marketplace add this repo →
-`/plugin install memory-ledger@memory-ledger`), then `mkdir -p ~/.second_brain`. Enabling
+`/plugin install memory-ledger@memory-ledger`). The home dir and DB are created
+automatically the first time a hook fires — no manual init step. Enabling
 at user level makes it active in every session. Talk to it with `/ledger ...` or
-invoke skills by name.
+invoke skills by name, and run `/ledger doctor` (or `python3 scripts/doctor.py`)
+any time you want to confirm it's actually capturing.
 
 **Claude app** — upload the skill folders as Agent Skills. The same graph engine
 runs in the sandbox; keep memory portable via `~/.second_brain/` or a connected

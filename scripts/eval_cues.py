@@ -55,10 +55,14 @@ KINDS = {"rules": ("cmd_match_rules", "rule"), "skills": ("cmd_match_skills", "s
 def cases_path(explicit: str | None) -> Path:
     if explicit:
         return Path(explicit).expanduser()
-    env = os.environ.get("SECOND_BRAIN_EVAL_CASES")
+    # graph._env() / graph.home_dir() rather than os.environ, so both config
+    # prefixes work and the home dir resolves identically to the engine's — a
+    # second copy of that resolution is how eval ends up reading a different
+    # brain than the one under test.
+    env = graph._env("EVAL_CASES")
     if env:
         return Path(env).expanduser()
-    home = Path(os.environ.get("SECOND_BRAIN_HOME", "~/.second_brain")).expanduser()
+    home = graph.home_dir()
     default = home / "eval_cases.json"
     return default if default.exists() else Path("eval-cases.json")
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""second-brain — token-free capture helpers.
+"""memory-ledger — token-free capture helpers.
 
 Shared by the capture hooks (capture_prompt.py on UserPromptSubmit,
 capture_answer.py on Stop). Everything here is pure Python + SQL against the
@@ -46,9 +46,15 @@ GRAPH_PY = str(HERE.parent / "scripts" / "graph.py")
 
 
 def brain_enabled() -> bool:
-    """The brain is 'enabled' when its home dir exists. No dir -> hooks no-op."""
+    """The brain is 'enabled' unless explicitly turned off (`graph.enabled()`).
+
+    This used to check whether the home dir existed — but bootstrap.py
+    now creates that dir automatically on every session start, so a home dir's
+    mere existence stopped meaning anything. The real contract is: OFF only
+    when the user said so ($MEMORY_LEDGER_OFF / <home>/.disabled), not when the
+    dir happens to be missing or present."""
     try:
-        return graph.home_dir().exists()
+        return graph.enabled()
     except Exception:
         return False
 
