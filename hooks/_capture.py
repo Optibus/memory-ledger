@@ -20,6 +20,7 @@ Design notes:
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -27,6 +28,18 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "scripts"))
+
+# A HOOK MUST NEVER BLOCK ON THE NETWORK. graph.py's api_* writers push to the
+# neo4j master inline (`_after_write` -> `_flush`, up to a 120s client timeout),
+# which is right for a CLI and wrong here: a wedged or slow master would stall
+# every prompt, every Task call, and session end behind it. Measured against a
+# deliberately slow master, leaving this unset cost 18-48s per hook.
+#
+# Set BEFORE importing graph so the flag is in place for anything read at import.
+# The queue still drains — `flush_async()` spawns a detached `graph.py flush`
+# that does the network work outside the session's critical path.
+os.environ.setdefault("SECOND_BRAIN_NO_AUTOSYNC", "1")
+
 import graph  # noqa: E402  (the engine — single source of truth for the DB)
 
 GRAPH_PY = str(HERE.parent / "scripts" / "graph.py")
@@ -79,6 +92,48 @@ def insert_edge(con, src, dst, rel, props=None) -> None:
         pass  # UNIQUE dup -> idempotent
     graph._enqueue(con, "edge", graph.EDGE_SEP.join((src, dst, rel)))
     con.commit()
+
+
+# --- traceability: the agent tree (§2k) -----------------------------------
+# Every captured turn hangs off an AGENT, and every agent off exactly one parent.
+# The hooks do this with direct engine calls — no model, no tokens — so the tree
+# is always reconstructable even when nobody asked for it.
+def conversation_for(con, session_id: str, cwd: str = "") -> str:
+    """The conversation node for this session (get-or-create, idempotent)."""
+    res = graph.api_conversation(con, session_id or "adhoc", cwd=cwd)
+    return res["node"]["id"] if res.get("ok") else ""
+
+
+def root_agent(con, session_id: str, cwd: str = "", model: str = "") -> str:
+    """The session's MAIN agent — the one the person is actually talking to.
+
+    Messages belong to an agent, never to the conversation directly (§2k), so the
+    main thread needs a node of its own or a subagent's branch would be the only
+    place a message could live.
+    """
+    conv = conversation_for(con, session_id, cwd)
+    if not conv:
+        return ""
+    row = con.execute(
+        "SELECT n.id FROM edges e JOIN nodes n ON n.id=e.src "
+        "WHERE e.dst=? AND e.rel=? AND n.type='agent' "
+        "AND json_extract(n.props,'$.role')='main' LIMIT 1",
+        (conv, graph.AREA_REL)).fetchone()
+    if row:
+        return row["id"]
+    res = graph.api_agent_spawn(con, conv, "main", model=model,
+                                session_id=session_id)
+    return res["node"]["id"] if res.get("ok") else ""
+
+
+def task_key(tool_input: dict) -> str:
+    """Stable key for one Task call, so PostToolUse can find the node PreToolUse
+    made. The prompt is hashed rather than stored twice — the agent node already
+    carries it in its body."""
+    import hashlib
+    raw = (str(tool_input.get("subagent_type") or "")
+           + "\x1f" + str(tool_input.get("prompt") or ""))
+    return hashlib.sha1(raw.encode("utf-8", "replace")).hexdigest()[:16]
 
 
 def flush_async() -> None:
@@ -214,6 +269,74 @@ def latest_capture(con, session_id: str, role: str) -> str | None:
         if p.get("session_id") == session_id and p.get("role") == role:
             return r["id"]
     return None
+
+
+# How much of the transcript to read when we only want the last usage record.
+# Reading the whole file would make the Stop hook cost O(session length) — on a
+# long session that is megabytes, every turn, for four numbers.
+_USAGE_TAIL_BYTES = 256 * 1024
+
+
+def read_transcript_usage(path: str) -> dict:
+    """Token counts for the last assistant message — `where did the token go?`.
+
+    Claude Code already writes them to the transcript, so this is free
+    information; the only cost worth avoiding is re-reading the whole file, hence
+    the bounded seek to the tail. Returns {} when there is nothing to read — the
+    shape varies between versions and a missing count is not an error.
+    """
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            fh.seek(max(0, size - _USAGE_TAIL_BYTES))
+            chunk = fh.read().decode("utf-8", "replace")
+    except Exception:
+        return {}
+    usage = {}
+    for line in chunk.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue          # a partial first line from the seek
+        try:
+            obj = json.loads(line)
+        except Exception:
+            continue
+        u = (obj.get("message") or {}).get("usage")
+        if isinstance(u, dict):
+            usage = u
+    if not usage:
+        return {}
+    out = {}
+    for src, dst in (("input_tokens", "tokens_in"),
+                     ("output_tokens", "tokens_out"),
+                     ("cache_read_input_tokens", "tokens_cache_read"),
+                     ("cache_creation_input_tokens", "tokens_cache_write")):
+        v = usage.get(src)
+        if isinstance(v, int):
+            out[dst] = v
+    return out
+
+
+def add_agent_tokens(con, agent_id: str, usage: dict) -> None:
+    """Roll a turn's counts up onto its agent, so cost is readable per BRANCH.
+
+    Per-message counts answer 'what did this turn cost'; the running total on the
+    agent answers the question people actually ask — which part of the work was
+    expensive.
+    """
+    if not agent_id or not usage:
+        return
+    try:
+        row = con.execute("SELECT props FROM nodes WHERE id=?", (agent_id,)).fetchone()
+        if not row:
+            return
+        props = json.loads(row["props"] or "{}")
+        patch = {k: int(props.get(k) or 0) + int(v) for k, v in usage.items()}
+        patch["turns"] = int(props.get("turns") or 0) + 1
+        graph.api_update_node(con, agent_id, props_patch=patch)
+    except Exception:
+        pass          # a missing count must never break the capture
 
 
 def read_transcript_tail(path: str):

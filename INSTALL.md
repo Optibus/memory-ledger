@@ -157,16 +157,27 @@ Once enabled, hooks run in **pure Python/SQL — no model call**:
   up…"), linked back to the turn.
 - **Stop** → `capture_answer.py` stores an extractive summary of the answer, linked
   to its question.
+- **PreToolUse / PostToolUse** (matcher `Task`) → `capture_agent.py` puts each
+  subagent in the **agent tree** as it spawns and stamps its outcome
+  (`completed` / `failed`) as it returns, so what a subagent considered does not
+  vanish when its branch ends (CONVENTIONS §2k). Other tools are ignored.
+- **PreCompact** → `close_conversation.py compact` records one `summarized`
+  context event: the one moment Claude Code says the window changed wholesale.
+- **SessionEnd** → `close_conversation.py end` closes the conversation and stamps
+  an outcome on every agent still open, so no branch is left reading like a crash.
 
 So every interaction is remembered without a single model call. Two of the hooks do
-add a short line to the conversation — 197 chars per prompt and an ~850-char
-open-loops brief per session start (`Stop` adds nothing) — which measured **0.01% of
-a real session**. Recall itself runs outside the conversation and costs nothing:
+add a short line to the conversation — 209 chars per prompt and a ~1.0 KB
+open-loops brief per session start (everything else adds nothing) — which measured
+**under 0.05% of a working day**. Recall itself runs outside the conversation
+and costs nothing:
 
 ```
 python3 scripts/brain_query.py agenda          # today/tomorrow/week/closed/range
 python3 scripts/graph.py search "<terms>"      # full-text over the graph
 python3 scripts/graph.py open-loops            # everything still awaiting action
+python3 scripts/graph.py tree --session <sid>  # the agent tree, with its ideas
+python3 scripts/graph.py recheck               # what became possible again (§2k)
 ```
 
 ### Map + dashboard (optional UI)
@@ -188,12 +199,20 @@ on the LAN / a tunnel; because the write API is **unauthenticated**, pair that w
 
 ```
 /plugin              # second-brain shows as installed + enabled
-/hooks               # SessionStart, UserPromptSubmit, Stop are listed
+/hooks               # SessionStart, UserPromptSubmit, Stop, PreToolUse,
+                     # PostToolUse, PreCompact, SessionEnd are listed
 claude plugin list   # from the CLI
 ```
 Then send any message and check it landed:
 ```
 python3 scripts/graph.py list --type capture --all --limit 5
+python3 scripts/graph.py list --type conversation --all --limit 3   # the tree's root
+```
+
+Run the traceability tests any time (a throwaway brain in a temp dir — it never
+touches `~/.second_brain`):
+```
+python3 tests/test_traceability.py
 ```
 
 ## No repo access? Install from a zip

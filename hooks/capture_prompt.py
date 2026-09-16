@@ -39,10 +39,16 @@ def main():
     cwd = data.get("cwd") or ""
     try:
         con = C.connect()
+        # The turn belongs to an AGENT, and that agent to this session's
+        # conversation (§2k) — so a branch is always walkable from the root, and
+        # a subagent's discarded alternative never dies with its branch.
+        agent = C.root_agent(con, sid, cwd)
         turn = C.insert_node(
             con, "capture", C.title_of(prompt), body=prompt[:4000],
             props={"role": "user", "session_id": sid, "cwd": cwd,
-                   "captured_at": C.graph.now()})
+                   "agent": agent, "captured_at": C.graph.now()})
+        if agent:
+            C.insert_edge(con, turn, agent, C.graph.AREA_REL)
         # dynamically spin up tasks + links for explicit to-dos in the prompt.
         # Infer the assignee (mine / someone else / unknown) instead of assuming
         # it's the owner's — so the dashboard's assignee filter is meaningful and
