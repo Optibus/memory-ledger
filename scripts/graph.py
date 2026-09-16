@@ -20,6 +20,7 @@ import json
 import os
 import re
 import secrets
+import subprocess
 import sys
 import unicodedata
 import urllib.request
@@ -43,6 +44,9 @@ NODE_TYPES = [
     "person", "task", "subtask", "requirement", "decision", "note",
     "project", "reminder", "writing-sample", "association", "meeting",
     "jira-issue", "resource", "skill", "area", "quote", "parked",
+    # traceability (§2k): the agent tree, what was considered, and what was
+    # discarded under a condition that may later stop holding.
+    "conversation", "agent", "idea", "transition", "gauge", "context-event",
 ]
 
 # Default character budget for read paths that would otherwise return whole
@@ -77,6 +81,10 @@ EDGE_RELS = [
     "mentions", "authored-by", "example-of", "follows-up",
     # neuroplasticity / learned skills
     "applies-to", "learned-from", "reinforces", "triggered-by",
+    # traceability (§2k): `part-of` carries the agent tree and message->agent,
+    # `about` a transition to its idea, `blocked-by` an idea to the gauge that
+    # held it back, `caused-by` a transition to the turn that caused it.
+    "supersedes", "captured-from",
 ]
 
 # statuses that count as "archived" — kept forever, hidden from active views
@@ -306,7 +314,40 @@ def _ensure_schema(con) -> None:
     con.execute(
         "CREATE TABLE IF NOT EXISTS coactivation ("
         "a TEXT, b TEXT, n INTEGER DEFAULT 0, last TEXT, PRIMARY KEY(a,b))")
+    _ensure_blocked_index(con)
     con.commit()
+
+
+# --- the recheck index (§2k) -------------------------------------------------
+# What is consulted BY TRIGGER lives in an indexed table; what is read in
+# sequence to reconstruct lives in the log. The log here is the `transition`
+# NODES (immutable, synced to the master); this table is their PROJECTION —
+# derived, local, and rebuildable at any time with `recheck --rebuild`. Nothing
+# writes it directly: `idea-discard` appends the transition and then projects.
+#
+# One row per CONDITION, so a multi-condition discard is several rows sharing a
+# `source_ref`; the recheck treats a source_ref group as a conjunction.
+def _ensure_blocked_index(con) -> None:
+    con.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS blocked_item (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_type   TEXT NOT NULL,      -- 'idea' today, anything tomorrow
+            item_ref    TEXT NOT NULL,      -- the node held back
+            gauge_key   TEXT NOT NULL,      -- catalog key (see `gauges`)
+            op          TEXT NOT NULL,
+            required    TEXT NOT NULL DEFAULT '',
+            source_ref  TEXT NOT NULL,      -- transition node that wrote it
+            created     TEXT NOT NULL,
+            resolved_at TEXT NOT NULL DEFAULT '',
+            UNIQUE(item_ref, gauge_key, op, required, source_ref)
+        );
+        CREATE INDEX IF NOT EXISTS idx_blocked_gauge
+            ON blocked_item(gauge_key, resolved_at);
+        CREATE INDEX IF NOT EXISTS idx_blocked_item ON blocked_item(item_ref);
+        CREATE INDEX IF NOT EXISTS idx_blocked_src  ON blocked_item(source_ref);
+        """
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -333,8 +374,14 @@ def _neo4j_cfg() -> dict:
     }
 
 
-def _neo4j_call(statements, timeout=6):
-    """POST Cypher to neo4j's HTTP tx endpoint. Returns (ok, error_or_None)."""
+def _neo4j_call(statements, timeout=30):
+    """POST Cypher to neo4j's HTTP tx endpoint. Returns (ok, error_or_None).
+
+    NOTE: the timeout is client-side only. A request that times out here may
+    still commit on the server, so callers must treat a timeout as "unknown",
+    not as "did not happen" — every statement we send is idempotent for exactly
+    that reason (MERGE, not CREATE).
+    """
     cfg = _neo4j_cfg()
     if not cfg["url"] or not cfg["password"]:
         return False, "neo4j not configured"
@@ -351,6 +398,22 @@ def _neo4j_call(statements, timeout=6):
         return (not errs), (errs[0].get("message") if errs else None)
     except Exception as e:
         return False, str(e)
+
+
+_NODE_ID_CONSTRAINT = (
+    "CREATE CONSTRAINT node_id_unique IF NOT EXISTS "
+    "FOR (n:Node) REQUIRE n.id IS UNIQUE")
+
+
+def _ensure_neo4j_schema() -> tuple:
+    """Make :Node(id) unique on the master.
+
+    Without this, `MERGE (x:Node {id:...})` is not safe under concurrency: two
+    flushes racing on the same id each fail to find it and each create one. That
+    is how 22 ids ended up duplicated (one of them three times). The constraint
+    makes MERGE actually idempotent, which the whole sync design assumes.
+    Cheap and idempotent, so callers can just run it."""
+    return _neo4j_call([{"statement": _NODE_ID_CONSTRAINT}], timeout=30)
 
 
 def _neo4j_up() -> bool:
@@ -407,30 +470,31 @@ def _node_payload(con, nid):
             "updated": d["updated"], "realm": d.get("realm") or DEFAULT_REALM, "props": props}
 
 
-def _flush(con):
-    """Drain the outbox to neo4j. Upserts current state of queued nodes/edges and
-    applies queued deletes. On failure (neo4j down) leaves the queue intact."""
-    rows = con.execute("SELECT seq,kind,ref FROM outbox ORDER BY seq").fetchall()
-    if not rows:
-        return {"ok": True, "pending": 0, "pushed": 0}
-    node_ids, edge_refs, del_ids, del_edges, seqs = [], [], [], [], []
+FLUSH_BATCH = 300      # ops per transaction; ~2s against the master at this size
+FLUSH_TIMEOUT = 120    # generous: a timeout here wedges the queue, see _flush
+
+
+def _flush_batch(con, rows):
+    """Push one batch of outbox rows. Returns (ok, error, counts)."""
+    node_ids, edge_refs, del_ids, del_edges = set(), set(), set(), set()
     for r in rows:
-        seqs.append(r["seq"])
         if r["kind"] == "node":
-            node_ids.append(r["ref"])
+            node_ids.add(r["ref"])
         elif r["kind"] == "edge":
-            edge_refs.append(r["ref"])
+            edge_refs.add(r["ref"])
         elif r["kind"] == "del_node":
-            del_ids.append(r["ref"])
+            del_ids.add(r["ref"])
         elif r["kind"] == "del_edge":
-            del_edges.append(r["ref"])
-    nodes = [n for n in (_node_payload(con, i) for i in set(node_ids)) if n]
+            del_edges.add(r["ref"])
+    nodes = [n for n in (_node_payload(con, i) for i in node_ids) if n]
     edges = []
-    for ref in set(edge_refs):
+    for ref in edge_refs:
         s, d, rel = ref.split(EDGE_SEP)
         if con.execute("SELECT 1 FROM edges WHERE src=? AND dst=? AND rel=?", (s, d, rel)).fetchone():
             edges.append({"src": s, "dst": d, "rel": rel})
-    dedges = [dict(zip(("src", "dst", "rel"), ref.split(EDGE_SEP))) for ref in set(del_edges)]
+    dedges = [dict(zip(("src", "dst", "rel"), ref.split(EDGE_SEP))) for ref in del_edges]
+    counts = {"nodes": len(nodes), "edges": len(edges),
+              "del_nodes": len(del_ids), "del_edges": len(dedges)}
     stmts = []
     if nodes:
         stmts.append({"statement": _NODE_UPSERT, "parameters": {"nodes": nodes}})
@@ -439,17 +503,48 @@ def _flush(con):
     if dedges:
         stmts.append({"statement": _EDGE_DEL, "parameters": {"edges": dedges}})
     if del_ids:
-        stmts.append({"statement": _NODE_DEL, "parameters": {"ids": list(set(del_ids))}})
+        stmts.append({"statement": _NODE_DEL, "parameters": {"ids": list(del_ids)}})
     if not stmts:
-        con.executemany("DELETE FROM outbox WHERE seq=?", [(s,) for s in seqs]); con.commit()
-        return {"ok": True, "pending": 0, "pushed": 0}
-    ok, err = _neo4j_call(stmts)
-    if not ok:
-        return {"ok": False, "error": err, "pending": len(seqs)}
-    con.executemany("DELETE FROM outbox WHERE seq=?", [(s,) for s in seqs]); con.commit()
-    return {"ok": True, "pending": 0,
-            "pushed": {"nodes": len(nodes), "edges": len(edges),
-                       "del_nodes": len(set(del_ids)), "del_edges": len(dedges)}}
+        return True, None, counts          # nothing left to push; safe to dequeue
+    ok, err = _neo4j_call(stmts, timeout=FLUSH_TIMEOUT)
+    return ok, err, counts
+
+
+def _flush(con):
+    """Drain the outbox to neo4j in bounded batches. Upserts current state of
+    queued nodes/edges and applies queued deletes.
+
+    Batching is load-bearing, not tidiness. The outbox used to be sent as ONE
+    transaction: a daily consolidate pass can enqueue ~1,700 ops, that payload
+    needed ~14s against the master, and the client gave up at 6s. Nothing was
+    dequeued on failure, so every later write made the batch bigger and slower
+    — a one-way ratchet that the queue could never escape. Bounded batches mean
+    a backlog always drains, just over more round-trips.
+
+    Each batch is deleted from the queue only after its push succeeds, so an
+    interruption costs at most a replay of one batch (every statement is an
+    idempotent MERGE/DELETE, so replay is safe)."""
+    pushed = {"nodes": 0, "edges": 0, "del_nodes": 0, "del_edges": 0}
+    batches = 0
+    while True:
+        rows = con.execute(
+            "SELECT seq,kind,ref FROM outbox ORDER BY seq LIMIT ?", (FLUSH_BATCH,)).fetchall()
+        if not rows:
+            break
+        ok, err, counts = _flush_batch(con, rows)
+        if not ok:
+            pending = con.execute("SELECT COUNT(*) c FROM outbox").fetchone()["c"]
+            out = {"ok": False, "error": err, "pending": pending, "batches": batches}
+            if batches:
+                out["pushed"] = pushed        # partial progress is real progress
+            return out
+        con.executemany("DELETE FROM outbox WHERE seq=?", [(r["seq"],) for r in rows])
+        con.commit()
+        for k in pushed:
+            pushed[k] += counts[k]
+        batches += 1
+    return {"ok": True, "pending": 0, "batches": batches,
+            "pushed": pushed if batches else 0}
 
 
 def _after_write(con, nodes=(), edges=(), del_nodes=(), del_edges=()):
@@ -2049,6 +2144,8 @@ def cmd_recall(args):
             continue
         if d["type"] == "capture" and not args.include_captures:
             continue          # the day's digest covers these (see `consolidate`)
+        if d["type"] == "context-event":
+            continue          # bookkeeping, never prose — read it with `context-at`
         if not args.all and (d.get("status") or "").lower() in DONE_STATUSES:
             continue
         s = _strength(d["props"])
@@ -2170,7 +2267,8 @@ def cmd_resume(args):
     focus = []
     for r in con.execute(
         "SELECT * FROM nodes WHERE updated>=? AND type NOT IN"
-        " ('capture','parked','channel','person','skill','rule','spec','area','team')"
+        " ('capture','parked','channel','person','skill','rule','spec','area','team',"
+        "  'conversation','agent','transition','gauge','context-event')"
         " AND id NOT LIKE 'note_digest_%' ORDER BY updated DESC LIMIT 60",
             (since,)).fetchall():
         d = _node_dict(r)
@@ -2574,8 +2672,17 @@ def cmd_neo4j_status(args):
     con = connect()
     cfg = _neo4j_cfg()
     pending = con.execute("SELECT COUNT(*) c FROM outbox").fetchone()["c"]
-    out({"ok": True, "configured": bool(cfg["url"] and cfg["password"]),
-         "url": cfg["url"], "up": _neo4j_up(), "pending_ops": pending})
+    res = {"ok": True, "configured": bool(cfg["url"] and cfg["password"]),
+           "url": cfg["url"], "up": _neo4j_up(), "pending_ops": pending}
+    # `up` only proves the root URL answers a GET. It stayed true for a whole day
+    # while every flush timed out, so report whether the tx endpoint actually
+    # works too — that is the thing sync depends on.
+    if res["configured"]:
+        ok, err = _neo4j_call([{"statement": "RETURN 1"}], timeout=10)
+        res["writable"] = ok
+        if not ok:
+            res["error"] = err
+    out(res)
 
 
 def cmd_sections(args):
@@ -2823,6 +2930,908 @@ def cmd_genome(args):
     out(payload)
 
 
+# ---------------------------------------------------------------------------
+# traceability: the agent tree, ideas, and conditional discard (§2k)
+#
+# The brain already records WHAT was said (capture nodes). This records WHAT WAS
+# CONSIDERED and WHY it was dropped — and, for the discards that were only ever
+# about a missing condition, brings them back when the condition stops holding.
+#
+# Everything below is captured BY HOOK OR EXPLICIT CALL, never by asking a model
+# to re-read a transcript: deterministic, zero tokens, zero latency.
+# ---------------------------------------------------------------------------
+IDEA_STATUSES = ("proposed", "selected", "discarded", "superseded", "revived")
+# Only `conditional` is re-evaluated automatically. A `preference` discard comes
+# back when someone asks for it; a `permanent` one never does.
+DISCARD_TYPES = ("conditional", "preference", "permanent")
+AGENT_OUTCOMES = ("completed", "abandoned", "failed")
+CONDITION_OPS = (">=", "<=", "==", "!=", ">", "<", "exists", "not_exists")
+# Ops that carry no right-hand side.
+UNARY_OPS = ("exists", "not_exists")
+# An unblocked item is not re-announced inside this window — a reconsider prompt
+# that repeats every run is a prompt nobody reads (§2k, "notify, don't execute").
+NOTIFY_QUIET_DAYS = 7
+PROBE_TIMEOUT = 20
+
+
+def _conv_id(session_id: str) -> str:
+    """Deterministic, so conversation-start is a true upsert per session."""
+    return "conversation_" + (slugify(session_id) or "adhoc")
+
+
+def _gauge_id(key: str) -> str:
+    return "gauge_" + (slugify(key) or "unnamed")
+
+
+_COND_RE = re.compile(
+    r"^\s*(?P<key>[A-Za-z0-9_.\-]+)\s*"
+    r"(?P<op>>=|<=|==|!=|>|<|\bexists\b|\bnot_exists\b)\s*"
+    r"(?P<val>.*?)\s*$")
+
+
+def parse_condition(text: str) -> dict:
+    """`"gpu.vram_gb >= 16"` -> {gauge, op, value}.
+
+    The CLI takes the readable form; the stored form is always structured. Free
+    text is what makes a discard un-recheckable, so it never reaches the store.
+    Raises ValueError with a usable message — the caller turns it into `ok:false`.
+    """
+    m = _COND_RE.match(text or "")
+    if not m:
+        raise ValueError(
+            f"cannot parse condition {text!r} — expected '<gauge.key> <op> <value>', "
+            f"ops: {', '.join(CONDITION_OPS)}")
+    op, val = m.group("op"), m.group("val").strip().strip("'\"")
+    if op in UNARY_OPS:
+        val = ""
+    elif not val:
+        raise ValueError(f"condition {text!r} has operator {op} but no value")
+    return {"gauge": m.group("key"), "op": op, "value": val}
+
+
+_TRUTHY = {"true", "yes", "y", "on", "1"}
+_FALSY = {"false", "no", "n", "off", "0"}
+
+
+def _coerce(raw):
+    """Best-effort typing for a gauge value: number, bool, version tuple, or text.
+
+    Returned as (kind, value) so the comparison never guesses twice. Version
+    handling matters for `dependency.<name>.version` — `2.10.0` is above `2.9.0`
+    and below it as a string.
+    """
+    s = str(raw if raw is not None else "").strip()
+    if s == "":
+        return ("empty", "")
+    low = s.lower()
+    if low in _TRUTHY:
+        return ("bool", True)
+    if low in _FALSY:
+        return ("bool", False)
+    try:
+        return ("num", float(s))
+    except ValueError:
+        pass
+    if re.fullmatch(r"v?\d+(\.\d+)+[A-Za-z0-9.\-+]*", s):
+        head = re.match(r"v?(\d+(?:\.\d+)+)", s).group(1)
+        return ("ver", tuple(int(p) for p in head.split(".")))
+    return ("text", s)
+
+
+def compare_values(current, op: str, required) -> bool:
+    """Evaluate one condition. Unknown/unmeasured gauges are NOT satisfied —
+    a blocked item stays blocked until something actually measures otherwise."""
+    ck, cv = _coerce(current)
+    if op == "exists":
+        return ck != "empty"
+    if op == "not_exists":
+        return ck == "empty"
+    if ck == "empty":
+        return False
+    rk, rv = _coerce(required)
+    if ck != rk:                      # mixed kinds: fall back to text equality
+        if op == "==":
+            return str(current).strip() == str(required).strip()
+        if op == "!=":
+            return str(current).strip() != str(required).strip()
+        return False
+    if op == "==":
+        return cv == rv
+    if op == "!=":
+        return cv != rv
+    if ck == "bool":                  # ordering booleans is a caller mistake
+        return False
+    if op == ">=":
+        return cv >= rv
+    if op == "<=":
+        return cv <= rv
+    if op == ">":
+        return cv > rv
+    if op == "<":
+        return cv < rv
+    return False
+
+
+# --- the agent tree ---------------------------------------------------------
+def api_conversation(con, session_id: str, *, cwd="", owner="", title="") -> dict:
+    """Get-or-create the conversation for a session. Idempotent by construction:
+    the id is derived from the session id, so every hook in the session lands on
+    the same node without a lookup round-trip."""
+    cid = _conv_id(session_id)
+    row = con.execute("SELECT * FROM nodes WHERE id=?", (cid,)).fetchone()
+    if row:
+        return {"ok": True, "node": _node_dict(row), "created": False}
+    props = {"session_id": session_id, "started_at": now(),
+             "owner": owner or _env("OWNER", "Gabriel")}
+    if cwd:
+        props["cwd"] = cwd
+    res = api_create_node(con, "conversation",
+                          title or f"Session {session_id[:8] or 'adhoc'}",
+                          "", props, "open", "", "", cid)
+    res["created"] = res.get("ok", False)
+    return res
+
+
+def _parent_of(con, agent_id: str):
+    r = con.execute(
+        "SELECT dst FROM edges WHERE src=? AND rel=? LIMIT 1",
+        (agent_id, AREA_REL)).fetchone()
+    return r["dst"] if r else None
+
+
+def api_agent_spawn(con, parent_id: str, role: str, *, model="", body="",
+                    session_id="") -> dict:
+    """One node in the tree, under EXACTLY one parent.
+
+    A parent is mandatory and must be a conversation or another agent: an agent
+    with no parent is a branch that cannot be walked, and the whole point of the
+    tree is that a subagent's discarded alternative stays visible from the root
+    instead of dying with its branch (§3.2 of the spec).
+    """
+    if not (role or "").strip():
+        return {"ok": False, "error": "missing role"}
+    prow = con.execute("SELECT * FROM nodes WHERE id=?", (parent_id,)).fetchone()
+    if not prow:
+        return {"ok": False, "error": f"no parent {parent_id}"}
+    if prow["type"] not in ("conversation", "agent"):
+        return {"ok": False,
+                "error": f"parent {parent_id} is a {prow['type']}; an agent's "
+                         f"parent must be a conversation or an agent"}
+    props = {"role": role, "started_at": now(), "outcome": ""}
+    if model:
+        props["model"] = model
+    if session_id:
+        props["session_id"] = session_id
+    depth = 0
+    walk, seen = parent_id, set()
+    while walk and walk not in seen:
+        seen.add(walk)
+        walk = _parent_of(con, walk)
+        depth += 1
+    props["depth"] = depth
+    res = api_create_node(con, "agent", role, body or "", props, "open",
+                          "", prow["realm"] or DEFAULT_REALM)
+    if res.get("ok"):
+        api_link(con, res["node"]["id"], parent_id, AREA_REL)
+        res["parent"] = parent_id
+    return res
+
+
+def api_agent_finish(con, agent_id: str, outcome: str, note="") -> dict:
+    """Record the outcome. An unfinished agent is indistinguishable from one that
+    crashed, so every branch closes explicitly — `abandoned` is a real answer."""
+    if outcome not in AGENT_OUTCOMES:
+        return {"ok": False,
+                "error": f"outcome must be one of {'|'.join(AGENT_OUTCOMES)}"}
+    row = con.execute("SELECT * FROM nodes WHERE id=?", (agent_id,)).fetchone()
+    if not row:
+        return {"ok": False, "error": f"no node {agent_id}"}
+    patch = {"outcome": outcome, "ended_at": now()}
+    if note:
+        patch["outcome_note"] = note
+    return api_update_node(con, agent_id, status="done", props_patch=patch)
+
+
+def api_conversation_end(con, session_id: str, reason="") -> dict:
+    """Close the conversation and every agent still open under it.
+
+    The MAIN agent reaching the end of a session finished its work; a SUBAGENT
+    still open when the session ends did not — it was abandoned. Recording both
+    as the same thing would make "abandoned" meaningless, which is the one thing
+    the outcome field exists to say.
+    """
+    cid = _conv_id(session_id)
+    if not con.execute("SELECT 1 FROM nodes WHERE id=?", (cid,)).fetchone():
+        return {"ok": False, "error": f"no conversation for session {session_id}"}
+    closed = []
+    for r in con.execute(
+            "SELECT id, json_extract(props,'$.role') role FROM nodes "
+            "WHERE type='agent' AND status!='done' "
+            "AND json_extract(props,'$.session_id')=?", (session_id,)).fetchall():
+        outcome = "completed" if r["role"] == "main" else "abandoned"
+        api_agent_finish(con, r["id"], outcome, "conversation ended")
+        closed.append({"id": r["id"], "outcome": outcome})
+    patch = {"ended_at": now()}
+    if reason:
+        patch["end_reason"] = reason
+    res = api_update_node(con, cid, status="done", props_patch=patch)
+    res["closed_agents"] = closed
+    return res
+
+
+def _tree(con, root_id: str, depth=0, seen=None):
+    """Walk children (anything `part-of` this node) into a nested dict."""
+    seen = seen if seen is not None else set()
+    if root_id in seen or depth > 12:
+        return None
+    seen.add(root_id)
+    row = con.execute("SELECT * FROM nodes WHERE id=?", (root_id,)).fetchone()
+    if not row:
+        return None
+    d = _node_dict(row)
+    p = d["props"]
+    node = {"id": d["id"], "type": d["type"], "title": d["title"]}
+    for k in ("role", "model", "outcome", "discard_type"):
+        if p.get(k):
+            node[k] = p[k]
+    if d["type"] == "idea":
+        node["status"] = d["status"]
+    kids, msgs, ideas = [], 0, []
+    rows = con.execute(
+        "SELECT n.* FROM edges e JOIN nodes n ON n.id=e.src "
+        "WHERE e.dst=? AND e.rel=? ORDER BY n.created", (root_id, AREA_REL)
+    ).fetchall()
+    for r in rows:
+        if r["type"] in ("agent", "conversation"):
+            sub = _tree(con, r["id"], depth + 1, seen)
+            if sub:
+                kids.append(sub)
+        elif r["type"] == "capture":
+            msgs += 1
+        elif r["type"] == "idea":
+            sub = _tree(con, r["id"], depth + 1, seen)
+            if sub:
+                ideas.append(sub)
+    if msgs:
+        node["messages"] = msgs
+    if ideas:
+        node["ideas"] = ideas
+    if kids:
+        node["children"] = kids
+    return node
+
+
+# --- ideas ------------------------------------------------------------------
+def _transition(con, idea_id: str, frm: str, to: str, *, reason="",
+                discard_type="", conditions=None, recheck_on=None,
+                caused_by="", realm="") -> dict:
+    """Append one immutable entry to the idea's log.
+
+    Transitions are never updated or deleted — the sequence IS the history, and
+    `idea.status` is only the cached head of it.
+    """
+    props = {"idea": idea_id, "from_status": frm, "to_status": to,
+             "at": now()}
+    if reason:
+        props["reason"] = reason
+    if discard_type:
+        props["discard_type"] = discard_type
+    if conditions:
+        props["blocked_by"] = conditions
+    if recheck_on:
+        props["recheck_on"] = recheck_on
+    if caused_by:
+        props["caused_by"] = caused_by
+    res = api_create_node(con, "transition", f"{frm or 'new'} -> {to}", reason,
+                          props, "", "", realm or DEFAULT_REALM)
+    if res.get("ok"):
+        tid = res["node"]["id"]
+        api_link(con, tid, idea_id, "about")
+        if caused_by and con.execute(
+                "SELECT 1 FROM nodes WHERE id=?", (caused_by,)).fetchone():
+            api_link(con, tid, caused_by, "caused-by")
+    return res
+
+
+def _project_blocked(con, idea_id: str, transition_id: str, conditions) -> int:
+    """Write the transition's conditions into the recheck index.
+
+    The index is a PROJECTION of the log (§9 of the spec): rebuildable, never the
+    source of truth. Callers reach it through here, never with their own INSERT.
+    """
+    ts = now()
+    n = 0
+    for c in conditions or []:
+        con.execute(
+            "INSERT OR IGNORE INTO blocked_item"
+            "(item_type,item_ref,gauge_key,op,required,source_ref,created,resolved_at)"
+            " VALUES(?,?,?,?,?,?,?,'')",
+            ("idea", idea_id, c["gauge"], c["op"], str(c.get("value", "")),
+             transition_id, ts))
+        n += 1
+    con.commit()
+    return n
+
+
+def api_idea_propose(con, title: str, *, detail="", agent_id="", realm="") -> dict:
+    """Every alternative becomes a record, not just the chosen one — that is the
+    whole reason the same option does not get re-argued from zero six months on."""
+    if not (title or "").strip():
+        return {"ok": False, "error": "missing title"}
+    props = {"proposed_at": now()}
+    if agent_id:
+        props["agent"] = agent_id
+    res = api_create_node(con, "idea", title, detail or "", props, "proposed",
+                          "", realm or DEFAULT_REALM)
+    if not res.get("ok"):
+        return res
+    iid = res["node"]["id"]
+    if agent_id and con.execute(
+            "SELECT 1 FROM nodes WHERE id=?", (agent_id,)).fetchone():
+        api_link(con, iid, agent_id, AREA_REL)
+    _transition(con, iid, "", "proposed", realm=realm)
+    return res
+
+
+def api_idea_discard(con, idea_id: str, discard_type: str, reason: str, *,
+                     conditions=None, recheck_on=None, caused_by="") -> dict:
+    """The highest-value hook, and the easiest one to implement badly.
+
+    A conditional discard WITHOUT a structured condition is a permanent discard
+    wearing a disguise: nothing will ever re-check it, and the reason text will
+    outlive everyone who could interpret it. So it is rejected at the write, not
+    audited later — and every gauge it names must already be in the catalog, or
+    the condition points at something nobody measures.
+    """
+    row = con.execute("SELECT * FROM nodes WHERE id=?", (idea_id,)).fetchone()
+    if not row:
+        return {"ok": False, "error": f"no node {idea_id}"}
+    if row["type"] != "idea":
+        return {"ok": False, "error": f"{idea_id} is a {row['type']}, not an idea"}
+    if discard_type not in DISCARD_TYPES:
+        return {"ok": False,
+                "error": f"discard type must be one of {'|'.join(DISCARD_TYPES)}"}
+    if not (reason or "").strip():
+        return {"ok": False, "error": "a discard needs a human-readable reason"}
+    conditions = list(conditions or [])
+    if discard_type == "conditional" and not conditions:
+        return {"ok": False, "error":
+                "a conditional discard needs at least one structured condition "
+                "(--blocked-by 'gauge.key >= value'); without one it is a "
+                "permanent discard in disguise — use --type permanent instead"}
+    if discard_type != "conditional" and conditions:
+        return {"ok": False, "error":
+                f"only a conditional discard carries conditions; "
+                f"{discard_type} discards are never re-checked"}
+    missing = [c["gauge"] for c in conditions
+               if not con.execute("SELECT 1 FROM nodes WHERE id=? AND type='gauge'",
+                                  (_gauge_id(c["gauge"]),)).fetchone()]
+    if missing:
+        return {"ok": False, "error":
+                f"unknown gauge(s): {', '.join(sorted(set(missing)))} — add them "
+                f"first (gauge-set --key <key> --value <v> --probe '<cmd>'), or "
+                f"the condition names something nobody measures"}
+    frm = row["status"] or "proposed"
+    tr = _transition(con, idea_id, frm, "discarded", reason=reason,
+                     discard_type=discard_type, conditions=conditions,
+                     recheck_on=recheck_on, caused_by=caused_by,
+                     realm=row["realm"])
+    if not tr.get("ok"):
+        return tr
+    patch = {"discard_type": discard_type, "discard_reason": reason,
+             "discarded_at": now()}
+    if conditions:
+        patch["blocked_by"] = conditions
+    if recheck_on:
+        patch["recheck_on"] = recheck_on
+    res = api_update_node(con, idea_id, status="discarded", props_patch=patch)
+    if not res.get("ok"):
+        return res
+    for c in conditions:                    # the graph shows the block too
+        api_link(con, idea_id, _gauge_id(c["gauge"]), "blocked-by")
+    res["transition"] = tr["node"]["id"]
+    res["indexed_conditions"] = _project_blocked(con, idea_id, tr["node"]["id"],
+                                                 conditions)
+    res["rechecks_automatically"] = discard_type == "conditional"
+    return res
+
+
+def api_idea_move(con, idea_id: str, to: str, *, reason="", caused_by="",
+                  supersedes="") -> dict:
+    """selected / superseded / revived — the transitions that carry no condition."""
+    row = con.execute("SELECT * FROM nodes WHERE id=?", (idea_id,)).fetchone()
+    if not row:
+        return {"ok": False, "error": f"no node {idea_id}"}
+    if row["type"] != "idea":
+        return {"ok": False, "error": f"{idea_id} is a {row['type']}, not an idea"}
+    if to not in IDEA_STATUSES:
+        return {"ok": False, "error": f"status must be one of {'|'.join(IDEA_STATUSES)}"}
+    frm = row["status"] or "proposed"
+    tr = _transition(con, idea_id, frm, to, reason=reason, caused_by=caused_by,
+                     realm=row["realm"])
+    if not tr.get("ok"):
+        return tr
+    patch = {f"{to}_at": now()}
+    if reason:
+        patch[f"{to}_reason"] = reason
+    res = api_update_node(con, idea_id, status=to, props_patch=patch)
+    if supersedes:
+        api_link(con, idea_id, supersedes, "supersedes")
+        api_idea_move(con, supersedes, "superseded",
+                      reason=f"superseded by {idea_id}")
+    if res.get("ok"):
+        res["transition"] = tr["node"]["id"]
+    return res
+
+
+# --- the gauge catalog ------------------------------------------------------
+def api_gauge_set(con, key: str, *, value=None, unit="", probe="",
+                  description="", realm="") -> dict:
+    """Upsert one measurable thing. A NEW GAUGE NEEDS NO NEW CODE — a row and a
+    probe, and every idea blocked on it becomes re-checkable."""
+    key = (key or "").strip()
+    if not key:
+        return {"ok": False, "error": "missing key"}
+    if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.\-]*", key):
+        return {"ok": False, "error":
+                f"gauge key {key!r} must be dotted alphanumerics, e.g. gpu.vram_gb"}
+    gid = _gauge_id(key)
+    row = con.execute("SELECT * FROM nodes WHERE id=?", (gid,)).fetchone()
+    patch = {"key": key}
+    if unit:
+        patch["unit"] = unit
+    if probe:
+        patch["probe"] = probe
+    if description:
+        patch["description"] = description
+    previous = None
+    if value is not None:
+        previous = (_node_dict(row)["props"].get("current_value") if row else None)
+        patch["current_value"] = value
+        patch["measured_at"] = now()
+    if row:
+        res = api_update_node(con, gid, body=description or None,
+                              props_patch=patch)
+    else:
+        res = api_create_node(con, "gauge", key, description, patch, "",
+                              "", realm or DEFAULT_REALM, gid)
+    if res.get("ok"):
+        res["previous_value"] = previous
+        res["changed"] = value is not None and str(previous) != str(value)
+    return res
+
+
+def _gauge_values(con) -> dict:
+    vals = {}
+    for r in con.execute("SELECT * FROM nodes WHERE type='gauge'").fetchall():
+        d = _node_dict(r)
+        p = d["props"]
+        vals[p.get("key") or d["title"]] = p
+    return vals
+
+
+def api_gauge_probe(con, key="") -> dict:
+    """Run the stored probes and record what they measured.
+
+    The probe is a shell command the OWNER put in their own catalog, and it only
+    runs when someone asks for it — never as a side effect of a read. A gauge
+    with no probe is a gauge nobody will ever re-check, which is why the catalog
+    treats one as a warning.
+    """
+    rows = con.execute("SELECT * FROM nodes WHERE type='gauge' ORDER BY id").fetchall()
+    ran, skipped, changed = [], [], []
+    for r in rows:
+        d = _node_dict(r)
+        k = d["props"].get("key") or d["title"]
+        if key and k != key:
+            continue
+        probe = (d["props"].get("probe") or "").strip()
+        if not probe:
+            skipped.append({"key": k, "why": "no probe"})
+            continue
+        try:
+            p = subprocess.run(probe, shell=True, capture_output=True, text=True,
+                               timeout=PROBE_TIMEOUT)
+        except Exception as e:
+            skipped.append({"key": k, "why": f"probe failed: {e}"}); continue
+        if p.returncode != 0:
+            skipped.append({"key": k, "why": f"probe exit {p.returncode}",
+                            "stderr": (p.stderr or "").strip()[:200]})
+            continue
+        val = (p.stdout or "").strip().splitlines()
+        val = val[0].strip() if val else ""
+        res = api_gauge_set(con, k, value=val)
+        ran.append({"key": k, "value": val})
+        if res.get("changed"):
+            changed.append(k)
+    return {"ok": True, "probed": ran, "skipped": skipped, "changed": changed}
+
+
+# --- re-evaluation ----------------------------------------------------------
+def _rebuild_blocked(con) -> int:
+    """Re-derive the whole index from the transition log.
+
+    The log is authoritative; this table is disposable. An item is blocked if its
+    latest conditional discard has not been followed by a revival.
+    """
+    con.execute("DELETE FROM blocked_item")
+    rows = con.execute(
+        "SELECT * FROM nodes WHERE type='transition' ORDER BY created").fetchall()
+    latest = {}
+    for r in rows:
+        d = _node_dict(r)
+        p = d["props"]
+        idea = p.get("idea")
+        if not idea:
+            continue
+        latest[idea] = d           # ordered by creation, so the last one wins
+    n = 0
+    for idea, d in latest.items():
+        p = d["props"]
+        if p.get("to_status") != "discarded" or p.get("discard_type") != "conditional":
+            continue
+        n += _project_blocked(con, idea, d["id"], p.get("blocked_by") or [])
+    con.commit()
+    return n
+
+
+def _blocked_groups(con, gauge_key="") -> dict:
+    """Unresolved index rows grouped by (item, source transition).
+
+    The group is the unit of evaluation because multiple conditions on one
+    discard are a CONJUNCTION — all of them have to hold before anything comes
+    back. Filtering by gauge only picks which groups to look at; the evaluation
+    still reads the group's every condition.
+    """
+    if gauge_key:
+        refs = [(r["item_ref"], r["source_ref"]) for r in con.execute(
+            "SELECT DISTINCT item_ref, source_ref FROM blocked_item "
+            "WHERE resolved_at='' AND gauge_key=?", (gauge_key,)).fetchall()]
+        if not refs:
+            return {}
+        qs = ",".join("?" for _ in refs)
+        rows = con.execute(
+            f"SELECT * FROM blocked_item WHERE resolved_at='' AND source_ref IN ({qs})",
+            [r[1] for r in refs]).fetchall()
+    else:
+        rows = con.execute(
+            "SELECT * FROM blocked_item WHERE resolved_at='' ORDER BY created"
+        ).fetchall()
+    groups = {}
+    for r in rows:
+        groups.setdefault((r["item_type"], r["item_ref"], r["source_ref"]), []).append(
+            {"gauge": r["gauge_key"], "op": r["op"], "value": r["required"]})
+    return groups
+
+
+def api_recheck(con, *, gauge_key="", apply=False, quiet_days=NOTIFY_QUIET_DAYS,
+                force=False) -> dict:
+    """What has become possible again?
+
+    One indexed pass over `blocked_item` — no scan of the graph, no model call.
+    It NOTIFIES; it never resumes the work. The context around a discarded idea
+    has moved on too, and only a person can say whether it still makes sense.
+    """
+    gauges = _gauge_values(con)
+    unblocked, still, unmeasured = [], 0, set()
+    for (item_type, item_ref, src), conds in _blocked_groups(con, gauge_key).items():
+        checks, ok_all = [], True
+        for c in conds:
+            g = gauges.get(c["gauge"]) or {}
+            cur = g.get("current_value")
+            if cur in (None, "") and c["op"] not in UNARY_OPS:
+                unmeasured.add(c["gauge"])
+            met = compare_values(cur, c["op"], c["value"])
+            ok_all = ok_all and met
+            checks.append({"gauge": c["gauge"], "op": c["op"],
+                           "required": c["value"], "current": cur, "met": met})
+        if not ok_all:
+            still += 1
+            continue
+        row = con.execute("SELECT * FROM nodes WHERE id=?", (item_ref,)).fetchone()
+        if not row:
+            continue
+        d = _node_dict(row)
+        last = d["props"].get("notified_at") or ""
+        if not force and last and _within_days(last, quiet_days):
+            continue                      # already asked recently; stay quiet
+        unblocked.append({"item_type": item_type, "id": item_ref,
+                          "title": d["title"], "source_ref": src,
+                          "reason_discarded": d["props"].get("discard_reason", ""),
+                          "conditions": checks})
+    res = {"ok": True, "gauge": gauge_key or "(all)", "unblocked": len(unblocked),
+           "still_blocked": still, "items": unblocked}
+    if unmeasured:
+        res["unmeasured_gauges"] = sorted(unmeasured)
+        res["warning"] = ("these gauges have no measurement, so anything waiting "
+                          "on them can never be re-checked — give them a probe "
+                          "and run gauge-probe")
+    if apply:
+        applied = []
+        for it in unblocked:
+            con.execute("UPDATE blocked_item SET resolved_at=? WHERE source_ref=? "
+                        "AND resolved_at=''", (now(), it["source_ref"]))
+            met = "; ".join(f"{c['gauge']} {c['op']} {c['required']} "
+                            f"(now {c['current']})" for c in it["conditions"])
+            api_idea_move(con, it["id"], "revived",
+                          reason=f"condition no longer holds: {met}")
+            api_update_node(con, it["id"], props_patch={"notified_at": now()})
+            applied.append(it["id"])
+        con.commit()
+        res["revived"] = applied
+    res["notice"] = [
+        f"\"{it['title']}\" was discarded because {it['reason_discarded'] or 'a condition did not hold'}. "
+        f"That condition now holds. Reconsider?" for it in unblocked]
+    res["hint"] = ("this is a proposal, not a resumption — a person decides "
+                   "whether it still makes sense" if unblocked else
+                   "nothing became possible")
+    return res
+
+
+def _within_days(iso: str, days: int) -> bool:
+    try:
+        t = datetime.fromisoformat(iso)
+    except Exception:
+        return False
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - t) < timedelta(days=days)
+
+
+# --- context as an event stream ---------------------------------------------
+def api_context_event(con, agent_id: str, op: str, item_type: str,
+                      item_ref: str, tokens=0, message_id="") -> dict:
+    """Record the CHANGE to the window, not a photograph of it.
+
+    A snapshot per turn stores the same document fifty times; the deltas store it
+    once and still reconstruct any instant by replay — and they answer the
+    question a snapshot cannot: why was this in the window at all?
+    """
+    if op not in ("added", "removed", "summarized"):
+        return {"ok": False, "error": "op must be added|removed|summarized"}
+    props = {"op": op, "item_type": item_type, "item_ref": item_ref,
+             "tokens": int(tokens or 0), "agent": agent_id, "at": now()}
+    if message_id:
+        props["message"] = message_id
+    res = api_create_node(con, "context-event", f"{op} {item_type}:{item_ref}",
+                          "", props, "", "", DEFAULT_REALM)
+    if res.get("ok") and agent_id and con.execute(
+            "SELECT 1 FROM nodes WHERE id=?", (agent_id,)).fetchone():
+        api_link(con, res["node"]["id"], agent_id, AREA_REL)
+    return res
+
+
+def api_context_at(con, agent_id: str, at="") -> dict:
+    """Replay the events up to `at` and return the window as it stood."""
+    rows = con.execute(
+        "SELECT * FROM nodes WHERE type='context-event' ORDER BY created").fetchall()
+    window, total, seen = {}, 0, 0
+    for r in rows:
+        d = _node_dict(r)
+        p = d["props"]
+        if p.get("agent") != agent_id:
+            continue
+        if at and (p.get("at") or d["created"]) > at:
+            continue
+        seen += 1
+        ref = f"{p.get('item_type')}:{p.get('item_ref')}"
+        if p.get("op") == "removed":
+            window.pop(ref, None)
+        else:
+            window[ref] = {"item_type": p.get("item_type"),
+                           "item_ref": p.get("item_ref"),
+                           "tokens": p.get("tokens", 0),
+                           "op": p.get("op"), "at": p.get("at")}
+    total = sum(int(v.get("tokens") or 0) for v in window.values())
+    return {"ok": True, "agent": agent_id, "at": at or now(),
+            "events_replayed": seen, "items": list(window.values()),
+            "tokens": total}
+
+
+# --- commands ---------------------------------------------------------------
+def cmd_conversation_start(args):
+    con = connect()
+    out(api_conversation(con, args.session, cwd=args.cwd or "",
+                         owner=args.owner or "", title=args.title or ""))
+
+
+def cmd_conversation_end(args):
+    con = connect()
+    out(api_conversation_end(con, args.session, args.reason or ""))
+
+
+def cmd_agent_spawn(args):
+    con = connect()
+    parent = args.parent
+    if not parent:
+        if not args.session:
+            out({"ok": False, "error": "pass --parent, or --session to hang it "
+                                       "off that session's conversation"}); return
+        conv = api_conversation(con, args.session, cwd=args.cwd or "")
+        if not conv.get("ok"):
+            out(conv); return
+        parent = conv["node"]["id"]
+    out(api_agent_spawn(con, parent, args.role, model=args.model or "",
+                        body=args.body or "", session_id=args.session or ""))
+
+
+def cmd_agent_finish(args):
+    con = connect()
+    out(api_agent_finish(con, args.id, args.outcome, args.note or ""))
+
+
+def cmd_tree(args):
+    """The whole branch, token-free — including what a subagent discarded."""
+    con = connect()
+    root = args.id or (_conv_id(args.session) if args.session else "")
+    if not root:
+        out({"ok": False, "error": "pass --id or --session"}); return
+    t = _tree(con, root)
+    if not t:
+        out({"ok": False, "error": f"no node {root}"}); return
+    out({"ok": True, "tree": t})
+
+
+def _conditions_from(args):
+    return [parse_condition(c) for c in (args.blocked_by or [])]
+
+
+def cmd_idea_propose(args):
+    con = connect()
+    agent = args.agent or ""
+    if not agent and args.session:
+        conv = api_conversation(con, args.session)
+        agent = conv["node"]["id"] if conv.get("ok") else ""
+    out(api_idea_propose(con, args.title, detail=args.detail or "",
+                         agent_id=agent, realm=getattr(args, "realm", "") or ""))
+
+
+def cmd_idea_discard(args):
+    con = connect()
+    try:
+        conds = _conditions_from(args)
+    except ValueError as e:
+        out({"ok": False, "error": str(e)}); return
+    out(api_idea_discard(con, args.id, args.type, args.reason or "",
+                         conditions=conds, recheck_on=args.recheck_on or [],
+                         caused_by=args.caused_by or ""))
+
+
+def cmd_idea_select(args):
+    con = connect()
+    out(api_idea_move(con, args.id, "selected", reason=args.reason or "",
+                      caused_by=args.caused_by or "",
+                      supersedes=args.supersedes or ""))
+
+
+def cmd_idea_revive(args):
+    con = connect()
+    con.execute("UPDATE blocked_item SET resolved_at=? WHERE item_ref=? AND "
+                "resolved_at=''", (now(), args.id))
+    con.commit()
+    out(api_idea_move(con, args.id, "revived", reason=args.reason or "revived by hand"))
+
+
+def cmd_ideas(args):
+    """Every alternative, not just the one that won."""
+    con = connect()
+    sql = "SELECT * FROM nodes WHERE type='idea'"
+    params = []
+    if args.status:
+        sql += " AND status=?"; params.append(args.status)
+    sql += " ORDER BY updated DESC LIMIT ?"
+    params.append(int(args.limit or 30))
+    rows = con.execute(sql, params).fetchall()
+    res = []
+    for r in rows:
+        d = _node_dict(r)
+        p = d["props"]
+        if args.agent and p.get("agent") != args.agent:
+            continue
+        item = {"id": d["id"], "title": d["title"], "status": d["status"]}
+        for k in ("discard_type", "discard_reason", "agent"):
+            if p.get(k):
+                item[k] = p[k]
+        if p.get("blocked_by"):
+            item["blocked_by"] = [f"{c['gauge']} {c['op']} {c.get('value','')}".strip()
+                                  for c in p["blocked_by"]]
+        res.append(item)
+    out({"ok": True, "count": len(res), "results": res})
+
+
+def cmd_idea_history(args):
+    """The full transition log for one idea — reconstructable, in order."""
+    con = connect()
+    row = con.execute("SELECT * FROM nodes WHERE id=?", (args.id,)).fetchone()
+    if not row:
+        out({"ok": False, "error": f"no node {args.id}"}); return
+    d = _node_dict(row)
+    rows = con.execute(
+        "SELECT n.* FROM edges e JOIN nodes n ON n.id=e.src "
+        "WHERE e.dst=? AND e.rel='about' AND n.type='transition' ORDER BY n.created",
+        (args.id,)).fetchall()
+    hist = []
+    for r in rows:
+        p = _node_dict(r)["props"]
+        step = {"at": p.get("at"), "from": p.get("from_status"),
+                "to": p.get("to_status")}
+        for k in ("reason", "discard_type", "blocked_by", "recheck_on", "caused_by"):
+            if p.get(k):
+                step[k] = p[k]
+        hist.append(step)
+    out({"ok": True, "id": d["id"], "title": d["title"], "status": d["status"],
+         "count": len(hist), "history": hist})
+
+
+def cmd_gauge_set(args):
+    con = connect()
+    res = api_gauge_set(con, args.key, value=args.value, unit=args.unit or "",
+                        probe=args.probe or "", description=args.description or "")
+    if res.get("ok") and res.get("changed") and not args.no_recheck:
+        # `resource.changed` is the trigger that closes the loop: a measurement
+        # moves, and the list of things that became possible falls out of an
+        # indexed query — nobody has to remember they were waiting on it.
+        res["recheck"] = api_recheck(con, gauge_key=args.key, apply=args.apply)
+    out(res)
+
+
+def cmd_gauges(args):
+    con = connect()
+    rows = con.execute("SELECT * FROM nodes WHERE type='gauge' ORDER BY id").fetchall()
+    res = []
+    for r in rows:
+        d = _node_dict(r)
+        p = d["props"]
+        k = p.get("key") or d["title"]
+        waiting = con.execute(
+            "SELECT COUNT(DISTINCT item_ref) c FROM blocked_item "
+            "WHERE gauge_key=? AND resolved_at=''", (k,)).fetchone()["c"]
+        item = {"key": k, "current_value": p.get("current_value"),
+                "unit": p.get("unit", ""), "measured_at": p.get("measured_at", ""),
+                "has_probe": bool(p.get("probe")), "blocking": waiting}
+        if args.full and p.get("probe"):
+            item["probe"] = p["probe"]
+        if p.get("description"):
+            item["description"] = p["description"]
+        res.append(item)
+    no_probe = [i["key"] for i in res if not i["has_probe"] and i["blocking"]]
+    payload = {"ok": True, "count": len(res), "results": res}
+    if no_probe:
+        payload["warning"] = (f"blocking with no probe: {', '.join(no_probe)} — "
+                              f"a gauge nobody measures never re-checks anything")
+    out(payload)
+
+
+def cmd_gauge_probe(args):
+    con = connect()
+    res = api_gauge_probe(con, args.key or "")
+    if res.get("changed") and not args.no_recheck:
+        res["recheck"] = {k: api_recheck(con, gauge_key=k, apply=args.apply)
+                          for k in res["changed"]}
+    out(res)
+
+
+def cmd_recheck(args):
+    con = connect()
+    if args.rebuild:
+        n = _rebuild_blocked(con)
+        out({"ok": True, "rebuilt": n,
+             "hint": "index re-derived from the transition log"}); return
+    out(api_recheck(con, gauge_key=args.key or "", apply=args.apply,
+                    quiet_days=int(args.quiet_days), force=args.force))
+
+
+def cmd_context_event(args):
+    con = connect()
+    out(api_context_event(con, args.agent, args.op, args.item_type, args.item_ref,
+                          tokens=args.tokens or 0, message_id=args.message or ""))
+
+
+def cmd_context_at(args):
+    con = connect()
+    out(api_context_at(con, args.agent, at=args.at or ""))
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="graph", description="second-brain graph engine")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -3057,6 +4066,121 @@ def build_parser():
     a = sub.add_parser("neighbors"); a.set_defaults(func=cmd_neighbors)
     a.add_argument("--id", required=True)
     a.add_argument("--rel"); a.add_argument("--depth", type=int, default=1)
+
+    # --- traceability (§2k): the agent tree, ideas, gauges, recheck ---------
+    a = sub.add_parser("conversation-start", description=(
+        "Get-or-create the conversation node for a session (idempotent)."))
+    a.set_defaults(func=cmd_conversation_start)
+    a.add_argument("--session", required=True)
+    a.add_argument("--cwd"); a.add_argument("--owner"); a.add_argument("--title")
+
+    a = sub.add_parser("conversation-end", description=(
+        "Close the conversation; any agent still open is marked abandoned."))
+    a.set_defaults(func=cmd_conversation_end)
+    a.add_argument("--session", required=True)
+    a.add_argument("--reason")
+
+    a = sub.add_parser("agent-spawn", description=(
+        "Add an agent under EXACTLY one parent — a conversation or another agent."))
+    a.set_defaults(func=cmd_agent_spawn)
+    a.add_argument("--role", required=True)
+    a.add_argument("--parent", help="parent node id; omit to use --session's conversation")
+    a.add_argument("--session"); a.add_argument("--model")
+    a.add_argument("--body"); a.add_argument("--cwd")
+
+    a = sub.add_parser("agent-finish"); a.set_defaults(func=cmd_agent_finish)
+    a.add_argument("--id", required=True)
+    a.add_argument("--outcome", required=True, choices=list(AGENT_OUTCOMES))
+    a.add_argument("--note")
+
+    a = sub.add_parser("tree", description=(
+        "The agent tree for a session or node, with its ideas. Token-free."))
+    a.set_defaults(func=cmd_tree)
+    a.add_argument("--session"); a.add_argument("--id")
+
+    a = sub.add_parser("idea-propose", description=(
+        "Record an alternative — every one, not just the chosen one."))
+    a.set_defaults(func=cmd_idea_propose)
+    a.add_argument("--title", required=True)
+    a.add_argument("--detail"); a.add_argument("--agent"); a.add_argument("--session")
+    a.add_argument("--realm")
+
+    a = sub.add_parser("idea-select"); a.set_defaults(func=cmd_idea_select)
+    a.add_argument("--id", required=True)
+    a.add_argument("--reason"); a.add_argument("--caused-by", dest="caused_by")
+    a.add_argument("--supersedes", help="idea id this one replaces")
+
+    a = sub.add_parser("idea-discard", description=(
+        "Discard an alternative WITH its reason. A conditional discard must "
+        "carry at least one structured condition, or it is rejected."))
+    a.set_defaults(func=cmd_idea_discard)
+    a.add_argument("--id", required=True)
+    a.add_argument("--type", required=True, choices=list(DISCARD_TYPES))
+    a.add_argument("--reason", required=True, help="human-readable; never used in logic")
+    a.add_argument("--blocked-by", dest="blocked_by", action="append",
+                   metavar="'gauge.key >= value'",
+                   help="structured condition; repeatable (all must hold)")
+    a.add_argument("--recheck-on", dest="recheck_on", action="append",
+                   metavar="EVENT", help="events that should trigger a re-check")
+    a.add_argument("--caused-by", dest="caused_by", help="the turn that caused it")
+
+    a = sub.add_parser("idea-revive"); a.set_defaults(func=cmd_idea_revive)
+    a.add_argument("--id", required=True); a.add_argument("--reason")
+
+    a = sub.add_parser("ideas"); a.set_defaults(func=cmd_ideas)
+    a.add_argument("--status", choices=list(IDEA_STATUSES))
+    a.add_argument("--agent"); a.add_argument("--limit", type=int, default=30)
+
+    a = sub.add_parser("idea-history"); a.set_defaults(func=cmd_idea_history)
+    a.add_argument("--id", required=True)
+
+    a = sub.add_parser("gauge-set", description=(
+        "Upsert one measurable thing in the catalog. A value change triggers "
+        "a recheck of everything waiting on it."))
+    a.set_defaults(func=cmd_gauge_set)
+    a.add_argument("--key", required=True, metavar="gpu.vram_gb")
+    a.add_argument("--value"); a.add_argument("--unit")
+    a.add_argument("--probe", help="shell command whose first stdout line is the value")
+    a.add_argument("--description")
+    a.add_argument("--apply", action="store_true", help="also revive what unblocked")
+    a.add_argument("--no-recheck", dest="no_recheck", action="store_true")
+
+    a = sub.add_parser("gauges"); a.set_defaults(func=cmd_gauges)
+    a.add_argument("--full", action="store_true", help="include probe commands")
+
+    a = sub.add_parser("gauge-probe", description=(
+        "Run the catalog's probes and record what they measured."))
+    a.set_defaults(func=cmd_gauge_probe)
+    a.add_argument("--key", help="probe one gauge (default: all with a probe)")
+    a.add_argument("--apply", action="store_true")
+    a.add_argument("--no-recheck", dest="no_recheck", action="store_true")
+
+    a = sub.add_parser("recheck", description=(
+        "What became possible again? One indexed pass, no model call. "
+        "Notifies; --apply also marks the ideas revived."))
+    a.set_defaults(func=cmd_recheck)
+    a.add_argument("--key", help="only what waits on this gauge")
+    a.add_argument("--apply", action="store_true")
+    a.add_argument("--force", action="store_true", help="ignore the quiet window")
+    a.add_argument("--quiet-days", dest="quiet_days", type=int,
+                   default=NOTIFY_QUIET_DAYS)
+    a.add_argument("--rebuild", action="store_true",
+                   help="re-derive the index from the transition log")
+
+    a = sub.add_parser("context-event", description=(
+        "Record a CHANGE to the context window, not a snapshot of it."))
+    a.set_defaults(func=cmd_context_event)
+    a.add_argument("--agent", required=True)
+    a.add_argument("--op", required=True, choices=["added", "removed", "summarized"])
+    a.add_argument("--item-type", dest="item_type", required=True)
+    a.add_argument("--item-ref", dest="item_ref", required=True)
+    a.add_argument("--tokens", type=int); a.add_argument("--message")
+
+    a = sub.add_parser("context-at", description=(
+        "Replay the events and return the window as it stood."))
+    a.set_defaults(func=cmd_context_at)
+    a.add_argument("--agent", required=True)
+    a.add_argument("--at", help="ISO instant (default: now)")
 
     a = sub.add_parser("export"); a.set_defaults(func=cmd_export)
     a.add_argument("--format", choices=["json", "md", "both"], default="both")

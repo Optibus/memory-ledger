@@ -155,6 +155,23 @@ Commands:
 | `ingest-skills [--dir D]... [--realm R]` | Pull existing markdown skills (plugin `skills/` + `learned_skills/`) into the DB as `skill` nodes (idempotent; re-run to refresh). |
 | `match-skills "situation" [--limit N]` | Find skills matching the situation — ranked by **relevance first**, with reinforcement (usage) as a bounded booster. Read the procedure from the node body (`get-node`). |
 | `use-skill --id ID` | **Reinforce** a skill after it fires (usage_count↑, confidence↑, last_used stamped). |
+| `conversation-start --session SID [--cwd D] [--owner O] [--title T]` | Get-or-create this session's conversation node (§2k). Idempotent — the id is derived from the session id. |
+| `conversation-end --session SID [--reason R]` | Close it. The **main** agent is completed; any subagent still open is **abandoned**. |
+| `agent-spawn --role R (--parent ID \| --session SID) [--model M] [--body ...]` | One node in the tree, under **exactly one** parent — a conversation or another agent. Errors rather than create an orphan. |
+| `agent-finish --id ID --outcome completed\|abandoned\|failed [--note ...]` | Record how the branch ended. Every branch closes explicitly. |
+| `tree [--session SID] [--id ID]` | The agent tree with its ideas — including what a subagent discarded. Token-free. |
+| `idea-propose --title T [--detail ...] [--agent ID] [--session SID]` | Record an alternative. **Every** one, not just the chosen one (§2k). |
+| `idea-select --id ID [--reason ...] [--supersedes ID] [--caused-by ID]` | Mark it chosen; `--supersedes` moves the one it replaces to `superseded`. |
+| `idea-discard --id ID --type conditional\|preference\|permanent --reason R [--blocked-by 'gauge.key >= value']... [--recheck-on EVENT]... [--caused-by ID]` | **The critical one.** A `conditional` discard **without** `--blocked-by` is **rejected** — it would be a permanent discard in disguise. Conditions are a conjunction; every gauge must already be in the catalog. |
+| `idea-revive --id ID [--reason ...]` | Bring one back by hand (a `preference` discard, or a judgement call). |
+| `ideas [--status S] [--agent ID] [--limit N]` | Every alternative with its status and why it was dropped. Token-free. |
+| `idea-history --id ID` | The full transition log for one idea, in order. |
+| `gauge-set --key K [--value V] [--unit U] [--probe CMD] [--description D] [--apply] [--no-recheck]` | Upsert one measurable thing (§2k). **A value change triggers a recheck** of everything waiting on it; `--apply` also revives what unblocked. |
+| `gauges [--full]` | The catalog, with what each gauge is blocking. Warns about a blocking gauge with **no probe**. |
+| `gauge-probe [--key K] [--apply]` | Run the stored probes, record what they measured, recheck what moved. |
+| `recheck [--key K] [--apply] [--force] [--quiet-days N] [--rebuild]` | **What became possible again?** One indexed pass over `blocked_item`, no model call. It **notifies**; `--apply` also marks the ideas `revived`. `--rebuild` re-derives the index from the transition log. |
+| `context-event --agent ID --op added\|removed\|summarized --item-type T --item-ref R [--tokens N]` | Record a **change** to the context window, not a snapshot (§2k). |
+| `context-at --agent ID [--at ISO]` | Replay the events and return the window as it stood. |
 | `stats` | Counts by type. |
 | `export --format json\|md\|both [--out DIR]` | Dump the whole graph to files. |
 
@@ -551,6 +568,173 @@ holding 32,869 chars sit behind 3,505 chars of digest, an **89% reduction in wha
 read has to traverse**. Safe to schedule; the `SessionStart` hook already runs the
 daily pass.
 
+## 2k. Traceability — the tree, what was considered, and what unblocked
+
+The brain records what was **said** (§0). This records what was **considered** —
+and brings back the ideas that were only ever dropped for a reason that has since
+stopped being true.
+
+The failure it exists to prevent: **an idea was discarded because of a limit that
+no longer exists, and nobody knows.** Six months later the same option is argued
+from zero, or never revisited at all.
+
+**Everything here is captured by hook or explicit call — never by asking a model
+to re-read a transcript.** Extraction costs tokens on every turn, varies between
+runs, and omits things without saying so. A hook is deterministic, free, and
+adds no latency to the answer. The model is used only where there is judgment:
+proposing that something be reconsidered. **Structure is the hook's job.**
+
+### The agent tree
+
+**Every agent has exactly one parent** — the conversation, or another agent.
+Never both, never none. `part-of` carries the link, so the tree is the same walk
+as any other hierarchy in the graph.
+
+```
+conversation
+├── agent: main                 <- the person's thread; messages live here
+│   ├── agent: Explore          <- one per Task call
+│   └── agent: Plan
+```
+
+Messages hang off an **agent**, never off the conversation directly. That is what
+keeps a subagent's discarded alternative visible from the root instead of dying
+with its branch when the Task returns.
+
+Every branch closes with an **outcome** — `completed`, `abandoned`, or `failed`.
+An agent with no outcome reads exactly like one that crashed, and the tree stops
+being trustworthy the moment that is true. At session end the **main** agent is
+`completed`; a subagent still open was **abandoned** — recording both the same
+way would make `abandoned` mean nothing.
+
+### Ideas — record the discarded, not just the chosen
+
+Every alternative becomes an `idea` node. Statuses: `proposed`, `selected`,
+`discarded`, `superseded`, `revived`. Each move appends an immutable `transition`
+node carrying the reason and the turn that caused it, so the **whole history is
+reconstructable** — `idea.status` is only the cached head of it.
+
+Three kinds of discard, and only one of them comes back on its own:
+
+| Type | Returns by itself? | For |
+|---|---|---|
+| **`conditional`** | **Yes — when the condition stops holding** | a missing resource, an absent dependency |
+| `preference` | Only if asked for | we went the other way |
+| `permanent` | Never | wrong, or out of scope |
+
+### The condition must be structured — this is the whole point
+
+Free text means a human has to read and interpret it before anything can be
+re-checked, which means nothing ever is. Structure turns re-evaluation into a
+query:
+
+```bash
+graph.py idea-discard --id <idea> --type conditional \
+  --reason "not enough memory for the model we wanted" \
+  --blocked-by "gpu.vram_gb >= 16" --recheck-on hardware.changed
+```
+
+`--reason` is for the person who reads it later and is **never used in the
+logic**. `--blocked-by` is what the machine acts on. Multiple conditions are a
+**conjunction** — all of them have to hold. Operators: `>=` `<=` `>` `<` `==`
+`!=` `exists` `not_exists`.
+
+**A conditional discard with no structured condition is rejected at the write.**
+It would be a permanent discard in disguise: nothing would ever re-check it, and
+the reason text would outlive everyone who could interpret it. Discarding with no
+condition is a legitimate thing to do — say so with `--type permanent`.
+
+### The gauge catalog
+
+Each measurable thing is **a row, not code**: a key (`gpu.vram_gb`), what it is,
+a **probe** that measures it, its last value and unit. A condition may only name
+a gauge that is already in the catalog, or it points at something nobody
+measures.
+
+**A new gauge needs no new code** — `gauge-set` a key and a probe, and every idea
+blocked on it becomes re-checkable. A gauge with no probe is a gauge nobody will
+ever measure; `gauges` warns when one of those is blocking something.
+
+> It is called a **gauge** here and a *resource* in the specification this
+> implements. `resource` was already taken in this brain (§3) — a document, a
+> link, an artifact.
+
+### Re-evaluation — notify, never execute
+
+A gauge value changes → the ideas waiting on it are found by **one indexed query**
+over `blocked_item`. No scan, no model:
+
+```bash
+graph.py gauge-set --key gpu.vram_gb --value 24   # measurement moved
+graph.py recheck --apply                          # what became possible?
+graph.py gauge-probe                              # measure everything, then recheck
+```
+
+A revived idea is **a proposal, not a resumption**. The context around it moved
+on too, and only a person can say whether it still makes sense. The SessionStart
+brief surfaces them as *"became possible again — offer, don't resume"*, and
+`recheck` holds a quiet window (7 days) per item so a reconsider prompt cannot
+turn into noise a person learns to skip.
+
+### Transactional and log
+
+`transition` nodes are the **log**: immutable, synced to the master, read in
+sequence to reconstruct history. `blocked_item` is a **projection** of that log —
+a local indexed table, the thing consulted by trigger. Nothing writes it
+directly, and `recheck --rebuild` re-derives it from the transitions at any time.
+Reconstructing by replaying the log is fine over months and hopeless over years,
+so what needs a fast answer does not depend on it.
+
+### Where the token went
+
+Claude Code already writes each turn's token counts to the transcript, so the
+`Stop` hook records them for free — `tokens_in`, `tokens_out`,
+`tokens_cache_read`, `tokens_cache_write` on the assistant's `capture` node, and
+a running total plus `turns` on its **agent**. Per-turn counts say what a turn
+cost; the total on the branch answers the question people actually ask — *which
+part of the work was expensive*. The hook reads only the **tail** of the
+transcript (256 KB), so a long session does not make every turn cost more.
+
+### Hooks never wait on the network
+
+`graph.py`'s `api_*` writers push to the neo4j master **inline** — correct for a
+CLI, wrong in a hook. A hook sets `SECOND_BRAIN_NO_AUTOSYNC` for its own process,
+writes to the local mirror, and lets a **detached** `graph.py flush` do the
+network work. Measured against a deliberately slow master, an inline push cost
+**15–45 s per hook**; the detached path stays under 250 ms. This is pinned by
+`tests/test_traceability.py` — it is invisible on a machine with no master
+configured, which is exactly why it needs a test rather than care.
+
+### What is deliberately NOT instrumented
+
+Every tool call could be a node. It should not be: `Read`, `Grep` and `Bash` fire
+constantly, and a few thousand bookkeeping nodes a week would degrade every
+recall in the graph to record traffic nobody queries — the exact failure mode of
+*put everything in the log* (§2k, transactional and log). So only `Task` is
+hooked, because that is the one tool that creates a **branch** with reasoning to
+lose. Anything else worth recording is an explicit `context-event`.
+
+### Context as events
+
+The window is recorded as **changes** (`added` / `removed` / `summarized`), not as
+a photograph per turn. A snapshot stores the same document fifty times; the
+deltas store it once, still replay any instant (`context-at`), and answer what a
+snapshot cannot — *why was this in the window at all*, and what did each part
+cost.
+
+### What this answers
+
+| Question | How |
+|---|---|
+| Why didn't we go with X? | `idea-history --id` — the transition and its reason |
+| **What unblocked when Y changed?** | **`recheck --key Y` — one indexed query** |
+| What did the research subagent discard? | `tree --session` |
+| What alternatives existed at all? | `ideas` — every one, not just the winner |
+| Why was this in the context window? | `context-at --agent` |
+| Where were the tokens spent? | `tokens_*` on the turn, totalled on its agent |
+
+---
+
 ## 3. Vocabulary
 
 **Node types:** `person`, `task`, `subtask`, `requirement`, `decision`,
@@ -559,15 +743,26 @@ daily pass.
 `area` (domain hub), `quote`, `parked` (context moved out of the window, §2j),
 `rule` (a convention, §2i), `spec` (a genome
 blueprint, §2i), `process`, and the stateful trackables `pr`, `email`, `message`.
+Traceability (§2k): `conversation`, `agent`, `idea`, `transition` (one immutable
+entry in an idea's history), `gauge` (a measurable thing with a probe — the
+specification's *resource*, renamed because `resource` already means a document
+here), `context-event`.
 
 **State values** (`props.state`, or task `status`): open, doing, blocked,
 waiting, needs-reply · and closed ones: done, cancelled, closed, answered,
 resolved, merged, shipped, deployed, declined.
 
+**Idea statuses** (§2k): `proposed`, `selected`, `discarded`, `superseded`,
+`revived`. **Discard types:** `conditional` (re-checked automatically),
+`preference`, `permanent`. **Agent outcomes:** `completed`, `abandoned`, `failed`.
+
 **Edge relations:** `relates-to`, `blocks`, `blocked-by`, `part-of`,
 `has-subtask`, `assigned-to`, `about`, `depends-on`, `causes`, `caused-by`,
 `mentions`, `authored-by`, `example-of`, `follows-up`, and for learned skills:
-`applies-to`, `learned-from`, `reinforces`, `triggered-by`.
+`applies-to`, `learned-from`, `reinforces`, `triggered-by`. Traceability (§2k)
+reuses `part-of` for the agent tree and message→agent, `about` for a transition
+to its idea, `blocked-by` for an idea to the gauge holding it back, `caused-by`
+for the turn that caused a transition, and adds `supersedes`.
 
 Both vocabularies are **soft** — the engine does not reject an unlisted type or
 relation (hooks legitimately write `capture` nodes and `captured-from` edges).

@@ -33,6 +33,38 @@ root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.dirname(
 graph = os.path.join(root, "scripts", "graph.py")
 
 
+def revived_lines():
+    """What became possible again since we last looked.
+
+    This is the payoff of the whole traceability side (CONVENTIONS §2k): a gauge
+    moved, and the things that were only ever blocked on it fall out of an
+    indexed query — nobody has to remember they were waiting. It NOTIFIES; the
+    ideas are proposals to reconsider, never work to resume. `recheck` keeps its
+    own quiet window, so this cannot become noise a person learns to skip.
+    """
+    try:
+        # --apply WRITES (it revives what unblocked), and a writer pushes to the
+        # neo4j master inline. Session start must not wait on the network, so the
+        # push is suppressed here and drained by a detached flush below — the same
+        # bargain the capture hooks make.
+        env = {**os.environ, "SECOND_BRAIN_NO_AUTOSYNC": "1"}
+        raw = subprocess.run([sys.executable, graph, "recheck", "--apply"],
+                             capture_output=True, text=True, timeout=8,
+                             env=env).stdout
+        items = json.loads(raw).get("items") or []
+    except Exception:
+        return []
+    if items:
+        try:
+            subprocess.Popen([sys.executable, graph, "flush"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             stdin=subprocess.DEVNULL, start_new_session=True)
+        except Exception:
+            pass
+    return [f"- {i.get('title', '')[:70]} (was: {i.get('reason_discarded', '')[:50]})"
+            for i in items[:3]]
+
+
 def consolidate_daily():
     """Once a day, fold CLOSED days' captures into digests — 'sleep'.
 
@@ -76,8 +108,12 @@ except Exception:
 
 n = d.get("count", 0)
 if not n:
-    print(json.dumps({"additionalContext":
-                      "[second-brain] State: no open loops — all clear."}))
+    rev = revived_lines()
+    note = "[second-brain] State: no open loops — all clear."
+    if rev:
+        note += ("\nBecame possible again (the condition that blocked these no "
+                 "longer holds — offer them, don't resume them):\n" + "\n".join(rev))
+    print(json.dumps({"additionalContext": note}))
     sys.exit(0)
 
 lines = []
@@ -106,6 +142,11 @@ except Exception:
 focus_block = ("\nIn play when you left off:\n" + "\n".join(focus_lines)
                if focus_lines else "")
 
+revived = revived_lines()
+revived_block = ("\nBecame possible again (a condition that blocked these no longer "
+                 "holds — offer them, don't resume them):\n" + "\n".join(revived)
+                 if revived else "")
+
 msg = (
     f"[second-brain] STATE — {n} open loops "
     f"({d.get('overdue', 0)} overdue, {d.get('stale', 0)} stale). They stay open "
@@ -113,6 +154,7 @@ msg = (
     f"(open tasks, PRs to move, emails/messages to answer):\n"
     + "\n".join(lines)
     + focus_block
+    + revived_block
     + "\n(full list: open-loops · thread + parked: resume · park to offload context)"
 )
 print(json.dumps({"additionalContext": msg}))

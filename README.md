@@ -110,10 +110,13 @@ These are enforced in `CONVENTIONS.md`, which every skill reads first.
 persist every interaction in pure Python/SQL: a `UserPromptSubmit` hook
 (`hooks/capture_prompt.py`) stores each prompt and auto-creates tasks for explicit
 to-dos; a `Stop` hook (`hooks/capture_answer.py`) stores a summary of the answer,
-linked to its question. Deciding and storing cost **zero** tokens — it is regex and
-SQL. Two of the hooks do inject a short status line into the conversation (208 bytes
-per prompt, a ~1.0 KB open-loops brief at session start; the `Stop` hook injects
-nothing), which measures **under 0.05% of a working day — a few cents**. Effectively
+linked to its question. `PreToolUse`/`PostToolUse` on `Task`
+(`hooks/capture_agent.py`) put every subagent in the tree as it spawns and stamp
+its outcome as it returns, and `SessionEnd` closes the branch. Deciding and
+storing cost **zero** tokens — it is regex and SQL. Two of the hooks do inject a
+short status line into the conversation (209 bytes per prompt, a ~1.0 KB
+open-loops brief at session start; every other hook injects nothing), which
+measures **under 0.05% of a working day — a few cents**. Effectively
 free, not literally zero. Full accounting in [What it costs](#what-it-costs).
 
 So a simple answered question becomes a recallable node on its own, and you get it
@@ -175,6 +178,64 @@ python3 scripts/graph.py ingest-skills                         # pull markdown s
 python3 scripts/graph.py match-skills "a situation"            # recall: relevance-ranked, reinforcement-boosted
 python3 scripts/graph.py use-skill --id skill_triage-x         # reinforce
 ```
+
+## Ideas that come back when the reason they were dropped stops holding
+
+The brain records what was **said**. It also records what was **considered** —
+and, for an alternative dropped only because something was missing, brings it
+back when that stops being true. The failure it prevents: *an idea was discarded
+because of a limit that no longer exists, and nobody knows.*
+
+Every alternative becomes a node, not just the chosen one. A discard carries its
+reason **and**, when it is conditional, a machine-checkable condition:
+
+```bash
+python3 scripts/graph.py gauge-set --key gpu.vram_gb --value 8 --unit GB \
+        --probe "nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits"
+
+python3 scripts/graph.py idea-discard --id idea_run-13b-locally --type conditional \
+        --reason "not enough memory for the model we wanted" \
+        --blocked-by "gpu.vram_gb >= 16"
+```
+
+Free text would mean a person has to read and interpret it before anything gets
+re-checked — which means nothing ever does. So **a conditional discard without a
+structured condition is rejected at the write**, and the condition may only name
+a gauge that something actually measures. Months later:
+
+```bash
+python3 scripts/graph.py gauge-probe        # measure; a new box, a new value
+python3 scripts/graph.py recheck            # -> "run the 13B model locally" came back
+```
+
+One indexed query answers *what became possible*, with no scan and no model call.
+It **notifies and never resumes** — the context moved on too, so a person decides
+whether it still makes sense. The session-start brief surfaces them, with a quiet
+window so a reconsider prompt cannot become noise.
+
+The same hooks build the **agent tree**: every agent under exactly one parent,
+messages hanging off an agent rather than the conversation, and every branch
+closing with an outcome — so what a subagent considered and dropped stays visible
+from the root instead of dying when its Task returns.
+
+```bash
+python3 scripts/graph.py tree --session <session-id>   # the branch, with its ideas
+python3 scripts/graph.py ideas --status discarded      # every alternative, and why
+python3 scripts/graph.py idea-history --id <idea>      # the full, ordered history
+```
+
+The same `Stop` hook records **where the tokens went** — Claude Code already
+writes the counts to the transcript, so they cost a bounded tail-read: per turn
+on the message, totalled on its agent, so you can see which branch was expensive.
+
+Only the `Task` tool is hooked, not every tool: `Read`, `Grep` and `Bash` fire
+constantly, and thousands of bookkeeping nodes a week would degrade recall for
+records nobody queries. `Task` is the one tool that creates a branch with
+reasoning to lose.
+
+Everything here is captured **by hook or explicit call**, never by asking a model
+to re-read a transcript: deterministic, free, and adding nothing to the answer's
+latency. Full rules in `CONVENTIONS.md` §2k.
 
 ## One person, one node
 
@@ -287,12 +348,22 @@ Each hook's real output, measured by running it (`python3 hooks/<hook>.py < even
 
 | Hook | Fires | Injected into context | Latency |
 |---|---|---|---|
-| `capture_prompt.py` | every prompt | 208 bytes (~52 tokens) | 64 ms |
-| `open_loops_brief.py` | session start / clear / compact | ~1.0 KB (~267 tokens) | 185 ms |
-| `capture_answer.py` | every answer | **nothing** (writes only) | 57 ms |
+| `capture_prompt.py` | every prompt | 209 bytes (~52 tokens) | 81 ms |
+| `open_loops_brief.py` | session start / clear / compact | ~1.0 KB (~267 tokens) | 236 ms |
+| `capture_answer.py` | every answer | **nothing** (writes only) | 78 ms |
+| `capture_agent.py` | each `Task` call, before and after | **nothing** (writes only) | 81 / 76 ms |
+| `close_conversation.py` | compaction, session end | **nothing** (writes only) | 78 / 76 ms |
 
 The open-loops brief scales with how many loops are open and is budget-capped, so it
-does not grow without bound. Nothing else is added to any request.
+does not grow without bound. It now also lists anything that **became possible
+again** (§2k) — bounded to three lines, each item held behind a 7-day quiet window.
+The traceability hooks write only; they add **nothing** to any request.
+
+**No hook waits on the network.** Writes land in the local SQLite mirror and are
+drained to the neo4j master by a *detached* flush, so a slow or wedged master
+cannot stall a prompt. Pinned by a test against a deliberately slow server —
+every hook stays under 250 ms where an inline push costs 15–45 s
+(`tests/test_traceability.py`).
 
 ### What that costs per day
 
