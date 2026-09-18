@@ -5,33 +5,83 @@ description: Read and create calendar events (Google Calendar) — "what's on my
 
 # calendar
 
-Turn intentions and deadlines into real blocks of time — externalizing the
-"when" so it doesn't have to be tracked in the person's head.
+Turn intentions and deadlines into real blocks of time, so the "when" lives on a
+calendar instead of in the person's head.
 
-Load only the conventions that apply to what you are about to do — not the
-whole file:
-`python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" match-rules "<task in a few words>"`
-(no model call; ~8% of the full text). If it returns no rules the base layer is
-not loaded yet — run `ingest-conventions` once, then re-query. See CONVENTIONS
-§2i for the genome.
+## When to use
 
-## Steps
+Anything agenda-shaped or time-blocking: what is on today, am I free Thursday,
+book me 30 minutes for the report, schedule a call.
 
-1. **Connect.** Use the Google Calendar MCP tools
-   (`mcp__claude_ai_Google_Calendar__*`). If not yet authenticated, run the
-   authenticate flow and tell the person what to approve.
-2. **Read** the agenda / free-busy for the window asked about. Report it in the
-   focus contract: the next/most important thing first, not a full dump.
-3. **Create events** when asked to book time. Use the person's `tz`. For focus
-   work, time-block by pulling the task from memory (`recall`) and creating an
-   event titled after it; set a realistic duration from the task's
-   `estimate_min` prop.
-4. **Confirm before creating** (outward action): show title, date/time, and
-   duration; get a yes unless already authorized.
-5. **Remember it.** Optionally add a `meeting` node linked `relates-to` the
-   task/project, so the calendar and the graph stay in sync.
+## Given
 
-## Notes
-- For pure alarms/nudges (not agenda blocks) prefer the `remind` skill.
-- Respect the person's language for event titles/descriptions.
-- If Google Calendar isn't available, say so and offer `remind` as a fallback.
+- **The window they asked about**, or the work they want time for.
+- **The Google Calendar MCP tools** (`mcp__claude_ai_Google_Calendar__*`). If the
+  connection is not authenticated yet, the authenticate flow runs first and the
+  person is told what they are approving.
+- **The person's timezone**, from their `person` node props. Every time resolves
+  in it.
+- **The task being blocked, when there is one.** Its `props.estimate_min` is the
+  honest duration, not a round number you picked.
+
+## Rules honored
+
+Ask the genome for the rules that apply before reading or booking (§5.2):
+
+```
+python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" match-rules "read the calendar and block time for a task"
+```
+
+Accountable for: `rule_s1_how-to-respond-the-focus-contract-non-ne` (the next
+thing first, never a full agenda dump).
+
+Rule classes this skill touches, resolved from the person's own genome:
+
+- **outward-text** (§5.2), via `match-rules "draft a message to <recipient>"`.
+
+## Depends on
+
+See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTIONS §5a).
+
+- **Requires:** none.
+- **Optional (enriching):** `recall`, to find the task whose time is being blocked.
+- **Reads:** Google Calendar, `task` props (`estimate_min`, `due`), and
+  `person` for the timezone.
+- **Writes:** a `meeting` node linked `relates-to` the task or project, when the
+  event is worth remembering.
+
+## Deliverables
+
+- **The agenda is answered, not dumped.** The window is read and reported as the
+  next or most important thing first.
+- **Booked time is real time.** An event exists at a concrete time in the person's
+  timezone, with a duration drawn from the task's estimate rather than invented.
+- **Outward creation was confirmed.** Title, date, time and duration were shown
+  and agreed before the event was created.
+- **Calendar and graph agree.** An event worth remembering exists as a `meeting`
+  node linked to the work it serves.
+
+## Judged against
+
+- **The event's timezone matches the person's**, so "9am" means their 9am.
+- **The duration traces to something.** Either the task's `estimate_min` or a
+  number the person gave.
+- **Nothing was created without a yes**, visible in the exchange.
+
+## Guardrails — must not
+
+- **Must not create, move or delete an event without confirmation.** A calendar is
+  shared with other people, so a silent write reaches them too.
+- **Must not report the full agenda when one thing was asked about.** That is the
+  overwhelm §1 exists to prevent.
+- **Must not write event titles in English by default.** They are read by whoever
+  is invited, so the recipient's language applies.
+
+## Reply (focus contract)
+
+The next commitment, bolded, then the count of what else is in the window.
+
+> Next: **CORD planning, 14:00, 45 min.** Three more things after it today.
+
+For pure alarms and nudges rather than agenda blocks, hand to `remind`. If Google
+Calendar is unavailable, say so and offer `remind` as the fallback.

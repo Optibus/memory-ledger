@@ -5,33 +5,78 @@ description: Read and triage email (Gmail) — "check my email", "what did X ema
 
 # read-email
 
-Make the inbox manageable: read it, surface only what needs the person, and
-turn action items into tracked tasks — so email stops being a pile of
-unremembered obligations.
+Make the inbox manageable. Read it, surface only what needs the person, and turn
+obligations into tracked tasks, so email stops being a pile of things nobody
+remembers.
 
-Load only the conventions that apply to what you are about to do — not the
-whole file:
-`python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" match-rules "<task in a few words>"`
-(no model call; ~8% of the full text). If it returns no rules the base layer is
-not loaded yet — run `ingest-conventions` once, then re-query. See CONVENTIONS
-§2i for the genome.
+## When to use
 
-## Steps
+"Check my email", "what did X send", "anything urgent", "did the reply come in".
 
-1. **Connect.** Use the Gmail MCP tools (`mcp__claude_ai_Gmail__*`). Run the
-   authenticate flow first if needed and tell the person what to approve.
-2. **Read / search** the requested messages (unread, from a sender, a subject,
-   a time window).
-3. **Triage in the focus contract.** Don't summarize every email. Lead with the
-   **one that needs action or a reply**, then say how many others there are and
-   offer to go through them. Flag anything time-sensitive.
-4. **Capture actions.** For emails that imply a to-do, use `add-task` (with its
-   micro-step breakdown) and link the email as a `resource`/`note` node so the
-   context is preserved.
-5. **Replies are gated.** If asked to reply, draft using the `writing-style`
-   skill in the recipient's language, show the draft, and only send after an
-   explicit yes.
+## Given
 
-## Notes
-- Never mark-read, archive, or send without confirmation.
-- Keep summaries short and calm; the goal is less inbox anxiety, not more.
+- **The Gmail MCP tools** (`mcp__claude_ai_Gmail__*`). If not authenticated, the
+  authenticate flow runs first and the person is told what they are approving.
+- **The scope asked about**: unread, a sender, a subject, a time window.
+- **Unread state is Gabriel's own queue**, not a display detail. Treat it as data
+  you may read and may not change.
+
+## Rules honored
+
+Ask the genome for the rules that apply before touching the mailbox (§5.2):
+
+```
+python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" match-rules "read and triage email, draft a reply"
+```
+
+Accountable for: `rule_s1_how-to-respond-the-focus-contract-non-ne`.
+
+Rule classes this skill touches, resolved from the person's own genome:
+
+- **mailbox-state** (§5.2), via `match-rules "change the state of an email"`.
+- **outward-text** (§5.2), via `match-rules "draft a message to <recipient>"`.
+
+## Depends on
+
+See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTIONS §5a).
+
+- **Requires:** none.
+- **Optional (enriching):** `ingest-context` when a message carries durable
+  context, `add-task` when it implies a to-do, `writing-style` when a reply is
+  drafted.
+- **Reads:** Gmail, and `email` nodes for anything already tracked.
+- **Writes:** none directly. Nodes are written by the skills this hands to.
+
+## Deliverables
+
+- **One email leads.** The reply opens with the single message needing action or a
+  reply, then says how many others there are and offers to go through them.
+- **Time-sensitivity is flagged**, not left for the person to notice.
+- **Obligations became tasks.** Anything implying a to-do went through `add-task`,
+  with the email preserved as a linked node so the context survives.
+- **A drafted reply sounds like the person**, in the recipient's language, and was
+  shown before anything was sent.
+- **The mailbox is unchanged.** Same read and unread state, same labels, same
+  location, unless the person was asked and agreed.
+
+## Judged against
+
+- **The unread count is what it was**, unless a yes is in the exchange.
+- **A reader can act on the first line.** If the reply summarizes every message,
+  the triage clause failed.
+- **Nothing was sent without an explicit yes.**
+
+## Guardrails — must not
+
+- **Must not mark read, archive, move or relabel anything without asking.**
+  Gabriel works from unread state, and clearing it silently destroys his queue.
+- **Must not send a reply without an explicit yes.** It goes out under his name.
+- **Must not summarize the whole inbox.** That is the anxiety this skill exists to
+  reduce, restated as a wall of text.
+
+## Reply (focus contract)
+
+The one that needs him, bolded, then the count.
+
+> **Alessandro is waiting on your acceptance test for OS-82316**, sent Tuesday.
+> 11 other unread, nothing else time-sensitive. Want to go through them?

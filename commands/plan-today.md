@@ -27,14 +27,30 @@ CONVENTIONS §2i explains the genome.
    `list_events`, local tz). Meetings, OOO and breaks are fixed — find the free
    work windows between them.
 
-3. **Rank + time-block.** Order by hard deadline (overdue first), then
-   `props.priority`. Fit tasks into the free windows, protecting pre-meeting prep.
-   Be realistic — don't overfill; call out anything that won't fit today.
+3. **Rank — deadline first, then switch cost.** Order by hard deadline (overdue
+   first), then `props.priority`. Deadlines are non-negotiable; everything with
+   slack gets ordered by what it costs to *enter*, not by what it costs to do.
 
-4. **Reply in the focus contract.** Show the calendar spine, the blocked plan,
-   and **one clear first action**. Calm and scannable — never a wall of text.
+4. **Batch by context, then time-block.** Group the slack items that share a
+   context — same repo, same ticket family, same kind of thinking (code / review
+   / writing / comms) — and lay each **group** into a free window whole. Never
+   interleave two contexts inside one window.
+   - **Protect one deep block.** The longest free window goes to the group that
+     needs a loaded mental model, uninterrupted. Don't fill it with small items
+     just because they fit.
+   - **Collect the small stuff into one slot.** Reviews, replies, quick asks and
+     admin go in a single batch, not sprinkled between the real blocks.
+   - Protect pre-meeting prep, and put low-context work in the short gaps
+     between meetings — a 20-minute gap can't hold a deep block, so don't try.
+   - Count the switches out loud in the plan. Two plans that fit the same tasks
+     are not equally cheap; prefer the one with fewer re-entries.
+   - Be realistic — don't overfill; call out anything that won't fit today.
 
-5. **Make it stick (gated — ask first).** Offer to:
+5. **Reply in the focus contract.** Show the calendar spine, the blocked plan
+   (with the switch count), and **one clear first action**. Calm and scannable —
+   never a wall of text.
+
+6. **Make it stick (gated — ask first).** Offer to:
    - set due dates on the picked tasks
      (`graph.py update-node --id <id> --due <ISO>`), and/or
    - drop calendar blocks (Google Calendar MCP `create_event`).
@@ -42,6 +58,12 @@ CONVENTIONS §2i explains the genome.
 
 ## Notes
 - No free windows? Say so and surface only the single most important item.
+- **Why switch cost is a ranking input, not a preference.** The cheapest day is
+  the one with the fewest re-entries, not the fullest one — stopping one mental
+  model and loading another is the expensive event, and doing the work is not.
+  `match-rules` in step 0 returns the rules that say so; follow them.
+- A switch you accept mid-day gets a `graph.py park` first (where I was, next
+  step, open question) so re-entry is a read. Re-plans start from `resume`.
 - An undated task you pull into today should get today's due (with the user's ok)
   so it shows on the dashboard. You can also set/clear due dates straight from the
   dashboard (click the date chip).

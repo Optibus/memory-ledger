@@ -5,95 +5,99 @@ description: Open the live brain UI in the browser — one local server, three s
 
 # visualize
 
-Launch the brain UI — a dependency-free local web server serving one page with
-three sections, behind the hamburger menu on the left (`m` toggles it): the
-**Map** (live graph), the **Dashboard** (the `brain_query.py` date views,
-token-free), and **Settings** (preferences + store upkeep). They read the same
-brain file — and a configured graph mirror when one is reachable.
+Launch the brain UI, and hand the person a surface where they do not need you.
+That second half is the point: the dashboard is a full write surface, so the brain
+keeps working when the model is not in the room.
 
-Load only the conventions that apply — not the whole file:
-`python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" match-rules "where the brain database lives"`
-(no model call). If it returns nothing, run `ingest-conventions` once first.
-CONVENTIONS §2i explains the genome.
+## When to use
 
-## Launch
+"Show me the graph", "open the dashboard", "see the connections", "what is due",
+"let me edit it myself", "change the timezone", "run prune".
+
+## Given
+
+- **The server**, which is dependency-free and local:
+
+  ```
+  python3 "$CLAUDE_PLUGIN_ROOT/viz/serve.py" [--port 8770] [--no-open]
+  ```
+
+  It prints a URL, defaulting to `http://127.0.0.1:8770/`, and runs until Ctrl-C.
+  Because it is long-running, start it in the background and give the person the
+  URL. It binds to 127.0.0.1 only unless `--host 0.0.0.0` is passed.
+- **Three sections behind the hamburger menu** (`m` toggles it), reading the same
+  brain file and a configured graph mirror when one is reachable:
+  - **Map.** Zoom, pan, pin a node by dragging, reset with a double-click. Search
+    highlights matches and dims the rest. Four multi-select filters with live
+    counts: node types, realms, kinds from `props.kind`, and display toggles.
+    Clicking a node shows its fields and every connection with direction, and
+    clicking a connection jumps to that node. The page polls every two seconds.
+  - **Dashboard.** The `brain_query.py` date views as cards: agenda, open, today,
+    tomorrow, week, closed, range. No model, no tokens.
+  - **Settings.** Timezone, default realm, map and dashboard refresh intervals,
+    the database connection including the neo4j master with Test and Flush
+    queued, and Prune.
+- **The write path.** New task with title, due, assignee, priority, type and
+  notes, where the server proposes relations from the wording as they type
+  (`blocked by PR #7366` becomes `blocked-by`, `part of ...` becomes `part-of`,
+  `with <person>` becomes `mentions`), each re-pointable or removable before
+  saving. Expanding a card gives complete, status, assignee, edit, and relation
+  add and remove. The same engine you call: `graph.py suggest-links "<text>"`
+  returns identical suggestions, so you and the UI never disagree.
+
+## Rules honored
+
+Ask the genome for the rules that apply before launching (§5.2):
 
 ```
-python3 "$CLAUDE_PLUGIN_ROOT/viz/serve.py" [--port 8770] [--no-open]
+python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" match-rules "where the brain database lives"
 ```
 
-It prints a URL (default http://127.0.0.1:8770/) and opens the browser. It runs
-until Ctrl-C. Because it's a long-running server, start it in the background so
-you can keep working, and tell the person the URL:
+Accountable for: `rule_s2g_the-web-ui-is-a-full-write-surface-the-b`,
+`rule_s2f_token-free-reads-brain-query-py`,
+`rule_s2a_finishing-work-archive-never-delete` (prune is non-destructive).
 
-```
-python3 "$CLAUDE_PLUGIN_ROOT/viz/serve.py" --no-open &
-```
+## Depends on
 
-## What the person can do in the map
-- **Zoom** (scroll), **pan** (drag background), **pin** a node (drag it),
-  **reset** view (double-click background).
-- **Search** (top bar) — matching nodes highlight, the rest dim. The `✕` in the
-  field (or Esc) clears it.
-- **Filter** — four dropdowns in the top bar, each multi-select with its own
-  **all** / **none**: **Node types**, **Realms**, **Kinds** (from `props.kind`),
-  and **Display** ("hide done / archived", "drop unsupported"). The button shows
-  what the closed menu is doing (`all`, `none`, `4/9`), and every option carries
-  its live count.
-- **Inspect** — click a node to see its fields and **every connection with
-  direction** (← incoming, → outgoing) and the relation name; click a listed
-  connection to jump to that node. This is the "where do the connections come
-  from" view.
-- **Live** — the page polls every ~2s, so anything a skill writes to the graph
-  appears without a reload (watch the green "live" dot).
+See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTIONS §5a).
 
-## The Dashboard section
-Open the menu (`☰`, top left) → **📋 Dashboard** for the token-free date views as cards:
-**agenda · open · today · tomorrow · week · closed · range** (range has date pickers +
-open/done filter; closed has a since-days control). Each card shows due date
-(overdue in red), type, status, realm, and `waiting on:`. This is the
-`brain_query.py` layer over HTTP — no model, no tokens.
+- **Requires:** none.
+- **Reads:** every node type in the graph, through `viz/serve.py`.
+- **Writes:** none by this skill. The person writes, through the UI.
 
-## Editing from the UI (no model needed)
-The dashboard is a full editor, so the user never depends on you to maintain the
-brain. Point them at it when they'd rather click than type a request:
+## Deliverables
 
-- **＋ New task** — title, due, assignee, priority, type, notes. While they type
-  the title, the server recognises nodes the text mentions and proposes the
-  relation from the wording (`blocked by PR #7366` → `blocked-by`, `caused by …` →
-  `caused-by`, `needs X first` → `blocked-by`, `part of …` → `part-of`, `with
-  <person>` → `mentions`). Each suggestion can be re-pointed to any relation or
-  unchecked before saving.
-- **Expand a card** → ✓ Complete (archives, never deletes), status dropdown,
-  assignee field, ✎ Edit (title/body), a `×` on any relation to remove it, and a
-  search box to add a new one.
-- Same engine you call: `graph.py suggest-links "<text>"` returns the identical
-  suggestions, so you and the UI never disagree.
+- **The server is running and the person has the URL**, started in the background
+  so the session is not blocked.
+- **They know which section answers their question.** Map for connections,
+  Dashboard for dates and edits, Settings for preferences and upkeep.
+- **They know they can edit without you.** When the request was about maintaining
+  the brain rather than understanding it, the dashboard's write surface is named,
+  because depending on the model for upkeep is the failure this section prevents.
+- **A read-only server is diagnosed, not worked around.** If it was started with
+  `--no-write`, the editing controls are hidden and writes return 403. Say so and
+  say to restart without the flag.
 
-If the server was started with `--no-write` the editing controls are hidden and
-every write returns 403 — tell the user to restart without that flag.
+## Judged against
 
-## The Settings section
-Pinned at the bottom of the menu (**⚙ Settings**). Point the person here instead
-of editing files or exporting env vars:
+- **The URL in the reply loads the page.**
+- **The person was pointed at the section that answers what they asked**, not at
+  the UI in general.
+- **Nothing in the graph changed because of this skill.**
 
-- **Time zone** — which calendar day "today", "tomorrow" and "overdue" mean.
-  Saved to `~/.second_brain/settings.json`, so `brain_query.py`, the hooks and any
-  cron bucket dates the same way. `$SECOND_BRAIN_TZ` still wins, and the page says
-  so when it is set.
-- **Defaults & interface** — default realm for new nodes, map poll and dashboard
-  refresh intervals.
-- **Database connection** — brain file, node/edge counts, which store is being
-  read, queued writes; plus the neo4j master's url/db/user/password with **Test**
-  and **Flush queued**. An empty url goes back to sqlite-only. The password is
-  never sent back to the browser.
-- **Prune** — runs `maintain`: old captures fold into one digest per day so reads
-  stay small. Non-destructive; nothing is deleted (CONVENTIONS §2a).
+## Guardrails — must not
 
-## Notes
-- The server binds to 127.0.0.1 only by default. Use `--host 0.0.0.0` (behind a
-  tunnel) to reach it from your phone on the LAN — and pass `--no-write` when you
-  do, because the write API is unauthenticated.
-- Colours are per node type (see the Node types dropdown); node size grows with
-  connection count.
-- If the port is busy, pass a different `--port`.
+- **Must not expose the write API on a non-local host.** `--host 0.0.0.0` reaches
+  the LAN and the write API is unauthenticated, so it goes together with
+  `--no-write`.
+- **Must not run the server in the foreground.** It runs until Ctrl-C and would
+  block the session.
+- **Must not describe prune as deleting.** It folds old captures into one digest
+  per day, and deletes nothing.
+
+## Reply (focus contract)
+
+The URL and the one section that answers what they asked.
+
+> Brain UI is up: **http://127.0.0.1:8770/**. Open the menu and pick Dashboard for
+> what is due. You can add and complete tasks there without me.

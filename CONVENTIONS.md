@@ -151,7 +151,8 @@ Commands:
 | `neighbors --id ID [--rel REL] [--depth N]` | Walk the graph out to depth N. |
 | `complete --id ID [--note ...]` | Mark a task **done** — archives it (kept forever, hidden from active views), stamps `completed_at`. Never delete finished work; complete it. |
 | `done [--limit N]` | The done archive — everything completed. |
-| `add-skill --name slug --title T [--when triggers] [--body steps] [--with-file]` | **Learn a skill at runtime** — stores a `skill` node (triggers + full procedure in the DB, synced everywhere). **Node-first**: a local `SKILL.md` is written only with `--with-file`. |
+| `add-skill --name slug --title T [--when triggers] [--body steps] [--with-file] [--requires S] [--waits-for S] [--enriched-by S] [--reads T] [--writes T]` | **Learn a skill at runtime** — stores a `skill` node (triggers + full procedure in the DB, synced everywhere), stamped `kind: learned`. **Node-first**: a local `SKILL.md` is written only with `--with-file`. The five declaration flags are a user skill's contract (§5a): comma-separated skill names for the first three, node types for `--reads`/`--writes`. They are what puts it in the user tree with edges rather than as a leaf. |
+| `sync-skill-tree [--realm R] [--no-node-types]` | Project the skill contracts into the graph as **two trees** (§5a): built-in skills under `hub_skills_builtin`, user skills under `hub_skills_user`. Built-in skills declare in their `SKILL.md` `## Depends on` block, user skills in props (`add-skill --requires/--reads/--writes`). Idempotent, and a **true sync**: generated edges that stopped being declared are pruned. Hand-made edges carry no marker and are never touched. |
 | `ingest-skills [--dir D]... [--realm R]` | Pull existing markdown skills (plugin `skills/` + `learned_skills/`) into the DB as `skill` nodes (idempotent; re-run to refresh). |
 | `match-skills "situation" [--limit N]` | Find skills matching the situation — ranked by **relevance first**, with reinforcement (usage) as a bounded booster. Read the procedure from the node body (`get-node`). |
 | `use-skill --id ID` | **Reinforce** a skill after it fires (usage_count↑, confidence↑, last_used stamped). |
@@ -740,7 +741,8 @@ cost.
 **Node types:** `person`, `task`, `subtask`, `requirement`, `decision`,
 `note`, `project`, `reminder`, `writing-sample`, `association`, `meeting`,
 `jira-issue`, `resource`, `skill` (learned skill), `team`, `channel`,
-`area` (domain hub), `quote`, `parked` (context moved out of the window, §2j),
+`area` (domain hub), `node-type` (one per node type, the skill tree's read/write
+target, §5a), `quote`, `parked` (context moved out of the window, §2j),
 `rule` (a convention, §2i), `spec` (a genome
 blueprint, §2i), `process`, and the stateful trackables `pr`, `email`, `message`.
 Traceability (§2k): `conversation`, `agent`, `idea`, `transition` (one immutable
@@ -759,7 +761,9 @@ resolved, merged, shipped, deployed, declined.
 **Edge relations:** `relates-to`, `blocks`, `blocked-by`, `part-of`,
 `has-subtask`, `assigned-to`, `about`, `depends-on`, `causes`, `caused-by`,
 `mentions`, `authored-by`, `example-of`, `follows-up`, and for learned skills:
-`applies-to`, `learned-from`, `reinforces`, `triggered-by`. Traceability (§2k)
+`applies-to`, `learned-from`, `reinforces`, `triggered-by`; and for the skill
+tree (§5a): `requires`, `waits-for`, `enriched-by`, `reads`, `writes`.
+Traceability (§2k)
 reuses `part-of` for the agent tree and message→agent, `about` for a transition
 to its idea, `blocked-by` for an idea to the gauge holding it back, `caused-by`
 for the turn that caused a transition, and adds `supersedes`.
@@ -818,9 +822,12 @@ name/flag/behavior and fix **every** mention (don't leave a stale example). If a
 default changed, update the example that shows it. Verify commands/flags shown in
 docs actually exist (`graph.py <cmd> --help`). Then commit code + docs together.
 
-**Enforced by a pre-commit hook** (`.githooks/pre-commit`): a commit that stages
-behavior (`scripts/`, `hooks/`, `viz/`, or `.claude-plugin/*.json`) without also
-staging a docs change (any `*.md`) is **blocked**. Enable it once per clone:
+**Enforced by a pre-commit hook** (`.githooks/pre-commit`), in two stages. First,
+a commit that stages behavior (`scripts/`, `hooks/`, `viz/`, or
+`.claude-plugin/*.json`) without also staging a docs change (any `*.md`) is
+**blocked**. Second, `scripts/check-contracts.sh` runs, so a skill that lost its
+contract shape, its graph surface, or its place in the dependency tree blocks the
+commit too (§5, §5a). Enable the hook once per clone:
 
 ```
 git config core.hooksPath .githooks
@@ -828,3 +835,158 @@ git config core.hooksPath .githooks
 
 A genuinely doc-neutral change can bypass with `git commit --no-verify` — use it
 sparingly, and only when you're sure no doc describes what changed.
+
+---
+
+## 5. Skill contracts: declare the outcome, not the steps (non-negotiable)
+
+A skill is a **contract**, not a script. It declares WHAT must be true when it
+finishes and WHICH constraints it may not break. It never declares the keystrokes
+to get there. The model already knows how to run a command. What it cannot invent
+is what "done" means here, and what it is forbidden to do on the way.
+
+The failure this prevents: a skill written as a step list ages into a lie. The
+engine grows a flag, the steps still name the old one, and the skill quietly does
+the wrong thing while reading as if it were followed. A contract ages differently,
+because the deliverable stays true when the command changes underneath it.
+
+### 5.1 The shape (hard)
+
+Every `skills/*/SKILL.md` carries these eight sections, in this order:
+
+| Section | What goes in it |
+|---|---|
+| `## When to use` | The trigger, in the person's words. One short paragraph. |
+| `## Given` | What the skill receives: the request, the graph state, config. Say what each input is FOR. Context it cannot infer, such as where things live or which command runs them, belongs here, named as context, never as procedure. |
+| `## Rules honored` | The `match-rules` call this skill makes before acting, plus the non-negotiable rules it is accountable for, by id. See §5.2. |
+| `## Depends on` | `Requires` / `Reads` / `Writes`, mirrored in `docs/skill-dependencies.md` (§5a). |
+| `## Deliverables` | Named clauses. Each states what must be TRUE or EXIST when the skill finishes. No steps. |
+| `## Judged against` | The conditions someone who never watched the run can check from the graph and the reply alone. |
+| `## Guardrails — must not` | What the skill refuses to do, each carrying the failure it prevents. |
+| `## Reply (focus contract)` | The shape of the one-action reply §1 demands. |
+
+A deliverable clause is a **public extension point**: a learned rule or a future
+skill can aim at it by name. Choose names worth aiming at, and treat a rename as
+a breaking change.
+
+Compare:
+
+```
+✗  3. Run add-node --type task, then add-edge it part-of the area, then print the id.
+✓  **The task exists and is filed.** A task node exists with a due date and an
+   owning area, and no orphan is created.
+```
+
+### 5.2 Rules are honored, not remembered
+
+The genome (§2i) is the source of truth for how the brain behaves. A skill that
+hardcodes a rule forks it. Every skill therefore **asks** rather than restates:
+
+```
+python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" match-rules "<what you are about to do>"
+```
+
+`## Rules honored` names that call, lists the **shipped** rules the skill is
+accountable for by id (`rule_s1_...`, which come from this file), and names the
+**rule classes** where the person's own genome will add more. Restating a rule's
+*content* inside a skill is a defect: the rule moves, the copy does not.
+
+**Why classes and not ids.** This plugin ships to people whose rules it has never
+seen. A skill that names `rule_user_<something>` is naming one person's brain, and
+that is exactly the company-specific material the plugin keeps outside itself
+(INSTALL.md, `bundle.py --include`). So a skill names the *situation*, and
+`match-rules` returns whatever that brain actually holds for it. Four classes
+cover the surface:
+
+| Class | The situation | The `match-rules` phrase |
+|---|---|---|
+| **outward-text** | Text that leaves under the person's name: Slack, email, Jira, a PR body, a commit, an event title. Voice, register, punctuation, emoji, and which language. | `"draft a message to <recipient>"` |
+| **mailbox-state** | Changing the read, label, archive or folder state of someone's inbox or queue. | `"change the state of an email"` |
+| **durable-storage** | Where a rule or a durable fact is allowed to live. | `"store a durable fact"` |
+| **cost** | Which path to take when a token-free one exists. | `"read without spending a model call"` |
+
+A skill declares the classes it touches. The brain supplies the rules.
+
+Two of those, emoji and dash-as-punctuation in **this corpus's own prose**, are
+also checked mechanically by `scripts/check-contracts.sh`. That is a house style
+for the plugin's own writing, not a claim about the reader's: a corpus that
+instructs a model how to write has no standing to read like unedited model output.
+Turn it off with `SECOND_BRAIN_SKIP_STYLE=1`.
+
+### 5.3 The four-case test
+
+Before keeping any sentence in a skill, run it through:
+
+1. **A real dependency.** Keep it, in `Depends on`, not as prose.
+2. **Irreversible or outward-facing**, such as a send, a delete, or a write into
+   someone else's system. Keep it, as a guardrail or a gate.
+3. **Knowledge it cannot infer**, such as where the DB lives or which endpoint to
+   call. Keep it, in `Given`, named as context.
+4. **Telling it HOW.** Delete it, and replace it with a deliverable clause plus
+   whatever guardrail the procedure was silently carrying.
+
+Case 4 is the one that loses rules. Every constraint buried in a deleted
+procedure must reappear as a guardrail **before** the procedure goes. Losing a
+rule in translation is the only unacceptable outcome of adopting this shape.
+
+**Enforced by `scripts/check-contracts.sh`**, run from the pre-commit hook.
+Bypass a deliberate exception with `SECOND_BRAIN_SKIP_CONTRACTS=1`.
+
+---
+
+## 5a. The skill dependency tree
+
+`docs/skill-dependencies.md` and the `## Depends on` blocks are **two views of one
+graph**. Both must agree, and the checker fails the build when they do not.
+
+- **Requires:** the skill's output is WRONG without it. `none` is written
+  explicitly, because silence is never a declaration.
+- **Optional (ordered):** when that skill is also running, starting first makes
+  this one's output wrong, so wait for it.
+- **Optional (enriching):** consume it if it has landed, never wait.
+- **Reads:** what this skill consults, such as `graph.py` commands, node types, a
+  calendar, an inbox. This is its read surface.
+- **Writes:** what it leaves in the graph, as node types and edges. A read-only
+  skill writes `none`, explicitly.
+
+`Reads` and `Writes` are what make the tree honest for a brain. Second-brain
+skills hand off through **the graph**, not through files, so two skills that touch
+the same node type are coupled whether or not either one mentions the other. The
+tree is where that coupling becomes visible.
+
+### The tree also lives in the graph
+
+A tree that only exists in a document is a tree the brain cannot query. So
+`graph.py sync-skill-tree` projects the same declarations into nodes and edges,
+as **two trees**:
+
+| Tree | Hub | Declares in | Who is in it |
+|---|---|---|---|
+| Built-in | `hub_skills_builtin` | the `## Depends on` block of its `SKILL.md` | the skills this plugin ships (`kind: plugin`) |
+| User | `hub_skills_user` | props, set by `add-skill --requires/--waits-for/--enriched-by/--reads/--writes` | skills learned in this brain at runtime (`kind: learned`) |
+
+Two trees rather than one, because they answer different questions. The built-in
+tree is a property of the plugin and is identical in every install, so a change to
+it is a change to the product. The user tree is a property of one person's brain
+and is different on every machine. Merging them would make neither answerable:
+"what does this plugin do" and "what have I taught it" are not the same question.
+The trees are not sealed off from each other, though. A learned skill may
+`require` a built-in one, and that edge is exactly where a person's brain grafts
+onto the shipped corpus.
+
+Each skill hangs `part-of` its hub. `requires`, `waits-for` and `enriched-by`
+connect skills to each other. `reads` and `writes` point at a `node-type` node,
+one per type, which is what makes the coupling visible: open `nodetype_task` in
+the map and every skill that touches a task is one hop away, whether or not any of
+them mention each other.
+
+**Sync owns what it generated, and nothing else.** Every edge it writes carries
+`props.src = "skill-tree"`. On each run it recomputes the declared set, adds what
+is missing, and **prunes the marked edges that are no longer declared**, so the
+graph cannot keep asserting a dependency the corpus dropped. An edge you made by
+hand carries no marker and is never touched. Run it after `ingest-skills`, and
+after any change to a `## Depends on` block.
+
+A token named in `Reads`/`Writes` that is not a known node type (a command, an
+external system) is kept on the skill as `reads_other` / `writes_other` rather
+than being turned into a node, so the graph stays types-only and nothing is lost.

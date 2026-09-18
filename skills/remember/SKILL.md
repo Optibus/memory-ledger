@@ -5,45 +5,94 @@ description: Capture information into the second-brain memory graph — people, 
 
 # remember
 
-Turn what the person just said into durable, linked memory.
+Turn what the person just said into durable, linked memory. This is the
+externalize-memory core, so when in doubt, remember it.
 
-Load only the conventions that apply — not the whole file:
-`python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" match-rules "store new information as linked nodes in the right area"`
-(no model call). If it returns nothing, run `ingest-conventions` once first.
-CONVENTIONS §2i explains the genome.
+## When to use
 
-Then:
+Whenever the person tells you something worth keeping, and whenever another skill
+produces a fact worth persisting.
 
-## Steps
+## Given
 
-1. **Extract the entities.** Pull out the distinct things mentioned: who
-   (person), what (task/requirement/decision/note), which effort (project),
-   and any preference or association. One node per real thing.
-2. **Dedupe.** For each entity, `search "<title words>"` (and `list --type` if
-   useful). If a close match exists, `update-node` / add to its body instead of
-   creating a duplicate.
-3. **Create nodes** with the right `--type` and a short, searchable `--title`.
-   Put detail in `--body`. Put structured attributes in `--props` (slack, tz,
-   url, jira_key, estimate_min, energy...). Set `--status`/`--due` on tasks.
-4. **File it under its domain area** (CONVENTIONS §2e). Nothing durable floats
-   loose: pass `--area` on creation so it lands in its domain in one call —
-   `--area quote` for a quote, `--area health` for a symptom or energy note,
-   `--area process` for one of Gabriel's ways of working. Run `areas` if you are
-   unsure what exists; if the domain has no area yet and this is the second item
-   of its kind, `add-area` first. A bad area name errors instead of creating an
-   orphan, so it is safe to try.
-5. **Link them.** Add edges that capture the real relationship (`assigned-to`,
-   `part-of`, `about`, `depends-on`, `relates-to`, `mentions`...). The graph's
-   value is the links — be generous but accurate. Cross-domain links are the
-   valuable ones: a quote linked to the decision it justifies, a health episode
-   linked to the day it cost.
-6. **Confirm in one line.** Tell the person what you saved and how it's linked,
-   e.g. `Saved "Ship weekly report" (due Thu 9am), linked to project Weekly
-   Reports and to you.` Do not dump the JSON.
+- **What they said, in their words.** Memory is stored in the language it arrived
+  in, never translated.
+- **The existing graph**, to find the node this belongs on instead of creating a
+  near-duplicate beside it.
+- **The domain areas** (`areas`), which is where a durable thing gets filed. A bad
+  area name errors instead of creating an orphan, so trying one is safe.
 
-## Notes
-- Preferences about how they like to work → a `person` node body or an
-  `association`/`note` linked `about` them. These shape future replies.
-- If they state a hard fact about themselves worth persisting across sessions,
-  also consider whether it belongs in your own long-term memory.
-- If nothing is worth keeping, say so briefly and don't create noise.
+## Rules honored
+
+Ask the genome for the rules that apply before storing (§5.2):
+
+```
+python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" match-rules "store new information as linked nodes in the right area"
+```
+
+Accountable for: `rule_s0_always-on-capture-the-offload-rule-non-n` (non-negotiable),
+`rule_s2e_areas-one-hub-per-domain`,
+.
+
+Rule classes this skill touches, resolved from the person's own genome:
+
+- **durable-storage** (§5.2), via `match-rules "store a durable fact"`.
+
+## Depends on
+
+See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTIONS §5a).
+
+- **Requires:** none.
+- **Optional (enriching):** `add-task` when what was said is actually work,
+  `learn-skill` when it is actually a repeatable procedure.
+- **Reads:** any node type, to dedupe before creating, plus `area` to file it,
+  through `search`, `list` and `areas`.
+- **Writes:** any node type, plus the edges `assigned-to`, `part-of`, `about`,
+  `depends-on`, `relates-to`, `mentions`.
+
+## Deliverables
+
+- **One node per real thing.** The distinct entities were separated: who, what,
+  which effort, and any preference or association.
+- **Nothing was duplicated.** Each entity was searched first, and a close match was
+  updated or extended instead of forked.
+- **Titles are searchable, detail is in the body, attributes are in props.** Short
+  title, detail in `--body`, structured values such as `slack`, `tz`, `url`,
+  `jira_key`, `estimate_min`, `energy` in `--props`.
+- **Nothing durable floats loose.** Every durable node was filed under its domain
+  area with `--area` on creation. If the domain has no area yet and this is the
+  second item of its kind, the area was created first.
+- **The links are the value.** Edges capture the real relationship, generously but
+  accurately. Cross-domain links are the valuable ones: a quote linked to the
+  decision it justifies, a health episode linked to the day it cost.
+- **The turn was not re-stored.** The capture hooks already saved the prompt, an
+  answer summary and obvious to-dos, for free. Only the semantic nodes the
+  heuristics cannot infer are added on top.
+
+## Judged against
+
+- **`search` on the person's own words finds it.** Memory that does not come back
+  on recall was not stored, it was discarded slowly.
+- **The node has at least one edge.** An unlinked node is a note in a drawer.
+- **It appears under an area.** An orphan means the filing clause was skipped.
+- **Its language matches the language it was said in.**
+
+## Guardrails — must not
+
+- **Must not create a near-duplicate of an existing node.** Two nodes for one
+  thing split its history and neither half stays true.
+- **Must not translate the person's words when saving.** Search is character
+  based, so the original language stays findable.
+- **Must not re-store what the hooks already captured.** That spends tokens on
+  what was free.
+- **Must not create noise.** If nothing is worth keeping, say so briefly.
+- **Must not write a rule or durable fact into a local memory file.** Rules and
+  durable facts live in the graph, which is the same memory from every machine and
+  every working directory.
+
+## Reply (focus contract)
+
+One line: what was saved and how it is linked. Never the JSON.
+
+> Saved **"Ship weekly report"**, due Thu 9am, linked to project Weekly Reports
+> and to you.

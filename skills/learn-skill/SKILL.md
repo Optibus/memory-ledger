@@ -5,77 +5,101 @@ description: The neuroplasticity skill — teach the brain a new, reusable abili
 
 # learn-skill
 
-This is how the brain grows. A learned skill is a `skill` **node in the graph**
-— its triggers and its full procedure live in the DB, so the brain can recognise
-when to use it again in any project, on any machine, from the phone. **The DB is the source of truth — no
-markdown file is written** (skills used to be lone `.md` files, which isolated
-them to one machine; they're nodes now).
+This is how the brain grows. A learned skill is a `skill` **node in the graph**,
+so its triggers and its full procedure live in the DB and fire in any project, on
+any machine, from the phone.
 
-Load only the conventions that apply to what you are about to do — not the
-whole file:
-`python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" match-rules "<task in a few words>"`
-(no model call; ~8% of the full text). If it returns no rules the base layer is
-not loaded yet — run `ingest-conventions` once, then re-query. See CONVENTIONS
-§2i for the genome.
+## When to use
 
-## A. LEARN a new skill
+Three moments, and the middle one is the one that gets skipped:
 
-Use when a procedure will recur (the person taught it, or you just did it and it
-worked).
+- **Learn**, when the person teaches a procedure or you just did one that worked.
+- **Recall**, at the start of handling any request, before improvising.
+- **Reinforce**, right after a learned skill actually helped.
 
-1. **Name it** — a short slug (`triage-sentry`, `end-of-day-review`) and a clear
-   title.
-2. **Capture the triggers** — the situations it fits, in the person's own words
-   ("closing my day", "a Sentry alert comes in"). Fuzzy is fine; matching is
-   associative.
-3. **Write the procedure** — concrete, ordered steps someone (or you) can follow
-   cold.
-4. **Create it:**
-   ```
-   python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" add-skill \
-     --name <slug> --title "<title>" \
-     --when "<trigger situations>" \
-     --body "<numbered steps>"
-   ```
-   This stores the skill as a **node in the brain** (DB-first, synced
-   everywhere). Add `--with-file` only if you also want a throwaway local
-   `SKILL.md` export — you rarely do.
-5. **Connect it** into the graph so learning transfers: `add-edge` it
-   `learned-from` the task/note that taught it, `applies-to` the relevant
-   project/task type, `relates-to` sibling skills.
+## Given
 
-## B. RECALL before acting
+- **The procedure**, either as the person taught it or as you just performed it.
+- **The situations it fits, in the person's own words.** Fuzzy phrasing is correct
+  here, because matching is associative and fires on what they would actually type.
+- **The existing skill nodes**, so a near-duplicate updates rather than forks.
 
-At the **start** of handling a request, check whether the brain already knows how:
+## Rules honored
+
+Ask the genome for the rules that apply before learning or recalling (§5.2):
+
 ```
-python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" match-skills "<the situation>"
+python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" match-rules "learn a repeatable procedure as a skill and recall it later"
 ```
-Matching ranks by **relevance first**, with reinforcement (usage) as a bounded
-booster. If a skill matches, **read its procedure from the node**
-(`get-node --id <skill-id>` — the steps are in the node body) and follow it
-instead of improvising. This is the whole point — reuse, don't rebuild.
 
-> **Bring existing markdown skills into the brain:** run
-> `graph.py ingest-skills` once — it scans the plugin `skills/` + any
-> `learned_skills/` and upserts each as a node (idempotent; re-run to refresh).
+Accountable for: `rule_s2b_learned-skills-neuroplasticity`.
 
-## C. REINFORCE after it fires
+Rule classes this skill touches, resolved from the person's own genome:
 
-When a learned skill was actually used and helped:
-```
-python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" use-skill --id <skill-id>
-```
-Strengthens the pathway (usage↑, confidence↑) so proven skills surface first
-next time. If a skill misfired or is stale, tell the person and consider editing
-its triggers (`add-skill` again with the same `--name` updates it) or lowering
-its relevance.
+- **durable-storage** (§5.2), via `match-rules "store a durable fact"`.
+
+## Depends on
+
+See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTIONS §5a).
+
+- **Requires:** none.
+- **Reads:** `skill`, through `match-skills` for recall and `get-node` for the
+  procedure body.
+- **Writes:** `skill` nodes via `add-skill`, stamped `kind: learned` with their
+  §5a declarations in props, usage via `use-skill`, and the edges `learned-from`,
+  `applies-to`, `relates-to`.
+
+## Deliverables
+
+- **The skill is a node, not a file.** `add-skill` stored it in the DB, which is
+  the source of truth and syncs everywhere. A local `SKILL.md` export happens only
+  with `--with-file`, and is a throwaway.
+- **Its triggers are in the person's words.** The `--when` field carries the
+  situations they would actually describe, including phrasings the procedure body
+  never uses, because that field is what `match-skills` fires on.
+- **The procedure is followable cold.** Concrete and ordered enough that someone
+  who was not there can run it.
+- **It is wired into the graph.** Linked `learned-from` whatever taught it,
+  `applies-to` the project or task type it serves, `relates-to` sibling skills, so
+  the learning transfers instead of sitting in one situation.
+- **It declares its contract, so it joins the user tree.** `--requires`,
+  `--waits-for`, `--enriched-by`, `--reads` and `--writes` say which skills it
+  depends on and which node types it touches, in the same vocabulary a built-in
+  skill uses (§5a). `sync-skill-tree` then hangs it under `hub_skills_user` with
+  real edges instead of as a leaf, and a user skill may `require` a built-in one.
+  A skill that declares nothing still works, it is just invisible to anything
+  reasoning about what touches what.
+- **Recall happened before improvising.** At the start of a request,
+  `match-skills` ran, and a match was read from its node body and followed.
+- **A skill that fired was reinforced.** `use-skill --id` ran, so proven skills
+  surface first among equally relevant matches.
+
+## Judged against
+
+- **`match-skills "<the situation in the person's words>"` returns it.** A skill
+  that does not fire on its own trigger phrasing does not exist in practice.
+- **`sync-skill-tree` places it under `hub_skills_user`** with the edges it
+  declared, and re-running the sync changes nothing.
+- **Re-running `add-skill` with the same `--name` updated one node**, rather than
+  creating a second.
+- **Its edges point somewhere.** An unlinked skill only fires on exact recall,
+  which is the failure mode this whole layer exists to avoid.
+
+## Guardrails — must not
+
+- **Must not write the procedure only to a markdown file.** That isolates it to
+  one machine, which is the design this replaced.
+- **Must not write a megaskill.** Small, single-purpose skills compose. A large
+  one fires on everything and helps with nothing.
+- **Must not leave a misfiring skill in place.** Say so, then fix its triggers or
+  lower its relevance, because a skill that fires wrongly costs more than none.
 
 ## Reply (focus contract)
-One line: what was learned and when it'll fire. e.g.
-`Learned **end-of-day-review** — I'll reach for it whenever you're wrapping up
-the day. It'll get sharper each time we use it.`
 
-## Notes
-- Keep skills small and single-purpose; compose them rather than writing megaskills.
-- Learned skills are shared across every project (they live in the global brain),
-  so write triggers/steps to be project-agnostic where you can.
+One line: what was learned, and when it will fire.
+
+> Learned **end-of-day-review**. I will reach for it whenever you are wrapping up
+> the day, and it gets sharper each time we use it.
+
+To bring existing markdown skills in once: `graph.py ingest-skills` scans the
+plugin `skills/` and any `learned_skills/` and upserts each as a node.

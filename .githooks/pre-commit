@@ -8,6 +8,7 @@ a SKILL.md / commands). Bypass a false positive with `git commit --no-verify`.
 Enable once per clone:  git config core.hooksPath .githooks
 """
 
+import os
 import subprocess
 import sys
 
@@ -52,5 +53,19 @@ if behavior and not docs:
     print("\nIf this change genuinely needs no doc update, bypass with:", file=sys.stderr)
     print("  git commit --no-verify\n", file=sys.stderr)
     sys.exit(1)
+
+# CONVENTIONS §5, §5a: every skill declares its contract, its graph surface, and the
+# rule classes it honors; the tree agrees; the corpus follows its own house style.
+checker = "scripts/check-contracts.sh"
+if os.path.exists(checker):
+    r = subprocess.run(["bash", checker], text=True, capture_output=True)
+    sys.stdout.write(r.stdout)
+    if r.returncode != 0:
+        sys.stderr.write(r.stderr)
+        print("\n\033[31m\u2717 commit blocked \u2014 CONVENTIONS \u00a75: skill contracts.\033[0m",
+              file=sys.stderr)
+        print("Fix the findings above, or bypass a deliberate exception with:", file=sys.stderr)
+        print("  SECOND_BRAIN_SKIP_CONTRACTS=1 git commit ...\n", file=sys.stderr)
+        sys.exit(1)
 
 sys.exit(0)

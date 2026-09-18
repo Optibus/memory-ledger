@@ -144,12 +144,41 @@ removing/renaming the brain home (`~/.second_brain`); the hooks then no-op.
 | `read-jira` | Read Jira issues/JQL; cache them into the graph. |
 | `web-search` | Search the web; save useful findings as resources. |
 | `delegate` | Hand a task to a person/agent and track the follow-up. |
-| `writing-style` | Learn your voice and write as you, in your language. |
+| `writing-style` | Learn your voice and write as you, in your language, at the register the reader can act on. |
 | `export-memory` | Dump the whole graph to Markdown / JSON. |
+
+**Every skill is a contract, not a script** (CONVENTIONS §5). Each one declares
+what must be TRUE when it finishes, what it reads and writes in the graph, and
+what it refuses to do, in eight fixed sections. It never declares the keystrokes:
+a step list ages into a lie the moment the engine grows a flag, while a
+deliverable stays true when the command changes underneath it. Two things fall
+out of that shape:
+
+- **Rules are asked for, never restated.** A skill names the `match-rules` call it
+  makes and the *rule classes* it touches (`outward-text`, `mailbox-state`,
+  `durable-storage`, `cost`). Your rules stay in your brain, so this plugin ships
+  to brains it has never seen without carrying anyone's house rules inside it.
+- **The graph is the hand-off.** Skills do not pass artifacts to each other, they
+  read and write node types. `docs/skill-dependencies.md` is where that coupling
+  is visible, and it has to agree with every skill's declaration.
+- **The tree is in the brain too.** `graph.py sync-skill-tree` projects those
+  declarations into nodes and edges as **two trees**: `hub_skills_builtin` for
+  what the plugin ships, `hub_skills_user` for what you taught it. Each skill's
+  `reads`/`writes` point at a `node-type` node, so opening `nodetype_task` in the
+  map shows every skill that touches a task, one hop away. A learned skill may
+  `require` a built-in one, which is where your brain grafts onto the corpus.
+  Sync prunes what it generated and stopped being declared, and never touches an
+  edge you made by hand.
+
+`scripts/check-contracts.sh` enforces all of it from the pre-commit hook, down to
+linting the corpus's own prose: a set of skills that tells a model how to write
+should not itself read like unedited model output.
 
 Front door in Claude Code: **`/ledger <anything>`** routes to all of the above.
 **`/plan-today`** picks up only *your* actionable tasks (token-free) and blocks
-them into your calendar's free windows, ending with one clear first action.
+them into your calendar's free windows — batching by context and protecting one
+deep block, because the cheapest day is the one with the fewest re-entries, not
+the fullest one. Ends with one clear first action.
 **`/neo4j-up`** stands up the optional local graph database (Docker, one command,
 data under `~/.second_brain/neo4j`) and points the brain at it.
 
@@ -175,6 +204,7 @@ See `CONVENTIONS.md` §2.
 python3 scripts/graph.py complete --id <id> --note "shipped"   # archive, don't delete
 python3 scripts/graph.py add-skill --name triage-x --title "..." --when "..." --body "..."  # node-first (--with-file for a local .md)
 python3 scripts/graph.py ingest-skills                         # pull markdown skills into the DB as nodes
+python3 scripts/graph.py sync-skill-tree                       # project the contracts into the graph: built-in + user trees
 python3 scripts/graph.py match-skills "a situation"            # recall: relevance-ranked, reinforcement-boosted
 python3 scripts/graph.py use-skill --id skill_triage-x         # reinforce
 ```

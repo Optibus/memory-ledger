@@ -5,91 +5,114 @@ description: Ingest a piece of context into the memory graph — a Google Meet t
 
 # ingest-context
 
-Turn a raw blob of context (a call, a thread, an email, or pasted text) into
+Turn a raw blob of context, a call, a thread, an email or pasted text, into
 connected memory the rest of second-brain can use.
 
-Load only the conventions that apply — not the whole file:
-`python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" match-rules "ingest a meeting transcript, extract decisions and action items"`
-(no model call). If it returns nothing, run `ingest-conventions` once first.
-CONVENTIONS §2i explains the genome.
+## When to use
 
-## 1. Identify the source and fetch the content
+The person shares or points at any of it. Also automatically when an email
+carrying a meeting transcription or notes arrives, such as Gemini "Notes by
+Gemini" or "Anotações do Gemini".
 
-- **Google Meet** — transcripts/notes usually arrive as a Google Doc ("Notes by
-  Gemini", or "Anotações do Gemini") linked on the calendar event or emailed.
-  Read it with the Google Drive tools (`read_file_content` on the doc id) or via
-  the email body.
-- **Email** — fetch with the Gmail tools (`search_threads` / `get_thread`).
-  **Meeting-transcription emails** are the trigger for auto-ingest: sender like
-  `gemini-notes@google.com`, subject starting `Notes:` / "Notes by Gemini", or a
-  body that is clearly a meeting transcript/summary. Treat these as a meeting.
-- **Jira notification emails** — sender `jira@optibus.atlassian.net`, subjects
-  like `[JIRA] (OS-xxxx) ...`, `... mentioned you on OS-xxxx`, or update digests.
-  Ingest the **transitions and changes** they carry: status/workflow transitions
-  (e.g. In Progress → Code Review → Deployed), field changes (assignee, story
-  points, priority, sprint, labels, resolution, attachments), new comments, and
-  @mentions. Apply them to the graph: **update the matching `jira-issue` node**
-  (`update-node` its `status`/props), add a `note` for a substantive comment
-  linked `about` the issue, create a `task` if a mention is a direct ask to
-  Gabriel, and link the actor `person`. If you need the authoritative current
-  state (email can lag), confirm via the Jira MCP `getJiraIssue`. Don't create
-  duplicate issue nodes — match on the `OS-xxxx` key.
-- **Slack** — read with `slack_read_thread` / `slack_read_channel` /
+## Given
+
+The source, and where its content actually lives:
+
+- **Google Meet.** Transcripts and notes arrive as a Google Doc linked on the
+  calendar event or emailed. Read it with the Drive tools (`read_file_content` on
+  the doc id) or from the email body.
+- **Email.** Gmail tools (`search_threads`, `get_thread`). A sender like
+  `gemini-notes@google.com`, a subject starting `Notes:`, or a body that is
+  plainly a transcript, means treat it as a meeting.
+- **Jira notification email.** Sender `jira@optibus.atlassian.net`, subjects like
+  `[JIRA] (OS-xxxx) ...` or a mention. What matters in it is the transitions and
+  field changes it carries: status moves, assignee, story points, priority,
+  sprint, labels, resolution, attachments, new comments, mentions. Email lags, so
+  confirm authoritative state with `getJiraIssue` when it matters.
+- **Slack.** `slack_read_thread`, `slack_read_channel`,
   `slack_search_public_and_private`.
-- **Plain text** — the person pastes it directly; use it as-is. No fetch needed.
+- **Plain text.** Pasted directly, used as is.
 
-## 2. Classify what it is
-Meeting/call · discussion · decision · request/ask · status update · reference.
-This decides which node types you create.
+## Rules honored
 
-## 3. Extract the entities
-Pull out the durable things (ignore chit-chat and noise):
-- **People** — attendees + anyone mentioned. Map to existing `person` nodes.
-- **Decisions** — anything settled ("we'll do X", "agreed to Y").
-- **Action items** — who owns what, by when.
-- **Facts / context** — durable notes worth keeping.
-- **References** — tickets (OS-xxxx), PRs, projects, channels.
+Ask the genome for the rules that apply before ingesting (§5.2):
 
-## 4. Dedupe first
-For each entity, `search` the graph before creating. If it exists (a person, a
-project, a ticket), **update/link it** instead of making a duplicate.
+```
+python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" match-rules "ingest a meeting transcript, extract decisions and action items"
+```
 
-## 5. Write nodes + edges
-- **Meeting** → `add-node --type meeting --title "<name> — <date>"` with
-  `--props '{"source":"gmeet|email|slack","url":"...","date":"ISO"}'`.
-- **Attendees** → `add-edge` meeting `relates-to` each person (rel prop
-  "attendee"). Create missing people as `person` nodes.
-- **Decisions** → `add-node --type decision ...`, linked `relates-to` the
-  meeting and `about` whom/what it concerns. If it's Gabriel's own way of
-  working, also file it under the process area (`--area process`, i.e.
-  `part-of hub_process` — see CONVENTIONS §2e for the domain areas).
-- **Action items** → `add-node --type task ... --status open` (+ `--due` if a
-  date was given), linked `assigned-to` the owner and `relates-to` the meeting.
-  Items owned by Gabriel land on his plate; consider `add-task` for micro-steps.
-- **Facts** → `add-node --type note ...` linked `about`/`relates-to` the topic.
-- **References** → link `mentions`/`relates-to` the ticket/PR/project/channel
-  nodes.
+Accountable for: `rule_s2e_areas-one-hub-per-domain`.
 
-## 6. Meeting-transcript specifics (the common case)
-Create the meeting node, attach attendees, then extract **decisions** and
-**action items with owners + due dates**. Keep a short summary in the meeting
-body. Surface which action items are Gabriel's.
+Rule classes this skill touches, resolved from the person's own genome:
 
-## 7. Reply (focus contract)
-One or two calm lines: what you ingested (e.g. "Saved the CORD Planning call —
-4 attendees, 2 decisions, 3 action items") and **the single thing that needs
-Gabriel** (usually his own action item). Don't dump the whole extraction.
+- **durable-storage** (§5.2), via `match-rules "store a durable fact"`.
+- **mailbox-state** (§5.2), via `match-rules "change the state of an email"`.
 
-## Email hygiene — ASK before marking read
-Reading an email to ingest it must NOT change its state. **Never mark an email
-as read, archive it, or apply/remove labels without asking Gabriel first** —
-confirm before any such change. Fetching/reading content is fine; mutating the
-mailbox is gated. This applies to Jira, meeting, and any other emails.
+## Depends on
 
-## Notes
-- Always store **provenance** in props (source, url, date) so context is
-  traceable.
-- Everything stays in the local brain (`~/.second_brain`); it's private.
-- This skill is what `read-email`, `slack-inbox`, and `/ledger` hand off to when
-  they detect ingestible context. When a meeting-transcript email arrives,
-  ingest it automatically, then report.
+See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTIONS §5a).
+
+- **Requires:** none.
+- **Optional (enriching):** `add-task` to break Gabriel's own action items into
+  micro-steps.
+- **Reads:** Gmail, Drive, Slack, Jira, and every node type through `search`
+  for deduping.
+- **Writes:** `meeting`, `person`, `decision`, `task`, `note`, `jira-issue`, plus
+  the edges `relates-to`, `about`, `assigned-to`, `mentions`, `part-of`.
+
+## Deliverables
+
+- **The source is classified.** Meeting, discussion, decision, request, status
+  update or reference. That choice determines which node types exist afterward.
+- **Nothing durable was missed.** People, decisions, action items with owners and
+  dates, facts worth keeping, and references to tickets, PRs, projects and
+  channels are all extracted. Chit-chat is not.
+- **Nothing was duplicated.** Every entity was searched before it was created, and
+  an existing person, project or ticket was updated and linked instead of forked.
+  Jira issues match on their `OS-xxxx` key.
+- **The meeting is reconstructable.** A `meeting` node carries a short summary and
+  `props` with source, url and date, with attendees linked, so the context is
+  traceable back to where it came from.
+- **Decisions landed in their domain.** A decision reflecting Gabriel's own way of
+  working is also filed under the process area, not left loose.
+- **Action items are owned.** Each is a `task` with an owner edge, a due date when
+  one was given, and a link back to the meeting.
+- **Jira changes were applied, not just read.** The matching `jira-issue` node was
+  updated, a substantive comment became a `note` linked `about` it, a direct
+  mention that asks Gabriel for something became a `task`, and the actor was
+  linked as a person.
+
+## Judged against
+
+- **Provenance exists on everything.** Source, url and date in props, so any
+  ingested fact traces back to the thing it came from. A fact without provenance
+  cannot be trusted six weeks later.
+- **A second ingest of the same source creates nothing new.** That is the dedupe
+  clause, checked.
+- **Gabriel's own action items are visible as his.** If his items are buried among
+  everyone else's, the reply clause failed.
+- **The mailbox is in the same state as before**, unless he was asked and said yes.
+
+## Guardrails — must not
+
+- **Must not mark read, archive, move or relabel any email without asking.**
+  Gabriel uses unread state as his own queue, so silently clearing it destroys the
+  signal he works from. Reading is fine, mutating is gated.
+- **Must not create a duplicate person, project or ticket node.** Two nodes for
+  one thing split its history and neither half stays true.
+- **Must not store a fact without its source.** Unsourced memory is rumour.
+- **Must not translate what was said when saving it.** Store it in the language it
+  arrived in.
+- **Must not dump the whole extraction into the reply.**
+
+## Reply (focus contract)
+
+One or two calm lines: what was ingested, then the single thing that needs Gabriel.
+
+> Saved the CORD Planning call: 4 attendees, 2 decisions, 3 action items. **One is
+> yours: send Ravid the export sample by Thursday.**
+
+This skill is what `read-email`, `slack-inbox` and `/ledger` hand to when they
+detect ingestible context. A meeting-transcript email is ingested automatically,
+then reported. Everything stays in the local brain at `~/.second_brain`, which is
+private.

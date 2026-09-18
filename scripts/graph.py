@@ -44,9 +44,15 @@ NODE_TYPES = [
     "person", "task", "subtask", "requirement", "decision", "note",
     "project", "reminder", "writing-sample", "association", "meeting",
     "jira-issue", "resource", "skill", "area", "quote", "parked",
+    # §3 also names these; they were missing here, so anything deriving the
+    # vocabulary from the code (the skill tree, the UI facets) could not see them.
+    "team", "channel", "rule", "spec", "process", "pr", "email", "message",
     # traceability (§2k): the agent tree, what was considered, and what was
     # discarded under a condition that may later stop holding.
     "conversation", "agent", "idea", "transition", "gauge", "context-event",
+    # the skill tree (§5a): one node per node TYPE, so two skills touching the
+    # same type are visibly coupled even when neither one names the other.
+    "node-type",
 ]
 
 # Default character budget for read paths that would otherwise return whole
@@ -85,7 +91,21 @@ EDGE_RELS = [
     # `about` a transition to its idea, `blocked-by` an idea to the gauge that
     # held it back, `caused-by` a transition to the turn that caused it.
     "supersedes", "captured-from",
+    # the skill tree (§5a). `requires` is hard; `waits-for` is optional-ordered
+    # (starting before it makes this skill's output wrong); `enriched-by` is
+    # optional-enriching (consume it if it landed, never wait). `reads`/`writes`
+    # point at a `node-type`, which is where the real coupling shows.
+    "requires", "waits-for", "enriched-by", "reads", "writes",
 ]
+
+# Skill-tree edges are machine-generated from the declarations, so sync owns them
+# and prunes the ones that stopped being declared. A hand-made edge never carries
+# this prop and is therefore never touched.
+TREE_EDGE_PROP = {"src": "skill-tree"}
+TREE_HUBS = {
+    "plugin": ("hub_skills_builtin", "Built-in skills — the plugin's contract corpus"),
+    "learned": ("hub_skills_user", "User skills — learned in this brain at runtime"),
+}
 
 # statuses that count as "archived" — kept forever, hidden from active views
 DONE_STATUSES = ("done", "cancelled")
@@ -978,11 +998,14 @@ def cmd_add_skill(args):
     if existing:
         cur = _node_dict(existing)
         props = {**cur["props"], "triggers": when, "path": str(skill_path),
+                 "kind": cur["props"].get("kind") or "learned",
+                 **_skill_contract_props(args),
                  "updated_at": ts}
         con.execute("UPDATE nodes SET title=?, body=?, props=?, updated=? WHERE id=?",
                     (args.title, node_body, json.dumps(props), ts, node_id))
     else:
-        props = {"triggers": when, "path": str(skill_path),
+        props = {"triggers": when, "path": str(skill_path), "kind": "learned",
+                 **_skill_contract_props(args),
                  "usage_count": 0, "confidence": 1.0, "learned_at": ts}
         con.execute(
             "INSERT INTO nodes(id,type,title,body,props,status,due,created,updated)"
@@ -1127,6 +1150,150 @@ def _ingest_skill_file(con, path: Path, kind: str, realm: str):
              "active", "", realm, ts, ts))
         action = "created"
     return node_id, action
+
+
+def _skill_contract_props(args) -> dict:
+    """The §5a declarations a user skill carries in props, since it has no file."""
+    keys = ("requires", "waits_for", "enriched_by", "reads", "writes")
+    return {k: getattr(args, k) for k in keys if getattr(args, k, None)}
+
+
+def _parse_depends_on(text: str) -> dict:
+    """Read a SKILL.md `## Depends on` block into the declarations §5a defines.
+
+    The file is the source of truth for a built-in skill: the same block the
+    contract checker validates is the one the tree is built from, so the document,
+    the skill and the graph cannot drift apart."""
+    m = re.search(r"^## Depends on\s*$(.*?)(?=^## )", text, re.M | re.S)
+    if not m:
+        return {}
+    block = m.group(1)
+    kinds = {"Requires": "requires", "Optional (ordered)": "waits-for",
+             "Optional (enriching)": "enriched-by",
+             "Reads": "reads", "Writes": "writes"}
+    found = {}
+    for line in block.splitlines():
+        lm = re.match(r"\s*-\s*\*\*([^:*]+):\*\*(.*)", line)
+        if not lm:
+            continue
+        label, rest = lm.group(1).strip(), lm.group(2)
+        rel = kinds.get(label)
+        if not rel:
+            continue
+        if re.match(r"\s*none\b", rest, re.I):
+            found.setdefault(rel, [])
+            continue
+        found.setdefault(rel, []).extend(re.findall(r"`([^`]+)`", rest))
+    return found
+
+
+def _skill_declarations(con, row) -> tuple:
+    """(kind, declarations) for one skill node.
+
+    A built-in skill declares in its SKILL.md and the file wins, because the
+    checker gates that file at commit time. A user skill has no file, so it
+    declares in props (`add-skill --requires/--reads/--writes`)."""
+    props = json.loads(row["props"] or "{}")
+    kind = props.get("kind")
+    path = props.get("source_path") or props.get("path") or ""
+    if not kind:
+        kind = "plugin" if "/skills/" in path and path.endswith("SKILL.md") else "learned"
+    decl = {}
+    if kind == "plugin" and path and Path(path).exists():
+        try:
+            decl = _parse_depends_on(Path(path).read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            decl = {}
+    if not decl:
+        decl = {rel: [t.strip() for t in str(props.get(key, "")).split(",") if t.strip()]
+                for rel, key in (("requires", "requires"), ("waits-for", "waits_for"),
+                                 ("enriched-by", "enriched_by"), ("reads", "reads"),
+                                 ("writes", "writes"))}
+    return kind, decl
+
+
+def cmd_sync_skill_tree(args):
+    """Project the skill contracts into the graph as two trees (CONVENTIONS §5a).
+
+    Built-in skills hang off `hub_skills_builtin` and declare in their SKILL.md;
+    user skills hang off `hub_skills_user` and declare in props. Idempotent, and
+    a true sync: edges this command previously wrote that are no longer declared
+    are removed, so the graph cannot keep asserting a dependency the corpus
+    dropped. Hand-made edges carry no marker and are never touched."""
+    con = connect()
+    ts = now()
+    realm = getattr(args, "realm", None) or "shared"
+    want, hubs, types_seen, unresolved = set(), {}, set(), {}
+    trees = {"plugin": [], "learned": []}
+
+    rows = con.execute("SELECT * FROM nodes WHERE type='skill' ORDER BY id").fetchall()
+    if not rows:
+        out({"ok": False, "error": "no skill nodes — run ingest-skills first"}); return
+
+    for kind, (hub_id, hub_title) in TREE_HUBS.items():
+        if not con.execute("SELECT 1 FROM nodes WHERE id=?", (hub_id,)).fetchone():
+            api_create_node(con, AREA_TYPE, hub_title, "", {"domain": hub_id[4:]},
+                            "", "", realm, hub_id)
+        hubs[kind] = hub_id
+
+    known_types = set(NODE_TYPES)
+    for row in rows:
+        sid = row["id"]
+        kind, decl = _skill_declarations(con, row)
+        trees[kind if kind in trees else "learned"].append(sid)
+        want.add((sid, hubs.get(kind, hubs["learned"]), "part-of"))
+
+        for rel in ("requires", "waits-for", "enriched-by"):
+            for token in decl.get(rel, []):
+                dep = token if token.startswith("skill_") else f"skill_{slugify(token)}"
+                if con.execute("SELECT 1 FROM nodes WHERE id=? AND type='skill'",
+                               (dep,)).fetchone() and dep != sid:
+                    want.add((sid, dep, rel))
+                else:
+                    unresolved.setdefault(sid, []).append(f"{rel}:{token}")
+
+        for rel in ("reads", "writes"):
+            others = []
+            for token in decl.get(rel, []):
+                t = token.strip().lstrip("`").rstrip("`")
+                if t in known_types and not args.no_node_types:
+                    tid = f"nodetype_{t}"
+                    if tid not in types_seen:
+                        if not con.execute("SELECT 1 FROM nodes WHERE id=?", (tid,)).fetchone():
+                            api_create_node(
+                                con, "node-type", t,
+                                f"A node type in the memory graph. Its edges show every "
+                                f"skill that reads or writes it (CONVENTIONS §5a).",
+                                {"node_type": t}, "", "", realm, tid)
+                        types_seen.add(tid)
+                    want.add((sid, tid, rel))
+                else:
+                    others.append(t)
+            if others:
+                props = json.loads(row["props"] or "{}")
+                props[f"{rel.replace('-', '_')}_other"] = ", ".join(others)
+                con.execute("UPDATE nodes SET props=?, updated=? WHERE id=?",
+                            (json.dumps(props), ts, sid))
+
+    have = {(r["src"], r["dst"], r["rel"]) for r in con.execute(
+        "SELECT src,dst,rel,props FROM edges").fetchall()
+        if json.loads(r["props"] or "{}").get("src") == "skill-tree"}
+
+    added = [e for e in sorted(want) if e not in have]
+    for src, dst, rel in added:
+        api_link(con, src, dst, rel, dict(TREE_EDGE_PROP))
+    pruned = [e for e in sorted(have) if e not in want]
+    for src, dst, rel in pruned:
+        con.execute("DELETE FROM edges WHERE src=? AND dst=? AND rel=?", (src, dst, rel))
+    con.commit()
+    sync = _after_write(con, del_edges=pruned) if pruned else None
+
+    out({"ok": True,
+         "trees": {"builtin": {"hub": hubs["plugin"], "skills": len(trees["plugin"])},
+                   "user": {"hub": hubs["learned"], "skills": len(trees["learned"])}},
+         "node_types": len(types_seen), "edges": len(want),
+         "added": len(added), "pruned": len(pruned),
+         "unresolved": unresolved or None, "sync": sync})
 
 
 def cmd_ingest_skills(args):
@@ -4031,6 +4198,25 @@ def build_parser():
                    help="also export a local SKILL.md (default: DB-only, the source of truth)")
     a.add_argument("--no-file", action="store_true",
                    help="(deprecated no-op — DB-only is now the default)")
+    a.add_argument("--requires", help="skills this one's output is WRONG without (comma-separated)")
+    a.add_argument("--waits-for", dest="waits_for",
+                   help="skills that must finish first when they are also running (comma-separated)")
+    a.add_argument("--enriched-by", dest="enriched_by",
+                   help="skills to consume if they landed, never wait for (comma-separated)")
+    a.add_argument("--reads", help="node types this skill consults (comma-separated)")
+    a.add_argument("--writes", help="node types this skill leaves in the graph (comma-separated)")
+
+    a = sub.add_parser("sync-skill-tree", description=(
+        "Project the skill contracts into the graph as two trees (CONVENTIONS §5a): "
+        "built-in skills under hub_skills_builtin, user skills under hub_skills_user. "
+        "Built-in skills declare in their SKILL.md '## Depends on' block, user skills "
+        "in props (add-skill --requires/--reads/--writes). Idempotent, and a true sync: "
+        "generated edges that stopped being declared are pruned. Hand-made edges are "
+        "never touched."))
+    a.set_defaults(func=cmd_sync_skill_tree)
+    a.add_argument("--realm", default="shared", help="section for the hubs and node-type nodes")
+    a.add_argument("--no-node-types", action="store_true",
+                   help="skip the node-type nodes; keep reads/writes as props only")
 
     a = sub.add_parser("ingest-skills"); a.set_defaults(func=cmd_ingest_skills)
     a.add_argument("--dir", action="append",

@@ -5,72 +5,101 @@ description: Surface every open loop and drive it toward closed. Use for "what's
 
 # follow-up
 
-The brain is **state-aware**: every trackable thing holds its state until
-something changes it. This skill reads that state, shows what's still open, and
-pushes each loop toward done.
+The brain is state-aware: every trackable thing holds its state until something
+changes it. This skill reads that state, refreshes what reality has moved, and
+pushes each loop toward closed.
 
-Load only the conventions that apply to what you are about to do — not the
-whole file:
-`python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" match-rules "<task in a few words>"`
-(no model call; ~8% of the full text). If it returns no rules the base layer is
-not loaded yet — run `ingest-conventions` once, then re-query. See CONVENTIONS
-§2i for the genome.
+## When to use
 
-## 1. Read the state
+"What is still open", "what do I owe", "am I blocking anyone", "what needs
+closing". Also the full version of what the SessionStart hook surfaces briefly
+each session.
+
+## Given
+
+- **`open-loops [--stale-days N]`**, which returns everything still open, oldest
+  first, with `age_days`, `overdue`, `stale` and `waiting_on`. An open loop is an
+  unfinished `task` or `subtask`, a tracked `pr`, `email`, `message` or
+  `reminder`, or any node whose `props.state` is not one of `done, cancelled,
+  closed, answered, resolved, merged, shipped, deployed, declined`.
+- **The live sources behind those loops**, because state is only true until
+  reality moves: `gh pr view` for review and CI, the mail and Slack threads for
+  replies, Jira for transitions.
+- **The owner of a stalled loop**, from `props.waiting_on` or the `assigned-to`
+  edge, with their `person` node giving the Slack handle and `props.lang`.
+
+## Rules honored
+
+Ask the genome for the rules that apply before nudging (§5.2):
+
 ```
-python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" open-loops [--stale-days N]
+python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" match-rules "surface open loops and follow up with the owner"
 ```
-Returns everything still open (tasks/subtasks not done, tracked PRs/emails/
-messages, anything with a non-closed `props.state`), oldest-first with
-`age_days`, `overdue`, `stale`, and `waiting_on`, plus counts by kind/priority.
 
-## 2. Refresh what may have changed
-State is only true until reality moves — so before nudging, re-check the live
-sources for the loops that depend on others:
-- **PRs** — `gh pr view` for review decision + CI. If merged/approved/green → advance the state.
-- **Emails / Slack messages needing a reply** — did they reply? did you? re-read the thread.
-- **Jira** — status transitions (via `read-jira` / ingest-context).
-Then move the loop with **`set-state`** (this stamps *when* it changed, so age is honest):
-```
-python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" set-state --id <id> --state <open|doing|blocked|waiting|needs-reply|answered|done|merged|closed> [--waiting-on "<who>"]
-```
-Complete finished tasks with `complete` (archives them). Nothing closes itself.
+Accountable for: `rule_s2c_state-awareness-open-loops`,
+`rule_s1_how-to-respond-the-focus-contract-non-ne`.
 
-## 3. Track new open loops
-When something arrives that needs a future action, make it a stateful node so it
-can't be forgotten:
-- a **PR** to move → `add-node --type pr` with `props {state, pr_url, review}`
-- an **email** needing a reply → `add-node --type email` `props {state:"needs-reply", from, url}`
-- a **message** to answer → `add-node --type message` `props {state:"needs-reply", channel}`
-Link them (`about`/`relates-to`/`assigned-to`). `ingest-context`, `read-email`,
-`slack-inbox`, and `read-jira` should create these as they detect them.
+Rule classes this skill touches, resolved from the person's own genome:
 
-## 3b. Stalled hand-offs → check in with the owner
-When a loop has been **in someone else's hands for a while** — a node whose
-`props.waiting_on` points at another person (or a task reassigned `assigned-to`
-someone else) and whose `age_days >= --stale-days` with no answer — **follow up
-with that person**. The goal is supportive, not chasing: understand if they're
-**blocked, need help, or why it hasn't moved yet**.
+- **outward-text** (§5.2), via `match-rules "draft a message to <recipient>"`.
 
-1. Resolve the person (their `person` node → Slack id + `props.lang`).
-2. Draft a **direct, friendly** check-in **in that person's language** (see
-   CONVENTIONS §1 — pt-BR for most of CORD, en for Ravid; if the language is
-   unknown, ask the user and store it on the person node). Keep it short and
-   warm — e.g. *"oi X, tudo bem? só passando pra saber como tá o <coisa> — tá
-   travado em algo ou precisa de uma mão?"*
-3. Confirm before sending (outward action), then send via the `send-slack` skill.
-4. Record it: stamp the loop `set-state --waiting-on "<person> (pinged <date>)"`
-   and, if useful, set a `remind` to check back.
+## Depends on
 
-## 4. Nudge (focus contract)
-Lead with the **single most important loop to close now** (overdue → highest
-priority → oldest). Then a short grouped list — cap it, don't dump all 28.
-Call out anything **you're blocking someone else on** (a `waiting_on` pointing
-back at the person, or a review others need). Offer to take the next action
-(reply, tick, request review) rather than just listing.
+See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTIONS §5a).
 
-## Notes
-- This is also what the **SessionStart hook** surfaces automatically each session
-  (a short version) — this skill is the full, actionable pass.
-- "Close as soon as possible" is the goal: every loop should be trending toward a
-  closed state; a loop that hasn't moved in `--stale-days` is flagged.
+- **Requires:** none.
+- **Optional (enriching):** `send-slack` to reach a stalled owner, `remind` to set
+  a check-back, `complete-task` to close what finished.
+- **Reads:** `task`, `subtask`, `pr`, `email`, `message`, `reminder`, through
+  `open-loops`, plus the live sources behind them: GitHub, Gmail, Slack, Jira.
+- **Writes:** `set-state` on any loop that moved, plus new `pr`, `email` and
+  `message` nodes for loops that were not tracked yet.
+
+## Deliverables
+
+- **State reflects reality, not the last guess.** Before anything is reported,
+  loops that depend on other people were re-checked against their live source, and
+  each one that moved was advanced with `set-state`, which stamps when it changed
+  so age stays honest.
+- **New loops became tracked.** Anything that arrived needing a future action
+  exists as a stateful node: a `pr` with `{state, pr_url, review}`, an `email`
+  with `{state:"needs-reply", from, url}`, a `message` with
+  `{state:"needs-reply", channel}`, each linked to what it concerns.
+- **One loop leads.** The reply opens with the single loop to close now, chosen
+  overdue first, then priority, then age.
+- **What the person is blocking is called out.** A loop whose `waiting_on` points
+  back at them, or a review others need, is named explicitly, because that cost
+  falls on someone else.
+- **Stalled hand-offs get a supportive check-in.** When a loop has sat in someone
+  else's hands past `--stale-days`, a short, warm message goes to that person in
+  their language, asking whether they are blocked or need a hand, not chasing
+  them. After sending, the loop is stamped `--waiting-on "<person> (pinged
+  <date>)"`.
+
+## Judged against
+
+- **Every reported loop's `state_since` is at least as recent as the last live
+  check.** A loop reported without refreshing is a stale claim presented as fact.
+- **The reply names one next action**, not 28 loops.
+- **A check-in that went out is recorded on the loop.** An un-stamped ping will be
+  sent again next week, which is how a supportive nudge becomes nagging.
+
+## Guardrails — must not
+
+- **Must not report a loop as open without re-checking its source.** The whole
+  value here is that the state is true, and a wrong "still waiting" sends the
+  person to chase something already done.
+- **Must not dump the full list.** Cap it, lead with one.
+- **Must not send a check-in without confirmation**, and never in English by
+  default. Read `props.lang` from the person, and when it is unknown, ask and
+  store it.
+- **Must not let a loop close itself.** Nothing resolves silently, every state
+  change is explicit.
+
+## Reply (focus contract)
+
+The single most important loop to close now, then a short grouped remainder, then
+the offer to take the action rather than just list it.
+
+> **Ravid is waiting on your review of PR #7357**, 4 days. 6 other loops: 2
+> overdue tasks, 3 emails, 1 PR. Want me to open the review?
