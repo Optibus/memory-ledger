@@ -141,6 +141,7 @@ Commands:
 | `add-area --title T [--id ID] [--domain KEY] [--body ...] [--realm R]` | Create a domain area. Idempotent on `--id`; default id is `hub_<slug of title>`. |
 | `match-rules "situation" [--limit N] [--budget CHARS] [--full]` | **Which conventions apply to THIS situation** (§2i) — the token-light replacement for reading this whole file (~8% of it). No model call. Always-apply rules are appended, not counted against `--limit`. |
 | `ingest-conventions [--file F] [--realm R]` | Load this file into the brain as `rule` nodes, one per section (§2i). Idempotent and **never overwrites a user-authored or user-edited rule**. |
+| `snapshot-rules [--label L] [--source S]...` | Copy every rule **verbatim** into the `rules-backup` realm before a bulk edit (§5b.3). Stores `rule-snapshot` nodes, never `rule`, so `match-rules` cannot return one; captures body, title and props, because a rule without its `scenario` could not be restored to firing. Idempotent by content: an unchanged rule stores nothing, a changed one stores a new generation, nothing is overwritten. |
 | `add-rule --title T [--body ...] [--scenario CUES] [--section S] [--source user\|learned\|plugin] [--overrides ID] [--non-negotiable] [--id ID] [--realm R]` | Author or override a rule — the mutable half of the genome (§2i). `--overrides` marks the shipped rule `superseded`. **`--scenario` is indexed** — put the words a person would actually type there, including ones the body never uses; that is what `match-rules` fires on. Same for a skill's `triggers`/`description`. |
 | `park [--body TEXT] [--title T] [--about ID] [--area A]` | **Move context OUT of the window** (§2j): stores the blob (stdin or `--body`) and returns a tiny receipt, so the model can drop the content. |
 | `unpark --id ID [--offset N] [--chars N]` | Read parked context back, whole or sliced. |
@@ -775,7 +776,8 @@ cost.
 `note`, `project`, `reminder`, `writing-sample`, `association`, `meeting`,
 `jira-issue`, `resource`, `skill` (learned skill), `team`, `channel`,
 `area` (domain hub), `node-type` (one per node type, the skill tree's read/write
-target, §5a), `quote`, `parked` (context moved out of the window, §2j),
+target, §5a), `rule-snapshot` (a verbatim copy of a rule, §5b.3),
+`quote`, `parked` (context moved out of the window, §2j),
 `rule` (a convention, §2i), `spec` (a genome
 blueprint, §2i), `process`, and the stateful trackables `pr`, `email`, `message`.
 Traceability (§2k): `conversation`, `agent`, `idea`, `transition` (one immutable
@@ -1023,3 +1025,70 @@ after any change to a `## Depends on` block.
 A token named in `Reads`/`Writes` that is not a known node type (a command, an
 external system) is kept on the skill as `reads_other` / `writes_other` rather
 than being turned into a node, so the graph stays types-only and nothing is lost.
+## 5b. Rule contracts: a rule that cannot be checked is advice
+
+The same argument as §5, one level down. A rule written as a paragraph of
+intention gets argued away the first time it is inconvenient, because nobody can
+say whether it was followed. A rule contract makes that decidable.
+
+### 5b.1 The shape
+
+A `rule` node's body carries these sections, in this order. Only `THE RULE` and
+`JUDGED AGAINST` are required, because a rule with no checkable outcome is the
+thing this shape exists to prevent.
+
+| Section | What goes in it |
+|---|---|
+| `THE RULE` | What must or must not happen. The clause itself. |
+| `WHY` | The failure it prevents. A rule whose reason is missing loses every argument with a deadline. |
+| `HOW TO APPLY` | What to do concretely, especially at the moment the rule bites. |
+| `EXCEPTIONS` | Where it does NOT apply. Write `none` explicitly: an unstated exception gets invented under pressure, and a rule with no stated limit gets over-applied until someone drops it entirely. |
+| `JUDGED AGAINST` | How a reader can tell, from the artifact alone, that it was followed. |
+| `RELATED` | `[[wikilinks]]` to the rules this one leans on or bounds. |
+
+`JUDGED AGAINST` is the section that does the work. Compare:
+
+```
+✗  Keep messages short and respectful.
+✓  A reader who sees only the sent message can find the ask in the first
+   sentence, and the message is under ten lines.
+```
+
+The first cannot be checked, so it is never enforced and never violated. The
+second can be checked by anyone, including the person who wrote it, before
+sending.
+
+### 5b.2 GOVERNS is generated, never written
+
+A rule also needs to say *when* it applies. That already exists: `props.scenario`
+is the indexed field `match-rules` fires on, in the words a person would actually
+type. So the situation is **not** written into the body. Readers that show a
+GOVERNS line render it from `scenario`.
+
+Writing it twice would guarantee the two disagree, and the one that matters is
+the indexed one: a rule whose body eloquently describes a situation its
+`scenario` does not match is a rule that never fires. Converting a rule therefore
+means **making its `scenario` complete**, not restating the situation in prose.
+
+### 5b.3 What conversion may not do
+
+The bodies are the person's own writing and carry their judgment, their examples
+and the incident that produced them. Conversion **relocates prose under headings
+and adds the missing clauses**. It does not paraphrase, compress, or improve the
+wording. Losing the reason a rule exists, or the story that makes it stick, costs
+more than the structure gains.
+
+Shipped `rule_s*` rules are **excluded** from conversion: they are regenerated
+from this file by `ingest-conventions`, so a hand-edit to their bodies is
+overwritten on the next run. Their contract is this document.
+
+**Take the backup first.** `graph.py snapshot-rules --label <why>` copies every
+rule verbatim into the `rules-backup` realm before the first edit. It is its own
+realm rather than a folder or a file because the brain already has a word for
+"a section of life that views do not mix together", and a backup that leaves the
+graph stops being diffable against the thing it backs up. The snapshots are
+`rule-snapshot` nodes, never `rule`, so a backup can never start being read as a
+convention. Run it before any bulk edit of the genome, not only this one.
+
+---
+

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import re
@@ -1319,6 +1320,61 @@ def skill_trees(con, with_rules: bool = True) -> list:
         trees.append({"kind": kind, "hub": hub_id, "title": hub_title,
                       "count": len(members), "skills": [branch(r) for r in roots]})
     return trees
+
+
+RULE_SNAPSHOT_TYPE = "rule-snapshot"
+RULE_SNAPSHOT_REALM = "rules-backup"
+
+
+def cmd_snapshot_rules(args):
+    """Copy every rule VERBATIM into its own realm before anything rewrites them.
+
+    Taken before the §5b conversion, and worth taking before any bulk edit of the
+    genome. A snapshot is a `rule-snapshot` node, NOT a `rule`, so `match-rules`
+    can never return one and a backup cannot start behaving like a convention.
+    It lives in the `rules-backup` realm, which keeps it out of every default view
+    while leaving it searchable and diffable.
+
+    Idempotent by content: re-running stores nothing for a rule whose body has not
+    changed since its last snapshot under this label, and stores a new generation
+    for one that has. Nothing is ever overwritten, because the point of a backup
+    that can be overwritten is unclear."""
+    con = connect()
+    label = args.label or "pre-contract"
+    rows = con.execute(
+        "SELECT * FROM nodes WHERE type=? AND status!='superseded' ORDER BY id",
+        (RULE_TYPE,)).fetchall()
+    made, skipped, gens = [], [], []
+    for row in rows:
+        n = _node_dict(row)
+        if args.source and n["props"].get("source") not in args.source:
+            continue
+        digest = hashlib.sha256((n["body"] or "").encode("utf-8")).hexdigest()[:12]
+        base = f"rulesnap_{slugify(label)[:24]}_{n['id']}"
+        prior = con.execute(
+            "SELECT id, props FROM nodes WHERE type=? AND id LIKE ? ORDER BY id",
+            (RULE_SNAPSHOT_TYPE, base + "%")).fetchall()
+        if any(json.loads(r["props"] or "{}").get("digest") == digest for r in prior):
+            skipped.append(n["id"]); continue
+        gen = len(prior) + 1
+        sid = base if gen == 1 else f"{base}__g{gen}"
+        res = api_create_node(
+            con, RULE_SNAPSHOT_TYPE, f"[{label}] {n['title']}", n["body"] or "",
+            {"of": n["id"], "label": label, "digest": digest, "generation": gen,
+             "taken_at": now(),
+             # The whole node is captured, not just the prose: a rule's scenario is
+             # what makes it fire, so a backup without it could not restore behavior.
+             "orig_props": n["props"], "orig_title": n["title"],
+             "orig_realm": n.get("realm", "")},
+            "active", "", RULE_SNAPSHOT_REALM, sid)
+        if res.get("ok"):
+            api_link(con, sid, n["id"], "about")
+            (gens if gen > 1 else made).append(sid)
+    out({"ok": True, "label": label, "realm": RULE_SNAPSHOT_REALM,
+         "rules_seen": len(rows), "snapshotted": len(made),
+         "new_generations": len(gens), "unchanged": len(skipped),
+         "restore_hint": "read one with get-node --id <snapshot id>; its orig_props "
+                         "carries the scenario the rule fires on"})
 
 
 def rule_catalog(con) -> list:
@@ -4355,6 +4411,16 @@ def build_parser():
                    help="skills to consume if they landed, never wait for (comma-separated)")
     a.add_argument("--reads", help="node types this skill consults (comma-separated)")
     a.add_argument("--writes", help="node types this skill leaves in the graph (comma-separated)")
+
+    a = sub.add_parser("snapshot-rules", description=(
+        "Copy every rule VERBATIM into the rules-backup realm before a bulk edit "
+        "(§5b.3). Snapshots are `rule-snapshot` nodes, never `rule`, so match-rules "
+        "cannot return one. Idempotent by content; a changed rule gets a new "
+        "generation and nothing is ever overwritten."))
+    a.set_defaults(func=cmd_snapshot_rules)
+    a.add_argument("--label", help="names this snapshot (default: pre-contract)")
+    a.add_argument("--source", action="append",
+                   help="only rules with this props.source (repeatable); default all")
 
     a = sub.add_parser("sync-skill-tree", description=(
         "Project the skill contracts into the graph as two trees (CONVENTIONS §5a): "
