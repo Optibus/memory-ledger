@@ -428,6 +428,22 @@ say the save will not take effect. The Settings section also manages the store
 sent to the browser) and runs **prune**, which is `maintain`: consolidating, never
 deleting (§2a).
 
+**The Skills section** (`☰` › Skills) draws the two skill trees §5a put in the
+graph, built-in and user, nested by the `requires` edge. Opening a skill shows
+its graph surface (which node types it reads and writes), its `waits-for` and
+`enriched-by` links, and **the rules it answers to**, in three buckets:
+*declared* (the skill names the rule itself), *matched* (`match-rules` returns it
+for the skill's triggers, which is where a person's own rules show up against a
+skill that never named them), and *always on* (non-negotiable, collapsed by
+default so the handful that are specific to this skill stay visible). Clicking a
+rule reads its full body.
+
+It is **read-only**, unlike the Dashboard. A contract is edited in its `SKILL.md`
+or with `add-skill`, both of which are checked; a text box here would be a third
+way to change a contract and the only one nothing validates. The page reads the
+edges `sync-skill-tree` wrote, so a stale tree means the sync has not been run,
+not that the page is wrong.
+
 ## 2h. Memory dynamics — how recall behaves like memory
 
 Three properties, all pure SQL/regex (recall stays model-free):

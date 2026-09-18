@@ -129,6 +129,52 @@
   body:not(.mode-map) #hint,body:not(.mode-map) #err{display:none}
   body:not(.mode-dash) #dash{display:none}
   body:not(.mode-settings) #settings{display:none}
+  body:not(.mode-skills) #skills{display:none}
+
+  /* ---- Skills: the two trees (CONVENTIONS §5a) ----
+     Indentation carries the `requires` edge and nothing else. waits-for and
+     enriched-by are real relationships but they are not parentage, so they sit
+     on the card as chips — nesting them would draw a hierarchy that isn't one. */
+  #skills{max-width:860px;margin:0 auto;padding:64px 16px 60px}
+  #skills h2{margin:0 0 4px;font-size:18px}
+  #skills .lead{color:var(--muted);margin:0 0 18px;font-size:12.5px;line-height:1.5}
+  .tree{margin:0 0 26px}
+  .tree>h3{font-size:14px;margin:0 0 3px;display:flex;align-items:center;gap:8px}
+  .tree>h3 .ct{color:var(--muted);font-weight:400;font-size:12px}
+  .tree>.sub{color:var(--muted);font-size:12px;margin:0 0 12px;line-height:1.45}
+  .sk{border:1px solid var(--border);background:var(--panel);border-radius:10px;
+    margin:0 0 7px}
+  .sk.kid{margin-left:22px;border-left:2px solid var(--accent)}
+  .skhead{display:flex;align-items:center;gap:9px;padding:9px 12px;cursor:pointer}
+  .skhead:hover{background:#ffffff08}
+  .skhead .nm{font-size:13.5px;font-weight:600;flex:1;min-width:0}
+  .skhead .tw{transition:transform .13s;color:var(--muted);font-size:11px}
+  .sk.open .skhead .tw{transform:rotate(90deg)}
+  .chip{font-size:10.5px;padding:1px 7px;border-radius:999px;border:1px solid var(--border);
+    color:var(--muted);white-space:nowrap}
+  .chip.r{color:#79c0ff;border-color:#79c0ff55}
+  .chip.w{color:#3fb950;border-color:#3fb95055}
+  .chip.nn{color:#f85149;border-color:#f8514955}
+  .skbody{display:none;padding:2px 13px 13px;border-top:1px solid var(--border)}
+  .sk.open .skbody{display:block}
+  .skbody .d{color:var(--muted);font-size:12px;line-height:1.55;margin:9px 0 11px}
+  .skbody h4{font-size:11px;text-transform:uppercase;letter-spacing:.06em;
+    color:var(--muted);margin:13px 0 6px;font-weight:600}
+  .io{display:flex;flex-wrap:wrap;gap:5px}
+  .rule{display:flex;gap:8px;align-items:flex-start;padding:6px 0;
+    border-bottom:1px solid #ffffff0d;font-size:12.5px;cursor:pointer;line-height:1.45}
+  .rule:last-child{border-bottom:0}
+  .rule:hover .rt{color:var(--accent)}
+  .rule .rt{flex:1;min-width:0}
+  .rule .rid{display:block;color:var(--muted);font-size:10.5px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;margin-top:2px}
+  .rbody{display:none;white-space:pre-wrap;background:#0d1117;border:1px solid var(--border);
+    border-radius:8px;padding:10px 12px;margin:7px 0 4px;font-size:12px;
+    line-height:1.55;color:var(--muted);max-height:340px;overflow:auto}
+  .rule.open + .rbody{display:block}
+  .more{background:none;border:0;color:var(--accent);cursor:pointer;font-size:12px;
+    padding:6px 0}
+  .empty{color:var(--muted);font-size:12px;font-style:italic}
   #dash{max-width:840px;margin:0 auto;padding:64px 16px 60px}
   #dnav{display:flex;gap:6px;overflow-x:auto;padding:6px 0 14px;position:sticky;top:0;
     background:var(--bg);z-index:2}
@@ -270,6 +316,7 @@
   <nav>
     <button data-mode="map">🗺 <span>Map</span></button>
     <button data-mode="dash">📋 <span>Dashboard</span></button>
+    <button data-mode="skills">🧩 <span>Skills</span></button>
   </nav>
   <div class="foot">
     <button data-mode="settings">⚙ <span>Settings</span></button>
@@ -313,6 +360,18 @@
   <div id="dnewbar"></div>
   <p id="dmeta"></p>
   <div id="dlist"></div>
+</div>
+
+<!-- Skills: the two trees sync-skill-tree wrote into the graph (CONVENTIONS §5a).
+     Read-only on purpose — a skill's contract is edited in its SKILL.md (built-in)
+     or with add-skill (user), both of which are checked; a text box here would be
+     a third way to change a contract, and the one nothing validates. -->
+<div id="skills">
+  <h2>Skills</h2>
+  <p class="lead">Every skill is a contract: what must be true when it finishes,
+    what it reads and writes in the graph, and the rules it answers to. Nesting is
+    the <code>requires</code> edge. Click a skill to open it, then a rule to read it.</p>
+  <div id="sktrees"></div>
 </div>
 
 <!-- Settings: preferences that live in <home>/settings.json, plus store upkeep.
@@ -957,7 +1016,7 @@ document.getElementById('cascade').addEventListener('change',e=>{
 
 // ---- sections (Map / Dashboard / Settings), behind the hamburger ----
 let mode='map';
-const MODES=['map','dash','settings'];
+const MODES=['map','dash','skills','settings'];
 function setMode(m){
   if(!MODES.includes(m)) m='map';
   mode=m;
@@ -968,6 +1027,7 @@ function setMode(m){
   if(location.hash.slice(1)!==m) history.replaceState(null,'','#'+m);
   if(m==='map'){ alpha=Math.max(alpha,.5); }          // reheat physics on return
   else if(m==='dash'){ Dash.show(); }                  // (re)load current view
+  else if(m==='skills'){ Skills.show(); }
   else { Settings.show(); }
   if(m!=='map') scrollTo(0,0);
 }
@@ -1447,6 +1507,131 @@ const Dash = (function(){
 // Everything here is server-side state: POST /api/settings writes
 // <home>/settings.json, which the CLI, the hooks and any cron read too. Nothing
 // is kept in localStorage — a preference only one browser knows is not a setting.
+// ---- Skills: the two trees, and the rules each one answers to ----
+// Loaded once per visit and cached: the trees change when someone runs
+// sync-skill-tree, not while the page is open, so polling them would be motion
+// without information. The reload button is the honest way back.
+const Skills = (function(){
+  let loaded=false, data=null;
+  const esc=t=>String(t==null?'':t).replace(/[&<>"]/g,c=>(
+    {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+  const SUB={
+    plugin:'Shipped with the plugin. Each one declares in the <code>## Depends on</code> '+
+           'block of its SKILL.md, which the pre-commit checker gates.',
+    learned:'Taught to this brain at runtime. Each one declares in props, via '+
+            '<code>add-skill --requires/--reads/--writes</code>. A user skill may '+
+            'require a built-in one.'
+  };
+  const WHY={
+    declared:['declared','the skill names this rule itself'],
+    matched:['matched','match-rules returns it for this skill’s triggers'],
+    always:['always on','non-negotiable, applies whether or not it matched']
+  };
+
+  function chips(sk){
+    const out=[];
+    sk.reads.forEach(t=>out.push(`<span class="chip r">reads ${esc(t)}</span>`));
+    sk.writes.forEach(t=>out.push(`<span class="chip w">writes ${esc(t)}</span>`));
+    return out.join('');
+  }
+
+  function ruleRow(r){
+    const w=WHY[r.why]||[r.why,''];
+    return `<div class="rule" data-rule="${esc(r.id)}" title="${esc(w[1])}">`+
+      `<span class="chip${r.non_negotiable?' nn':''}">${esc(w[0])}</span>`+
+      `<span class="rt">${esc(r.title)}<span class="rid">${esc(r.id)}</span></span>`+
+      `</div><div class="rbody" id="rb-${esc(r.id)}">loading…</div>`;
+  }
+
+  function card(sk,depth){
+    const deps=[];
+    if(sk.waits_for.length) deps.push('waits for '+sk.waits_for.map(x=>x.replace(/^skill_/,'')).join(', '));
+    if(sk.enriched_by.length) deps.push('enriched by '+sk.enriched_by.map(x=>x.replace(/^skill_/,'')).join(', '));
+    const shown=sk.rules.filter(r=>r.why!=='always'), always=sk.rules.filter(r=>r.why==='always');
+    const body=
+      `<div class="skbody">`+
+        `<p class="d">${esc(sk.description||sk.triggers||'').slice(0,400)}</p>`+
+        (sk.reads.length||sk.writes.length||sk.reads_other||sk.writes_other
+          ? `<h4>Graph surface</h4><div class="io">${chips(sk)}</div>`+
+            (sk.reads_other?`<p class="d">also reads ${esc(sk.reads_other)}</p>`:'')+
+            (sk.writes_other?`<p class="d">also writes ${esc(sk.writes_other)}</p>`:'')
+          : '')+
+        (deps.length?`<h4>Depends on</h4><div class="io">`+
+          deps.map(d=>`<span class="chip">${esc(d)}</span>`).join('')+`</div>`:'')+
+        `<h4>Rules it answers to</h4>`+
+        (shown.length?shown.map(ruleRow).join(''):'<p class="empty">Nothing specific to this skill.</p>')+
+        (always.length
+          ? `<button class="more" data-always="${esc(sk.id)}">show ${always.length} always-on rules</button>`+
+            `<div class="alw" id="alw-${esc(sk.id)}" style="display:none">`+
+            always.map(ruleRow).join('')+`</div>`
+          : '')+
+      `</div>`;
+    return `<div class="sk${depth?' kid':''}" id="sk-${esc(sk.id)}">`+
+      `<div class="skhead"><span class="tw">▶</span>`+
+      `<span class="nm">${esc(sk.title)}</span>`+
+      (sk.uses?`<span class="chip">used ${sk.uses}×</span>`:'')+
+      `<span class="chip">${sk.rules.length} rules</span></div>`+
+      body+`</div>`+
+      sk.children.map(c=>card(c,depth+1)).join('');
+  }
+
+  function render(){
+    const box=document.getElementById('sktrees');
+    box.innerHTML=data.trees.map(t=>
+      `<div class="tree"><h3>${esc(t.title)}<span class="ct">${t.count}</span></h3>`+
+      `<p class="sub">${SUB[t.kind]||''}</p>`+
+      (t.skills.length?t.skills.map(s=>card(s,0)).join('')
+        :'<p class="empty">No skills in this tree yet. Run <code>graph.py sync-skill-tree</code>.</p>')+
+      `</div>`).join('');
+  }
+
+  async function show(){
+    if(loaded) return;
+    const box=document.getElementById('sktrees');
+    box.innerHTML='<p class="empty">Loading…</p>';
+    try{
+      const r=await fetch('/api/skills'); data=await r.json();
+      if(!data.ok) throw new Error(data.error||'failed');
+      loaded=true; render();
+    }catch(e){
+      box.innerHTML='<div class="sk"><div class="skhead"><span class="nm">'+
+        'Skills unavailable</span></div><div class="skbody" style="display:block">'+
+        '<p class="d">'+esc(e.message)+'. If the trees were never built, run '+
+        '<code>python3 scripts/graph.py sync-skill-tree</code>.</p></div></div>';
+    }
+  }
+
+  // One delegated listener rather than a handler per row: the tree is rebuilt
+  // wholesale on reload, and per-node handlers would leak with it.
+  document.getElementById('sktrees').addEventListener('click',async e=>{
+    const head=e.target.closest('.skhead');
+    if(head){ head.parentElement.classList.toggle('open'); return; }
+    const more=e.target.closest('[data-always]');
+    if(more){
+      const box=document.getElementById('alw-'+more.dataset.always);
+      const open=box.style.display!=='none';
+      box.style.display=open?'none':'block';
+      more.textContent=(open?'show ':'hide ')+
+        box.querySelectorAll('.rule').length+' always-on rules';
+      return;
+    }
+    const row=e.target.closest('.rule');
+    if(!row) return;
+    const id=row.dataset.rule, body=document.getElementById('rb-'+id);
+    row.classList.toggle('open');
+    if(!row.classList.contains('open')||body.dataset.done) return;
+    try{
+      const r=await fetch('/api/rule?id='+encodeURIComponent(id));
+      const d=await r.json();
+      body.textContent=d.ok&&d.rule?d.rule.body:'This rule is no longer in the brain.';
+    }catch(err){ body.textContent='Could not read it: '+err.message; }
+    body.dataset.done='1';
+  });
+
+  return {show, reload(){ loaded=false; show(); }};
+})();
+
 const Settings = (function(){
   const $=s=>document.querySelector(s);
   let PREFS=null, STATUS=null, ZONES=[], REALMS={}, prefsReq=null;

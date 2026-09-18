@@ -363,6 +363,22 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, json.dumps({
                     "ok": True, "kinds": brain_query.kinds("auto"),
                     "none_token": brain_query.NO_KIND}), "application/json")
+            elif path == "/api/skills":  # the two skill trees (CONVENTIONS §5a)
+                # Read from the edges sync-skill-tree wrote, never re-derived from
+                # the files here: two readers of one declaration cannot disagree,
+                # two parsers of it eventually do.
+                self._send(200, json.dumps({
+                    "ok": True, "trees": graph.skill_trees(graph.connect())}),
+                    "application/json")
+            elif path == "/api/rule":    # one rule in full, for the skill drawer
+                rid = (parse_qs(parsed.query).get("id") or [""])[0]
+                con = graph.connect()
+                row = con.execute("SELECT * FROM nodes WHERE id=? AND type=?",
+                                  (rid, graph.RULE_TYPE)).fetchone()
+                self._send(200, json.dumps(
+                    {"ok": bool(row),
+                     "rule": graph._node_dict(row) if row else None}),
+                    "application/json")
             elif path == "/api/settings":   # what the Settings page reads
                 self._send(200, json.dumps(settings_payload()), "application/json")
             elif path == "/api/timezones":  # the IANA list, from the stdlib

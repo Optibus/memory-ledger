@@ -1212,6 +1212,105 @@ def _skill_declarations(con, row) -> tuple:
     return kind, decl
 
 
+def skill_trees(con, with_rules: bool = True) -> list:
+    """The two skill trees as the UI draws them (CONVENTIONS §5a).
+
+    Built from the SAME edges `sync-skill-tree` wrote, never from a second pass
+    over the files, so the page cannot show a tree the graph does not hold. Run
+    the sync first if a declaration changed."""
+    skills = {r["id"]: _node_dict(r) for r in con.execute(
+        "SELECT * FROM nodes WHERE type='skill' ORDER BY title").fetchall()}
+    edges = [dict(r) for r in con.execute(
+        "SELECT src,dst,rel,props FROM edges WHERE src IN "
+        "(SELECT id FROM nodes WHERE type='skill')").fetchall()]
+    tree_edges = [e for e in edges
+                  if json.loads(e["props"] or "{}").get("src") == "skill-tree"]
+
+    hub_of, dep, io = {}, {}, {}
+    for e in tree_edges:
+        if e["rel"] == "part-of" and e["dst"].startswith("hub_skills_"):
+            hub_of[e["src"]] = e["dst"]
+        elif e["rel"] in ("requires", "waits-for", "enriched-by"):
+            dep.setdefault(e["src"], []).append((e["rel"], e["dst"]))
+        elif e["rel"] in ("reads", "writes"):
+            io.setdefault(e["src"], []).append((e["rel"], e["dst"][len("nodetype_"):]))
+
+    def entry(sid):
+        n = skills[sid]
+        p = n["props"]
+        d = sorted(dep.get(sid, []))
+        row = {
+            "id": sid, "title": n["title"],
+            "description": p.get("description") or "",
+            "triggers": p.get("triggers") or "",
+            "kind": p.get("kind") or "learned",
+            "uses": int(p.get("usage_count", 0) or 0),
+            "requires": [x for r, x in d if r == "requires"],
+            "waits_for": [x for r, x in d if r == "waits-for"],
+            "enriched_by": [x for r, x in d if r == "enriched-by"],
+            "reads": sorted({t for r, t in io.get(sid, []) if r == "reads"}),
+            "writes": sorted({t for r, t in io.get(sid, []) if r == "writes"}),
+            "reads_other": p.get("reads_other", ""),
+            "writes_other": p.get("writes_other", ""),
+            "declared": False, "rules": [],
+        }
+        if with_rules:
+            # Two different questions, both worth answering. DECLARED is what the
+            # skill says it is accountable for. MATCHED is what match-rules will
+            # actually hand it at runtime, from THIS brain — which is where a
+            # person's own rules show up against a skill that never named them.
+            named = re.findall(r"rule_[a-z0-9_-]+", n["body"] or "")
+            have = {r["id"]: r for r in (
+                _node_dict(x) for x in con.execute(
+                    "SELECT * FROM nodes WHERE type=?", (RULE_TYPE,)).fetchall())}
+            seen = []
+            for rid in dict.fromkeys(named):
+                if rid in have:
+                    seen.append({"id": rid, "title": have[rid]["title"],
+                                 "source": have[rid]["props"].get("source", ""),
+                                 "non_negotiable": bool(
+                                     have[rid]["props"].get("non_negotiable")),
+                                 "why": "declared"})
+            row["declared"] = bool(seen)
+            cue = " ".join(filter(None, [n["title"], row["triggers"][:400]]))
+            for r in rules_for(con, cue, 6):
+                if r["id"] in {x["id"] for x in seen}:
+                    continue
+                nn = bool(r["props"].get("non_negotiable"))
+                # A non-negotiable is appended to EVERY match, so calling it
+                # "matched" here would be a lie that buries the handful of rules
+                # this skill actually pulled. It gets its own bucket.
+                seen.append({"id": r["id"], "title": r["title"],
+                             "source": r["props"].get("source", ""),
+                             "non_negotiable": nn,
+                             "why": "always" if nn else "matched"})
+            row["rules"] = seen
+        return row
+
+    trees = []
+    for kind, (hub_id, hub_title) in TREE_HUBS.items():
+        members = [s for s in skills if hub_of.get(s) == hub_id]
+        rows = {s: entry(s) for s in members}
+        # Nest a skill under the one it REQUIRES. Requires is the only hard edge,
+        # so it is the only one that makes a hierarchy rather than a cross-link;
+        # waits-for and enriched-by stay listed on the card, where they read as
+        # what they are — relationships, not parentage.
+        children = {}
+        for sid, row in rows.items():
+            parent = next((r for r in row["requires"] if r in rows), None)
+            children.setdefault(parent, []).append(sid)
+        def branch(sid):
+            node = rows[sid]
+            node["children"] = [branch(c) for c in
+                                sorted(children.get(sid, []),
+                                       key=lambda x: rows[x]["title"].lower())]
+            return node
+        roots = sorted(children.get(None, []), key=lambda x: rows[x]["title"].lower())
+        trees.append({"kind": kind, "hub": hub_id, "title": hub_title,
+                      "count": len(members), "skills": [branch(r) for r in roots]})
+    return trees
+
+
 def cmd_sync_skill_tree(args):
     """Project the skill contracts into the graph as two trees (CONVENTIONS §5a).
 
@@ -1468,16 +1567,13 @@ def cmd_add_rule(args):
     out(res)
 
 
-def cmd_match_rules(args):
-    """Which conventions apply to THIS situation — the token-light replacement for
-    reading all of CONVENTIONS.md.
+def rules_for(con, query: str, limit: int = 8) -> list:
+    """The rules that apply to a situation, in the order they should be read.
 
-    Pure FTS + SQL, no model call. Non-negotiable rules are always included
-    (they apply whether or not the cue mentions them), then relevance order, then
-    the payload is trimmed to a character budget so this can run on every request.
-    """
-    con = connect()
-    q = (args.query or "").strip()
+    Pure FTS + SQL, no model call. Extracted from cmd_match_rules so anything that
+    needs to know which rules govern an action — the CLI, the web UI's skill
+    view — asks the same function and cannot disagree with it."""
+    q = (query or "").strip()
     hits = []
     if q:
         words = [t for t in re.findall(r"\w+", q.lower()) if len(t) > 2]
@@ -1499,7 +1595,7 @@ def cmd_match_rules(args):
     matched.sort(key=lambda r: r["_score"])
     for r in matched:
         r.pop("_score", None)
-    matched = matched[: args.limit]
+    matched = matched[:limit]
     # Universally-applicable rules are APPENDED, never counted against the limit —
     # otherwise a handful of them fills every slot and the rule you actually asked
     # for never appears (which is exactly what happened before this).
@@ -1509,7 +1605,16 @@ def cmd_match_rules(args):
         " AND json_extract(props,'$.non_negotiable')=1"
         " ORDER BY json_extract(props,'$.section')", (RULE_TYPE,)).fetchall()
         if r["id"] not in seen]
-    results = matched + forced
+    return matched + forced
+
+
+def cmd_match_rules(args):
+    """Which conventions apply to THIS situation — the token-light replacement for
+    reading all of CONVENTIONS.md. Non-negotiable rules are always included, then
+    relevance order, then the payload is trimmed to a character budget so this can
+    run on every request."""
+    con = connect()
+    results = rules_for(con, args.query, args.limit)
     if getattr(args, "full", False):
         out({"ok": True, "count": len(results), "results": results}); return
     budget = int(args.budget or 2600)

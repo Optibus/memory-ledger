@@ -34,6 +34,11 @@ keeps working when the model is not in the room.
     clicking a connection jumps to that node. The page polls every two seconds.
   - **Dashboard.** The `brain_query.py` date views as cards: agenda, open, today,
     tomorrow, week, closed, range. No model, no tokens.
+  - **Skills.** The two skill trees from the graph (§5a), built-in and user,
+    nested by `requires`. Opening a skill shows what node types it reads and
+    writes, what it waits for or is enriched by, and the rules it answers to,
+    split into declared, matched and always-on. Clicking a rule reads it in full.
+    Read-only: contracts are edited in `SKILL.md` or with `add-skill`.
   - **Settings.** Timezone, default realm, map and dashboard refresh intervals,
     the database connection including the neo4j master with Test and Flush
     queued, and Prune.
@@ -70,7 +75,8 @@ See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTION
 - **The server is running and the person has the URL**, started in the background
   so the session is not blocked.
 - **They know which section answers their question.** Map for connections,
-  Dashboard for dates and edits, Settings for preferences and upkeep.
+  Dashboard for dates and edits, Skills for what a skill is accountable for and
+  which rules govern it, Settings for preferences and upkeep.
 - **They know they can edit without you.** When the request was about maintaining
   the brain rather than understanding it, the dashboard's write surface is named,
   because depending on the model for upkeep is the failure this section prevents.
@@ -94,6 +100,9 @@ See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTION
   block the session.
 - **Must not describe prune as deleting.** It folds old captures into one digest
   per day, and deletes nothing.
+- **Must not present a stale Skills tree as the truth.** The section draws the
+  edges `sync-skill-tree` wrote. If a declaration changed since the last sync, say
+  to re-run it rather than reading the page as current.
 
 ## Reply (focus contract)
 
