@@ -206,6 +206,7 @@ python3 scripts/graph.py add-skill --name triage-x --title "..." --when "..." --
 python3 scripts/graph.py ingest-skills                         # pull markdown skills into the DB as nodes
 python3 scripts/graph.py sync-skill-tree                       # project the contracts into the graph: built-in + user trees
 python3 scripts/graph.py snapshot-rules --label pre-contract   # verbatim backup of every rule into the rules-backup realm
+python3 scripts/graph.py audit-contracts                       # which DB-side contracts (learned skills, user rules) are incomplete
 python3 scripts/graph.py match-skills "a situation"            # recall: relevance-ranked, reinforcement-boosted
 python3 scripts/graph.py use-skill --id skill_triage-x         # reinforce
 ```

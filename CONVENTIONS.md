@@ -141,6 +141,7 @@ Commands:
 | `add-area --title T [--id ID] [--domain KEY] [--body ...] [--realm R]` | Create a domain area. Idempotent on `--id`; default id is `hub_<slug of title>`. |
 | `match-rules "situation" [--limit N] [--budget CHARS] [--full]` | **Which conventions apply to THIS situation** (§2i) — the token-light replacement for reading this whole file (~8% of it). No model call. Always-apply rules are appended, not counted against `--limit`. |
 | `ingest-conventions [--file F] [--realm R]` | Load this file into the brain as `rule` nodes, one per section (§2i). Idempotent and **never overwrites a user-authored or user-edited rule**. |
+| `audit-contracts [--kind K] [--source S]... [--count-only]` | Check the contracts that live in the **DB**, which the file checker cannot see: learned skills (§5.1) and user/learned rules (§5b.1). Reports gaps, **never rewrites** — the missing clause is a judgment call, and filling it mechanically produces exactly the unfalsifiable sentence §5b exists to prevent. |
 | `snapshot-rules [--label L] [--source S]...` | Copy every rule **verbatim** into the `rules-backup` realm before a bulk edit (§5b.3). Stores `rule-snapshot` nodes, never `rule`, so `match-rules` cannot return one; captures body, title and props, because a rule without its `scenario` could not be restored to firing. Idempotent by content: an unchanged rule stores nothing, a changed one stores a new generation, nothing is overwritten. |
 | `add-rule --title T [--body ...] [--scenario CUES] [--section S] [--source user\|learned\|plugin] [--overrides ID] [--non-negotiable] [--id ID] [--realm R]` | Author or override a rule — the mutable half of the genome (§2i). `--overrides` marks the shipped rule `superseded`. **`--scenario` is indexed** — put the words a person would actually type there, including ones the body never uses; that is what `match-rules` fires on. Same for a skill's `triggers`/`description`. |
 | `park [--body TEXT] [--title T] [--about ID] [--area A]` | **Move context OUT of the window** (§2j): stores the blob (stdin or `--body`) and returns a tiny receipt, so the model can drop the content. |
@@ -966,6 +967,13 @@ rule in translation is the only unacceptable outcome of adopting this shape.
 
 **Enforced by `scripts/check-contracts.sh`**, run from the pre-commit hook.
 Bypass a deliberate exception with `SECOND_BRAIN_SKIP_CONTRACTS=1`.
+
+**A learned skill carries the same eight sections**, in its node body rather than
+a file. Two differences follow from where it lives. It may name `rule_user_*` ids
+directly, because it is in one person's private brain and not in a corpus that
+ships to strangers, which is the whole reason §5.2 makes the built-ins use classes
+instead. And no file checker can see it, so `graph.py audit-contracts` is its
+gate.
 
 ---
 

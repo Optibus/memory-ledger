@@ -1326,6 +1326,57 @@ RULE_SNAPSHOT_TYPE = "rule-snapshot"
 RULE_SNAPSHOT_REALM = "rules-backup"
 
 
+SKILL_CONTRACT_SECTIONS = ["## When to use", "## Given", "## Rules honored",
+                           "## Depends on", "## Deliverables", "## Judged against",
+                           "## Guardrails", "## Reply"]
+RULE_CONTRACT_SECTIONS = ["THE RULE", "JUDGED AGAINST"]
+
+
+def cmd_audit_contracts(args):
+    """Check the contracts that live in the DB, which no file checker can see.
+
+    scripts/check-contracts.sh gates the built-in corpus at commit time by reading
+    `skills/*/SKILL.md`. A learned skill and a user rule have no file, so this is
+    their equivalent: it reads the node bodies. Reports, never rewrites, because
+    the missing half of a contract is a judgment call and filling it in
+    mechanically would produce exactly the unfalsifiable clause §5b exists to
+    prevent."""
+    con = connect()
+    gaps = {"skills": [], "rules": []}
+
+    for row in con.execute(
+            "SELECT * FROM nodes WHERE type='skill' ORDER BY id"):
+        n = _node_dict(row)
+        if args.kind and n["props"].get("kind") != args.kind:
+            continue
+        missing = [h for h in SKILL_CONTRACT_SECTIONS if h not in (n["body"] or "")]
+        if missing:
+            gaps["skills"].append({"id": n["id"], "kind": n["props"].get("kind", ""),
+                                   "missing": missing})
+
+    for row in con.execute(
+            "SELECT * FROM nodes WHERE type=? AND status!='superseded' ORDER BY id",
+            (RULE_TYPE,)):
+        n = _node_dict(row)
+        src = n["props"].get("source", "")
+        # Shipped rules are regenerated from CONVENTIONS.md, so their contract is
+        # that document and a body edit here would be overwritten (§5b.3).
+        if src == "plugin" or (args.source and src not in args.source):
+            continue
+        body = n["body"] or ""
+        missing = [h for h in RULE_CONTRACT_SECTIONS if h not in body]
+        if not n["props"].get("scenario"):
+            missing.append("scenario (GOVERNS is rendered from it, §5b.2)")
+        if missing:
+            gaps["rules"].append({"id": n["id"], "source": src, "missing": missing})
+
+    total = len(gaps["skills"]) + len(gaps["rules"])
+    out({"ok": total == 0, "incomplete": total,
+         "skills_missing": len(gaps["skills"]), "rules_missing": len(gaps["rules"]),
+         "gaps": gaps if not args.count_only else None,
+         "hint": "a contract is completed by hand — see CONVENTIONS §5.1 and §5b.1"})
+
+
 def cmd_snapshot_rules(args):
     """Copy every rule VERBATIM into its own realm before anything rewrites them.
 
@@ -4411,6 +4462,15 @@ def build_parser():
                    help="skills to consume if they landed, never wait for (comma-separated)")
     a.add_argument("--reads", help="node types this skill consults (comma-separated)")
     a.add_argument("--writes", help="node types this skill leaves in the graph (comma-separated)")
+
+    a = sub.add_parser("audit-contracts", description=(
+        "Check the contracts that live in the DB, which the file checker cannot see: "
+        "learned skills (§5.1) and user/learned rules (§5b.1). Reports gaps, never "
+        "rewrites, because the missing clause is a judgment call."))
+    a.set_defaults(func=cmd_audit_contracts)
+    a.add_argument("--kind", help="only skills of this kind (plugin|learned)")
+    a.add_argument("--source", action="append", help="only rules with this source")
+    a.add_argument("--count-only", action="store_true", help="omit the gap list")
 
     a = sub.add_parser("snapshot-rules", description=(
         "Copy every rule VERBATIM into the rules-backup realm before a bulk edit "
