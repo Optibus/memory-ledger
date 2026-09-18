@@ -438,6 +438,23 @@ skill that never named them), and *always on* (non-negotiable, collapsed by
 default so the handful that are specific to this skill stay visible). Clicking a
 rule reads its full body.
 
+**The genome is listed beside the trees**, because a rule is only half-visible
+when you can reach it only through a skill that happens to name it. One filter
+narrows both at once:
+
+- **Text** — matches a skill's name, description, triggers and the node types it
+  touches, and a rule's title, id and `scenario`. `scenario` is the field
+  `match-rules` actually fires on, so a rule whose body never says "slack" still
+  answers a search for it, which is the whole reason that field exists.
+- **Source** — built-in, user, or learned. The same axis splits both: a built-in
+  rule comes from this file, a user or learned one from the person's brain.
+- **Domain** — the area a skill or rule is filed under, labelled with the
+  person's own area titles, read from the graph rather than a hardcoded list.
+
+A skill matches on the rules it pulled *specifically*, never on the always-on
+ones. Every skill carries those, so matching them would answer "which skills obey
+the no-emoji rule" with the entire corpus: true, and useless.
+
 It is **read-only**, unlike the Dashboard. A contract is edited in its `SKILL.md`
 or with `add-skill`, both of which are checked; a text box here would be a third
 way to change a contract and the only one nothing validates. The page reads the

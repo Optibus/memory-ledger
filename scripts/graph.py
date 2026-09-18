@@ -1226,6 +1226,15 @@ def skill_trees(con, with_rules: bool = True) -> list:
     tree_edges = [e for e in edges
                   if json.loads(e["props"] or "{}").get("src") == "skill-tree"]
 
+    # A skill's domain is the area it is filed under, minus the two tree hubs —
+    # those say which tree it is in, which is already a facet of its own.
+    area_of = {}
+    for r in con.execute(
+            "SELECT e.src, e.dst FROM edges e JOIN nodes n ON n.id=e.src"
+            " WHERE n.type='skill' AND e.rel='part-of' AND e.dst LIKE 'hub_%'"):
+        if not r["dst"].startswith("hub_skills_"):
+            area_of.setdefault(r["src"], set()).add(r["dst"])
+
     hub_of, dep, io = {}, {}, {}
     for e in tree_edges:
         if e["rel"] == "part-of" and e["dst"].startswith("hub_skills_"):
@@ -1252,6 +1261,7 @@ def skill_trees(con, with_rules: bool = True) -> list:
             "writes": sorted({t for r, t in io.get(sid, []) if r == "writes"}),
             "reads_other": p.get("reads_other", ""),
             "writes_other": p.get("writes_other", ""),
+            "domains": sorted(area_of.get(sid, [])),
             "declared": False, "rules": [],
         }
         if with_rules:
@@ -1309,6 +1319,41 @@ def skill_trees(con, with_rules: bool = True) -> list:
         trees.append({"kind": kind, "hub": hub_id, "title": hub_title,
                       "count": len(members), "skills": [branch(r) for r in roots]})
     return trees
+
+
+def rule_catalog(con) -> list:
+    """Every live rule, flattened for the UI's filter (CONVENTIONS §2g).
+
+    Carries `scenario` as well as the body because that is the field match-rules
+    actually fires on, so filtering by trigger has to see it: a rule whose body
+    never says "slack" can still be the rule that fires when you type it."""
+    areas = {}
+    for r in con.execute(
+            "SELECT e.src, e.dst FROM edges e JOIN nodes n ON n.id=e.src"
+            " WHERE n.type=? AND e.rel='part-of' AND e.dst LIKE 'hub_%'", (RULE_TYPE,)):
+        areas.setdefault(r["src"], set()).add(r["dst"])
+    out_rows = []
+    for row in con.execute(
+            "SELECT * FROM nodes WHERE type=? AND status!='superseded' ORDER BY title",
+            (RULE_TYPE,)):
+        n = _node_dict(row)
+        p = n["props"]
+        out_rows.append({
+            "id": n["id"], "title": n["title"],
+            "source": p.get("source", ""), "section": str(p.get("section", "")),
+            "non_negotiable": bool(p.get("non_negotiable")),
+            "scenario": p.get("scenario", ""),
+            "domains": sorted(areas.get(n["id"], [])),
+            "chars": len(n["body"] or ""),
+        })
+    return out_rows
+
+
+def area_titles(con) -> dict:
+    """hub id -> its title, so the UI labels a domain filter with the person's own
+    words instead of a slug it made up."""
+    return {r["id"]: r["title"] for r in con.execute(
+        "SELECT id, title FROM nodes WHERE type=? AND id LIKE 'hub_%'", (AREA_TYPE,))}
 
 
 def cmd_sync_skill_tree(args):

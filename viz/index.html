@@ -175,6 +175,26 @@
   .more{background:none;border:0;color:var(--accent);cursor:pointer;font-size:12px;
     padding:6px 0}
   .empty{color:var(--muted);font-size:12px;font-style:italic}
+  /* The filter bar sticks, because the thing you are narrowing scrolls under it
+     and a filter you have to scroll back up to change gets used once. */
+  #skfilter{position:sticky;top:0;z-index:3;background:var(--bg);padding:8px 0 12px;
+    display:flex;flex-wrap:wrap;gap:7px;align-items:center;border-bottom:1px solid var(--border);
+    margin-bottom:14px}
+  #skq{flex:1;min-width:190px;background:#0d1117;color:var(--fg);
+    border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-size:13px}
+  #skq:focus{outline:0;border-color:var(--accent)}
+  .pills{display:flex;gap:4px}
+  .pills button{border:1px solid var(--border);background:var(--panel);color:var(--muted);
+    border-radius:999px;padding:5px 11px;font-size:12px;cursor:pointer;white-space:nowrap}
+  .pills button.on{background:var(--accent);color:#0d1117;border-color:var(--accent)}
+  #skfilter select{background:#0d1117;color:var(--fg);border:1px solid var(--border);
+    border-radius:8px;padding:6px 9px;font-size:12px;max-width:190px}
+  #skcount{color:var(--muted);font-size:12px;margin-left:auto;white-space:nowrap}
+  .rl{border:1px solid var(--border);background:var(--panel);border-radius:10px;
+    margin:0 0 6px;padding:9px 12px}
+  .rl .rh{display:flex;gap:8px;align-items:flex-start;cursor:pointer}
+  .rl .rh:hover .rt{color:var(--accent)}
+  .hl{background:#d2992244;border-radius:2px}
   #dash{max-width:840px;margin:0 auto;padding:64px 16px 60px}
   #dnav{display:flex;gap:6px;overflow-x:auto;padding:6px 0 14px;position:sticky;top:0;
     background:var(--bg);z-index:2}
@@ -371,7 +391,24 @@
   <p class="lead">Every skill is a contract: what must be true when it finishes,
     what it reads and writes in the graph, and the rules it answers to. Nesting is
     the <code>requires</code> edge. Click a skill to open it, then a rule to read it.</p>
+  <div id="skfilter">
+    <input id="skq" placeholder="filter by name, trigger, rule text, node type…">
+    <div class="pills" id="skshow">
+      <button data-show="all" class="on">Both</button>
+      <button data-show="skills">Skills</button>
+      <button data-show="rules">Rules</button>
+    </div>
+    <div class="pills" id="sksrc">
+      <button data-src="all" class="on">Any source</button>
+      <button data-src="plugin">Built-in</button>
+      <button data-src="user">User</button>
+      <button data-src="learned">Learned</button>
+    </div>
+    <select id="skdom"><option value="all">Any domain</option></select>
+    <span id="skcount"></span>
+  </div>
   <div id="sktrees"></div>
+  <div id="skrules"></div>
 </div>
 
 <!-- Settings: preferences that live in <home>/settings.json, plus store upkeep.
@@ -1541,7 +1578,7 @@ const Skills = (function(){
     return `<div class="rule" data-rule="${esc(r.id)}" title="${esc(w[1])}">`+
       `<span class="chip${r.non_negotiable?' nn':''}">${esc(w[0])}</span>`+
       `<span class="rt">${esc(r.title)}<span class="rid">${esc(r.id)}</span></span>`+
-      `</div><div class="rbody" id="rb-${esc(r.id)}">loading…</div>`;
+      `</div><div class="rbody">loading…</div>`;
   }
 
   function card(sk,depth){
@@ -1576,14 +1613,105 @@ const Skills = (function(){
       sk.children.map(c=>card(c,depth+1)).join('');
   }
 
+  // ---- filtering ----
+  // One text box over every field that can identify an item, because the words a
+  // person reaches for ("slack", "task", "before I send") live in different
+  // fields depending on whether the thing is a skill or a rule, and asking them
+  // to know which would be asking them to know the schema.
+  const F={q:'',show:'all',src:'all',dom:'all'};
+
+  const hay=sk=>[sk.id,sk.title,sk.description,sk.triggers,
+    sk.reads.join(' '),sk.writes.join(' '),sk.reads_other,sk.writes_other,
+    sk.domains.join(' '),
+    // Only the rules this skill pulled SPECIFICALLY. The always-on ones are on
+    // every skill, so matching them would return the whole corpus for a query
+    // like "dashes" — true, and useless.
+    sk.rules.filter(r=>r.why!=='always').map(r=>r.id+' '+r.title).join(' ')
+  ].join(' ').toLowerCase();
+  const ruleHay=r=>[r.id,r.title,r.scenario,r.section,r.source,r.domains.join(' ')]
+    .join(' ').toLowerCase();
+
+  // A parent survives if any descendant matches, so filtering never orphans a
+  // child by hiding the branch it hangs from.
+  function keepSkill(sk,kind){
+    const kids=sk.children.map(c=>keepSkill(c,kind)).filter(Boolean);
+    const srcOk=F.src==='all'||(F.src==='plugin'?kind==='plugin':
+                 F.src==='user'||F.src==='learned'?kind==='learned':true);
+    const domOk=F.dom==='all'||sk.domains.includes(F.dom);
+    const qOk=!F.q||hay(sk).includes(F.q);
+    if(kids.length||(srcOk&&domOk&&qOk)) return {...sk,children:kids,_dim:!(srcOk&&domOk&&qOk)};
+    return null;
+  }
+  function keepRule(r){
+    if(F.src!=='all'&&r.source!==F.src) return false;
+    if(F.dom!=='all'&&!r.domains.includes(F.dom)) return false;
+    return !F.q||ruleHay(r).includes(F.q);
+  }
+  function mark(t){
+    if(!F.q) return esc(t);
+    const i=String(t).toLowerCase().indexOf(F.q);
+    if(i<0) return esc(t);
+    return esc(String(t).slice(0,i))+'<span class="hl">'+
+      esc(String(t).slice(i,i+F.q.length))+'</span>'+esc(String(t).slice(i+F.q.length));
+  }
+
+  function ruleCard(r){
+    return `<div class="rl"><div class="rh rule" data-rule="${esc(r.id)}">`+
+      `<span class="chip${r.non_negotiable?' nn':''}">${esc(r.source||'rule')}</span>`+
+      `<span class="rt">${mark(r.title)}<span class="rid">${esc(r.id)}</span></span>`+
+      `</div><div class="rbody">loading…</div></div>`;
+  }
+
   function render(){
-    const box=document.getElementById('sktrees');
-    box.innerHTML=data.trees.map(t=>
-      `<div class="tree"><h3>${esc(t.title)}<span class="ct">${t.count}</span></h3>`+
-      `<p class="sub">${SUB[t.kind]||''}</p>`+
-      (t.skills.length?t.skills.map(s=>card(s,0)).join('')
-        :'<p class="empty">No skills in this tree yet. Run <code>graph.py sync-skill-tree</code>.</p>')+
-      `</div>`).join('');
+    if(!data) return;              // typing before the first load resolved
+    const treeBox=document.getElementById('sktrees');
+    const ruleBox=document.getElementById('skrules');
+    let nSkills=0, nRules=0;
+
+    if(F.show==='rules'){ treeBox.innerHTML=''; }
+    else {
+      treeBox.innerHTML=data.trees.map(t=>{
+        const kept=t.skills.map(s=>keepSkill(s,t.kind)).filter(Boolean);
+        const count=c=>c.reduce((n,x)=>n+1+count(x.children),0);
+        nSkills+=count(kept);
+        if(!kept.length&&(F.q||F.src!=='all'||F.dom!=='all')) return '';
+        return `<div class="tree"><h3>${esc(t.title)}<span class="ct">${count(kept)}`+
+          (count(kept)!==t.count?` of ${t.count}`:'')+`</span></h3>`+
+          `<p class="sub">${SUB[t.kind]||''}</p>`+
+          (kept.length?kept.map(s=>card(s,0)).join('')
+            :'<p class="empty">No skills in this tree yet. Run <code>graph.py sync-skill-tree</code>.</p>')+
+          `</div>`;
+      }).join('');
+    }
+
+    if(F.show==='skills'){ ruleBox.innerHTML=''; }
+    else {
+      const kept=(data.rules||[]).filter(keepRule);
+      nRules=kept.length;
+      ruleBox.innerHTML=`<div class="tree"><h3>Rules<span class="ct">${kept.length}`+
+        (kept.length!==(data.rules||[]).length?` of ${data.rules.length}`:'')+`</span></h3>`+
+        `<p class="sub">The genome every skill asks before acting. `+
+        `<code>source</code> says who authored it: built-in rules come from `+
+        `CONVENTIONS.md, user and learned ones from this brain.</p>`+
+        (kept.length?kept.map(ruleCard).join('')
+          :'<p class="empty">No rule matches this filter.</p>');
+    }
+
+    const parts=[];
+    if(F.show!=='rules') parts.push(nSkills+' skill'+(nSkills===1?'':'s'));
+    if(F.show!=='skills') parts.push(nRules+' rule'+(nRules===1?'':'s'));
+    document.getElementById('skcount').textContent=parts.join(' · ');
+  }
+
+  function fillDomains(){
+    const sel=document.getElementById('skdom');
+    const seen=new Set();
+    (data.rules||[]).forEach(r=>r.domains.forEach(d=>seen.add(d)));
+    data.trees.forEach(t=>{const w=s=>{s.domains.forEach(d=>seen.add(d));
+      s.children.forEach(w);}; t.skills.forEach(w);});
+    sel.innerHTML='<option value="all">Any domain</option>'+
+      [...seen].sort().map(d=>`<option value="${esc(d)}">`+
+        esc((data.areas&&data.areas[d])||d)+`</option>`).join('');
   }
 
   async function show(){
@@ -1593,7 +1721,7 @@ const Skills = (function(){
     try{
       const r=await fetch('/api/skills'); data=await r.json();
       if(!data.ok) throw new Error(data.error||'failed');
-      loaded=true; render();
+      loaded=true; fillDomains(); render();
     }catch(e){
       box.innerHTML='<div class="sk"><div class="skhead"><span class="nm">'+
         'Skills unavailable</span></div><div class="skbody" style="display:block">'+
@@ -1604,7 +1732,9 @@ const Skills = (function(){
 
   // One delegated listener rather than a handler per row: the tree is rebuilt
   // wholesale on reload, and per-node handlers would leak with it.
-  document.getElementById('sktrees').addEventListener('click',async e=>{
+  // Delegated from the SECTION, not from #sktrees: the rules list is a sibling
+  // container, so a listener on the trees alone silently ignores every click in it.
+  document.getElementById('skills').addEventListener('click',async e=>{
     const head=e.target.closest('.skhead');
     if(head){ head.parentElement.classList.toggle('open'); return; }
     const more=e.target.closest('[data-always]');
@@ -1618,7 +1748,12 @@ const Skills = (function(){
     }
     const row=e.target.closest('.rule');
     if(!row) return;
-    const id=row.dataset.rule, body=document.getElementById('rb-'+id);
+    // The SAME rule can be on a skill card and in the Rules list at once, so
+    // getElementById would open whichever copy the DOM happens to hold first —
+    // usually one inside a collapsed card, which looks like nothing happened.
+    // The body is always this row's next sibling.
+    const id=row.dataset.rule, body=row.nextElementSibling;
+    if(!body||!body.classList.contains('rbody')) return;
     row.classList.toggle('open');
     if(!row.classList.contains('open')||body.dataset.done) return;
     try{
@@ -1628,6 +1763,21 @@ const Skills = (function(){
     }catch(err){ body.textContent='Could not read it: '+err.message; }
     body.dataset.done='1';
   });
+
+  let tmr=null;
+  document.getElementById('skq').addEventListener('input',e=>{
+    clearTimeout(tmr);
+    tmr=setTimeout(()=>{ F.q=e.target.value.trim().toLowerCase(); render(); },120);
+  });
+  document.querySelectorAll('#skshow button,#sksrc button').forEach(b=>{
+    b.onclick=()=>{
+      const grp=b.parentElement, key=b.dataset.show?'show':'src';
+      grp.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));
+      F[key]=b.dataset.show||b.dataset.src; render();
+    };
+  });
+  document.getElementById('skdom').addEventListener('change',e=>{
+    F.dom=e.target.value; render(); });
 
   return {show, reload(){ loaded=false; show(); }};
 })();

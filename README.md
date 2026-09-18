@@ -135,7 +135,7 @@ removing/renaming the brain home (`~/.second_brain`); the hooks then no-op.
 | `complete-task` | Mark a task done → move to the archive (never delete). |
 | `follow-up` | Surface every open loop (tasks, PRs, emails, messages) and drive it toward closed. |
 | `learn-skill` | Grow a new skill at runtime, recall it, reinforce it (neuroplasticity). |
-| `visualize` | Open the live brain UI in the browser — graph **map**, query **dashboard**, **skills** tree, and **settings**. |
+| `visualize` | Open the live brain UI in the browser — graph **map**, query **dashboard**, **skills** trees + rule catalogue (filterable), and **settings**. |
 | `remind` | Set a real alarm (scheduled routine) that DMs you on Slack. |
 | `calendar` | Read/create Google Calendar events; time-block tasks. |
 | `read-email` | Read & triage Gmail; turn action items into tasks. |

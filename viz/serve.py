@@ -367,9 +367,11 @@ class Handler(BaseHTTPRequestHandler):
                 # Read from the edges sync-skill-tree wrote, never re-derived from
                 # the files here: two readers of one declaration cannot disagree,
                 # two parsers of it eventually do.
+                con = graph.connect()
                 self._send(200, json.dumps({
-                    "ok": True, "trees": graph.skill_trees(graph.connect())}),
-                    "application/json")
+                    "ok": True, "trees": graph.skill_trees(con),
+                    "rules": graph.rule_catalog(con),
+                    "areas": graph.area_titles(con)}), "application/json")
             elif path == "/api/rule":    # one rule in full, for the skill drawer
                 rid = (parse_qs(parsed.query).get("id") or [""])[0]
                 con = graph.connect()

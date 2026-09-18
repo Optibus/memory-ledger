@@ -35,10 +35,13 @@ keeps working when the model is not in the room.
   - **Dashboard.** The `brain_query.py` date views as cards: agenda, open, today,
     tomorrow, week, closed, range. No model, no tokens.
   - **Skills.** The two skill trees from the graph (§5a), built-in and user,
-    nested by `requires`. Opening a skill shows what node types it reads and
-    writes, what it waits for or is enriched by, and the rules it answers to,
-    split into declared, matched and always-on. Clicking a rule reads it in full.
-    Read-only: contracts are edited in `SKILL.md` or with `add-skill`.
+    nested by `requires`, **and the full rule catalogue beside them**. Opening a
+    skill shows what node types it reads and writes, what it waits for or is
+    enriched by, and the rules it answers to, split into declared, matched and
+    always-on. Clicking a rule reads it in full, from either place. One filter
+    narrows both: free text over names, triggers, `scenario` and node types, plus
+    source (built-in / user / learned) and domain. Read-only: contracts are edited
+    in `SKILL.md` or with `add-skill`.
   - **Settings.** Timezone, default realm, map and dashboard refresh intervals,
     the database connection including the neo4j master with Test and Flush
     queued, and Prune.
@@ -75,8 +78,9 @@ See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTION
 - **The server is running and the person has the URL**, started in the background
   so the session is not blocked.
 - **They know which section answers their question.** Map for connections,
-  Dashboard for dates and edits, Skills for what a skill is accountable for and
-  which rules govern it, Settings for preferences and upkeep.
+  Dashboard for dates and edits, Skills for what a skill is accountable for,
+  which rules govern it, and what the genome holds, Settings for preferences and
+  upkeep.
 - **They know they can edit without you.** When the request was about maintaining
   the brain rather than understanding it, the dashboard's write surface is named,
   because depending on the model for upkeep is the failure this section prevents.
