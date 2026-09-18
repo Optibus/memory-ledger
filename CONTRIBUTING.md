@@ -24,8 +24,8 @@ dependency here is a dependency in everyone's shell startup path.
 ## Getting set up
 
 ```bash
-git clone git@github.com:Optibus/second-brain.git ~/dev/second-brain
-cd ~/dev/second-brain
+git clone git@github.com:Optibus/memory-ledger.git ~/dev/memory-ledger
+cd ~/dev/memory-ledger
 mkdir -p ~/.second_brain
 python3 scripts/graph.py init
 python3 scripts/graph.py stats
@@ -44,7 +44,7 @@ Every path respects `SECOND_BRAIN_HOME`, so this is fully isolated.
 Try it in one session without installing:
 
 ```bash
-claude --plugin-dir ~/dev/second-brain
+claude --plugin-dir ~/dev/memory-ledger
 ```
 
 ## Layout

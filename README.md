@@ -7,8 +7,14 @@ next-steps, sets real alarms, and reaches your other tools. It records as you
 work and keeps what is still open: what you owe, to whom, by when.
 
 > **Install:** see [INSTALL.md](INSTALL.md) — `/plugin marketplace add` this repo,
-> `/plugin install second-brain@second-brain`, then `mkdir -p ~/.second_brain`.
-> The repo and plugin id stay `second-brain`; the command is `/ledger`.
+> `/plugin install memory-ledger@memory-ledger`, then `mkdir -p ~/.second_brain`.
+> The command is `/ledger`.
+>
+> **Renamed in 0.7.0.** The repo, the marketplace and the plugin id were all
+> `second-brain` until 0.6.0 and are now `memory-ledger`, matching the product
+> name. Existing installs must reinstall, see
+> [INSTALL.md](INSTALL.md#upgrading-from-second-brain). Your brain is untouched:
+> it lives in `~/.second_brain`, outside the plugin, and keeps that path.
 >
 > **Building on it?** [`docs/`](docs/README.md) is the developer reference —
 > [the algorithm](docs/algorithm.md), [query methods](docs/queries.md),
@@ -496,7 +502,7 @@ use `--host 0.0.0.0` (behind a tunnel) to reach it from your phone. The dashboar
 See **[INSTALL.md](INSTALL.md)** for the full flow. In short:
 
 **Claude Code** — install as a plugin (marketplace add this repo →
-`/plugin install second-brain@second-brain`), then `mkdir -p ~/.second_brain`. Enabling
+`/plugin install memory-ledger@memory-ledger`), then `mkdir -p ~/.second_brain`. Enabling
 at user level makes it active in every session. Talk to it with `/ledger ...` or
 invoke skills by name.
 
@@ -505,9 +511,9 @@ runs in the sandbox; keep memory portable via `~/.second_brain/` or a connected
 persistent location.
 
 **No repo access** — `python3 scripts/bundle.py` builds
-`dist/second-brain-<version>.zip` from the git-tracked files (no brain data), with
+`dist/memory-ledger-<version>.zip` from the git-tracked files (no brain data), with
 an `INSTALL-FROM-ZIP.md` inside. Unzipping is the install: a plugin loads from a
-directory, so `/plugin marketplace add ~/dev/second-brain` works on a local copy
+directory, so `/plugin marketplace add ~/dev/memory-ledger` works on a local copy
 with no marketplace or GitHub permission.
 
 **A local neo4j (optional)** — `/neo4j-up`, or

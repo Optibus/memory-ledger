@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Build a self-contained zip of the plugin — installable with no repo access.
 
-    python3 scripts/bundle.py                 # dist/second-brain-<version>.zip
+    python3 scripts/bundle.py                 # dist/memory-ledger-<version>.zip
     python3 scripts/bundle.py --out ~/Desktop # somewhere else
     python3 scripts/bundle.py --list          # what would go in
 
-Why this exists: `/plugin marketplace add Optibus/second-brain` needs the person
+Why this exists: `/plugin marketplace add Optibus/memory-ledger` needs the person
 to be able to read the GitHub repo. Until that access is granted, a zip is the
 whole plugin — Claude Code installs a plugin from a **directory**, so unzipping is
 the install (`INSTALL-FROM-ZIP.md`, generated into the archive, is the whole
@@ -14,7 +14,7 @@ procedure).
 What goes in: every git-tracked file (so `.gitignore` is honoured and no
 generated deck, brain data, or eval case can ride along), plus a generated
 `INSTALL-FROM-ZIP.md` and `BUNDLE.txt` manifest. Files are laid out under a
-single top-level `second-brain/` directory so unzipping never spills into the
+single top-level `memory-ledger/` directory so unzipping never spills into the
 current directory.
 
 **It contains no brain data.** The graph lives in `~/.second_brain`, outside the
@@ -83,9 +83,9 @@ from a **directory**, so unzipping is most of the install.
 ## 1. Unpack
 
 ```
-unzip second-brain-{version}.zip -d ~/dev
+unzip memory-ledger-{version}.zip -d ~/dev
 ```
-You now have `~/dev/second-brain/`. Anywhere is fine — the paths below just have
+You now have `~/dev/memory-ledger/`. Anywhere is fine — the paths below just have
 to match where you put it.
 
 ## 2. Prerequisites
@@ -103,14 +103,14 @@ The zip contains the plugin's own marketplace manifest
 like the GitHub one. In Claude Code:
 
 ```
-/plugin marketplace add ~/dev/second-brain
-/plugin install second-brain@second-brain
+/plugin marketplace add ~/dev/memory-ledger
+/plugin install memory-ledger@memory-ledger
 ```
 
 Prefer to try it for one session without installing:
 
 ```
-claude --plugin-dir ~/dev/second-brain
+claude --plugin-dir ~/dev/memory-ledger
 ```
 
 Restart the session (or `/reload-plugins`) afterwards.
@@ -122,7 +122,7 @@ silently before that. Create it once:
 
 ```
 mkdir -p ~/.second_brain
-python3 ~/dev/second-brain/scripts/graph.py init
+python3 ~/dev/memory-ledger/scripts/graph.py init
 ```
 
 Set your timezone once (Settings in the UI, or `export SECOND_BRAIN_TZ=...`), and
@@ -134,16 +134,16 @@ offline, connected to nothing.
 ```
 /plugin                                        # listed + enabled
 /ledger what's on my plate
-python3 ~/dev/second-brain/scripts/graph.py list --type capture --all --limit 5
+python3 ~/dev/memory-ledger/scripts/graph.py list --type capture --all --limit 5
 ```
 
 ## 6. Optional extras
 
-- **The map + dashboard:** `python3 ~/dev/second-brain/viz/serve.py` →
+- **The map + dashboard:** `python3 ~/dev/memory-ledger/viz/serve.py` →
   <http://127.0.0.1:8770>.
 - **A local neo4j** for graph queries (Docker, data under
   `~/.second_brain/neo4j`, restarts unless stopped):
-  `python3 ~/dev/second-brain/scripts/neo4j_local.py up` — or `/neo4j-up` inside
+  `python3 ~/dev/memory-ledger/scripts/neo4j_local.py up` — or `/neo4j-up` inside
   Claude Code. Entirely optional; SQLite is the default and is enough.
 {extras_note}
 
@@ -153,7 +153,7 @@ This zip is a snapshot ({commit}, {date}). When repo access lands, switch to
 the tracked copy and you get updates with `git pull`:
 
 ```
-git clone git@github.com:Optibus/second-brain.git ~/dev/second-brain
+git clone git@github.com:Optibus/memory-ledger.git ~/dev/memory-ledger
 ```
 (Move the zip copy aside first. `~/.second_brain` is outside the repo, so your
 brain survives either way.)
@@ -174,7 +174,7 @@ def extras_note(extras: list[str]) -> str:
 def manifest(files: list[str], info: dict, ver: str, extras: list[str] | None = None) -> str:
     extras = extras or []
     lines = [
-        "Memory Ledger (second-brain) — offline bundle",
+        "Memory Ledger (memory-ledger) — offline bundle",
         f"version      {ver}",
         f"built        {datetime.now(timezone.utc).isoformat(timespec='seconds')}",
         f"commit       {info.get('commit', 'unknown')}"

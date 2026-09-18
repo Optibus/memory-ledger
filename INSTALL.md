@@ -4,10 +4,17 @@ Memory Ledger is a Claude Code plugin. Installing it makes its skills, the
 `/ledger` command, and the always-on capture hooks available **globally** (every
 project, every session). It works in Claude Code and the Claude app.
 
-> **Two names, on purpose.** The product is **Memory Ledger** and the command is
-> `/ledger`. The repo, the marketplace and the plugin id stay **`second-brain`**,
-> so every install line below is unchanged and existing installs keep working.
-> `/brain` was the old command name and is gone — use `/ledger`.
+> **One name now.** The product, the repo, the marketplace and the plugin id are
+> all **`memory-ledger`**, and the command is `/ledger`. They were `second-brain`
+> up to 0.6.0. `/brain` was the old command name and is gone.
+>
+> **The brain keeps its own name.** Your memory lives in `~/.second_brain` and is
+> addressed by `$SECOND_BRAIN_HOME` / `$SECOND_BRAIN_DB`. None of that moved, and
+> none of it should: the brain is your data, not the plugin. Renaming the plugin
+> does not touch a single node.
+>
+> Already running the old plugin? See
+> [Upgrading from second-brain](#upgrading-from-second-brain).
 
 ## Prerequisites
 
@@ -25,23 +32,23 @@ so you add the repo as a marketplace, then install from it.
 **From a local clone** (what you'll do on your own machines):
 
 ```
-git clone git@github.com:Optibus/second-brain.git ~/dev/second-brain
+git clone git@github.com:Optibus/memory-ledger.git ~/dev/memory-ledger
 ```
 then, inside Claude Code:
 ```
-/plugin marketplace add ~/dev/second-brain
-/plugin install second-brain@second-brain
+/plugin marketplace add ~/dev/memory-ledger
+/plugin install memory-ledger@memory-ledger
 ```
 
 **From GitHub directly** (no manual clone):
 ```
-/plugin marketplace add Optibus/second-brain
-/plugin install second-brain@second-brain
+/plugin marketplace add Optibus/memory-ledger
+/plugin install memory-ledger@memory-ledger
 ```
 
 **Dev mode** (try it for one session without installing):
 ```
-claude --plugin-dir ~/dev/second-brain
+claude --plugin-dir ~/dev/memory-ledger
 ```
 
 Restart the session (or run `/reload-plugins`) after installing.
@@ -71,7 +78,7 @@ silently until then, so create it once:
 
 ```
 mkdir -p ~/.second_brain
-python3 ~/dev/second-brain/scripts/graph.py init
+python3 ~/dev/memory-ledger/scripts/graph.py init
 ```
 
 - Home dir: `~/.second_brain` (override with `$SECOND_BRAIN_HOME`; exact DB file with
@@ -96,7 +103,7 @@ speed — measured, it costs ~850 MiB resident against 26 MiB. Read
 [docs/neo4j.md](docs/neo4j.md) before turning it on.
 
 ```
-python3 ~/dev/second-brain/scripts/neo4j_local.py up     # or /neo4j-up in Claude Code
+python3 ~/dev/memory-ledger/scripts/neo4j_local.py up     # or /neo4j-up in Claude Code
 ```
 
 Idempotent, and it does the whole job: a `neo4j:5` container with
@@ -107,8 +114,8 @@ generated into `~/.second_brain/neo4j.json` (chmod 600, never printed), the
 Needs Docker; nothing else.
 
 ```
-python3 ~/dev/second-brain/scripts/neo4j_local.py status
-python3 ~/dev/second-brain/scripts/neo4j_local.py down      # stops, and stays stopped
+python3 ~/dev/memory-ledger/scripts/neo4j_local.py status
+python3 ~/dev/memory-ledger/scripts/neo4j_local.py down      # stops, and stays stopped
 ```
 
 If a master is **already** configured, `up` refuses to repoint it until you pass
@@ -217,14 +224,14 @@ python3 tests/test_traceability.py
 
 ## No repo access? Install from a zip
 
-`/plugin marketplace add Optibus/second-brain` needs the person to be able to read
+`/plugin marketplace add Optibus/memory-ledger` needs the person to be able to read
 the GitHub repo. Until that access exists, hand them a zip — Claude Code installs a
 plugin from a **directory**, so unzipping *is* the install.
 
 Build one:
 
 ```
-python3 scripts/bundle.py                  # dist/second-brain-<version>.zip
+python3 scripts/bundle.py                  # dist/memory-ledger-<version>.zip
 python3 scripts/bundle.py --list           # what would go in
 python3 scripts/bundle.py --out ~/Desktop
 python3 scripts/bundle.py --include ~/.second_brain/exports/<your-doc>.md
@@ -246,14 +253,14 @@ so the recipient can tell the plugin from what you attached to it. Repeatable.
 The recipient runs:
 
 ```
-unzip second-brain-<version>.zip -d ~/dev
+unzip memory-ledger-<version>.zip -d ~/dev
 ```
 then, in Claude Code:
 ```
-/plugin marketplace add ~/dev/second-brain
-/plugin install second-brain@second-brain
+/plugin marketplace add ~/dev/memory-ledger
+/plugin install memory-ledger@memory-ledger
 ```
-`mkdir -p ~/.second_brain && python3 ~/dev/second-brain/scripts/graph.py init`, and
+`mkdir -p ~/.second_brain && python3 ~/dev/memory-ledger/scripts/graph.py init`, and
 they are running. No admin, no marketplace, no repo permission. When repo access
 lands they can clone over it and get updates with `git pull`; `~/.second_brain` is
 outside the repo, so the brain survives the swap.
@@ -265,10 +272,42 @@ calls at the end, then attach it with `--include`. The recipient's agent then pu
 only the rules that match what they are doing (`match-rules`) instead of reading the
 whole document.
 
-## Uninstall
+## Upgrading from second-brain
+
+The plugin id changed in **0.7.0**, so Claude Code treats it as a different
+plugin. Nothing migrates automatically, and the old one keeps working until you
+remove it, which means both can be installed at once and their skills will
+collide. Remove the old one first:
 
 ```
 /plugin uninstall second-brain@second-brain
+/plugin marketplace remove second-brain
+```
+then install the new one as in step 1.
+
+**What changes for you:** skills and commands are invoked under the new prefix.
+`/second-brain:plan-today` becomes `/memory-ledger:plan-today`, and the same for
+every other skill. `/ledger` is unchanged.
+
+**What does not change:** your brain. Every node, edge, rule and learned skill
+lives in `~/.second_brain/graph.db`, outside the plugin, and is untouched by the
+rename. Do not delete that directory, and do not rename it: `$SECOND_BRAIN_HOME`,
+`$SECOND_BRAIN_DB` and every path in the docs still point there on purpose.
+
+**If you cloned the repo**, the remote moved too. Repoint it rather than
+re-cloning, so your local history and branches survive:
+
+```
+git remote set-url origin git@github.com:Optibus/memory-ledger.git
+```
+GitHub redirects the old URL, so a stale remote keeps working silently and you
+will not notice it is wrong. The local directory name does not matter: the plugin
+resolves itself from `$CLAUDE_PLUGIN_ROOT`, never from what the folder is called.
+
+## Uninstall
+
+```
+/plugin uninstall memory-ledger@memory-ledger
 ```
 Your brain data in `~/.second_brain` is left untouched (delete that dir to remove it).
 A local neo4j container is separate: `python3 scripts/neo4j_local.py down --remove`,

@@ -1,11 +1,11 @@
 {
-  "name": "second-brain",
+  "name": "memory-ledger",
   "owner": {
     "name": "Gabriel Nori"
   },
   "plugins": [
     {
-      "name": "second-brain",
+      "name": "memory-ledger",
       "source": "./",
       "description": "Memory Ledger — an external working memory: a graph brain (SQLite mirror + optional neo4j master) with skills for tasks/reminders/calendar/email/Slack/Jira, always-on token-free capture, and a live map + dashboard. Drive it in any language with /ledger from Slack, Claude Code, or the Claude app."
     }
