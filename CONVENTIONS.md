@@ -406,6 +406,13 @@ the `POST` when it is unchanged — a change handler on a pre-filled field can f
 on a bare focus+blur, and a no-op write would churn `updated` and the mirror sync
 for nothing.
 
+**A client hanging up is not an error.** The map re-reads `/api/graph` every
+couple of seconds, so a reload or a closed tab aborts a response mid-write and
+Python raises from the socket. The server treats that as normal: the handler
+returns silently, and the error path never tries to report a 500 down the socket
+that just closed, which is what turned one aborted poll into two stacked
+tracebacks in the log.
+
 **Writes are unauthenticated.** They are bound to `127.0.0.1` by default. If you
 expose the UI (`--host 0.0.0.0` for phone access), pass **`--no-write`**: every
 `POST` then returns 403 and the UI hides its editing controls (`/api/meta`

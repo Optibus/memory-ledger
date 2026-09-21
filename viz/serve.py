@@ -311,6 +311,23 @@ def status_payload() -> dict:
     }
 
 
+# The browser hanging up mid-response is NORMAL here, not an error: the map
+# re-reads /api/graph every couple of seconds, and a reload, a tab close or a
+# navigation aborts whatever was in flight. Python raises it from the socket
+# write, and the default handling printed a full traceback per occurrence —
+# which buried the one line that mattered when something was actually wrong.
+CLIENT_GONE = (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)
+
+
+class QuietServer(ThreadingHTTPServer):
+    """A ThreadingHTTPServer that does not shout when a client walks away."""
+
+    def handle_error(self, request, client_address):
+        if isinstance(sys.exc_info()[1], CLIENT_GONE):
+            return
+        super().handle_error(request, client_address)
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, code, body, ctype):
         data = body.encode("utf-8") if isinstance(body, str) else body
@@ -320,6 +337,19 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(data)
+
+    def _fail(self, exc):
+        """Report a handler error to the client, unless the client is the reason.
+
+        Trying to write a 500 down a socket that just closed raises a SECOND
+        exception out of the error path, which is what turned one aborted poll
+        into two stacked tracebacks."""
+        if isinstance(exc, CLIENT_GONE):
+            return
+        try:
+            self._send(500, json.dumps({"error": str(exc)}), "application/json")
+        except CLIENT_GONE:
+            pass
 
     def do_GET(self):
         from urllib.parse import urlparse, parse_qs
@@ -424,7 +454,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(404, json.dumps({"error": "not found"}),
                            "application/json")
         except Exception as e:  # keep the server alive, report to client
-            self._send(500, json.dumps({"error": str(e)}), "application/json")
+            self._fail(e)
 
     # the off-token dashboard views, reusing the exact CLI query layer
     def _dashboard(self, view, qs):
@@ -449,12 +479,16 @@ class Handler(BaseHTTPRequestHandler):
                 opts[k] = val not in ("0", "false", "no")
             else:
                 opts[k] = val
+        # Run the query BEFORE opening the response: wrapping the send meant a
+        # client that hung up mid-write was reported as a bad query, and the 400
+        # went down the same dead socket.
         try:
-            self._send(200, json.dumps(brain_query.run_json(view, **opts)),
-                       "application/json")
+            payload = json.dumps(brain_query.run_json(view, **opts))
         except Exception as e:
             self._send(400, json.dumps({"ok": False, "error": str(e)}),
                        "application/json")
+            return
+        self._send(200, payload, "application/json")
 
     def _search(self, term, q):
         limit = 12
@@ -517,8 +551,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200 if res.get("ok") else 400,
                        json.dumps(res), "application/json")
         except Exception as e:
-            self._send(500, json.dumps({"ok": False, "error": str(e)}),
-                       "application/json")
+            self._fail(e)
 
     @staticmethod
     def _str(data, key, limit=4000):
@@ -859,7 +892,7 @@ def main():
 
     graph.connect().close()  # ensure the brain exists
     url = f"http://{args.host}:{args.port}/"
-    httpd = ThreadingHTTPServer((args.host, args.port), Handler)
+    httpd = QuietServer((args.host, args.port), Handler)
     # a restart re-execs with the same argv; don't open a new tab each time
     respawned = os.environ.pop("SECOND_BRAIN_VIZ_RESPAWN", "") == "1"
     if not respawned:

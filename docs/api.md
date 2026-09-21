@@ -128,6 +128,12 @@ curl -s localhost:8770/api/set-due \
 Validation is server-side and explicit — an invalid `status` comes back with the
 allowed set in the error string rather than being silently coerced.
 
+**A disconnected client is not a 500.** The map polls, so a reload aborts a
+response mid-write. The server returns silently rather than reporting the error
+back down a socket that has already closed, which would raise a second exception
+out of the error path. A genuine handler bug still comes back as a 500 with its
+reason, and the server stays up either way.
+
 ---
 
 ## Settings
