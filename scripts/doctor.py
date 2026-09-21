@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -69,7 +70,18 @@ def check_paths():
     home_exists = home.exists()
     db_exists = db.exists()
     db_size = db.stat().st_size if db_exists else 0
+    # How home is reached matters more than where it is. A symlink means this
+    # machine predates the rename and was adopted; two real directories mean
+    # two separate brains, and only a human can say which one is the brain.
+    link = None
+    if home.is_symlink():
+        try:
+            link = os.readlink(str(home))
+        except OSError:
+            link = "?"
+    strays = [str(x) for x in G.legacy_homes()]
     return {"ok": db_exists, "home": str(home), "home_exists": home_exists,
+            "home_link": link, "legacy_homes": strays,
             "db": str(db), "db_exists": db_exists, "db_size_bytes": db_size,
             "error": None if db_exists else "no graph.db — nothing has ever "
                      "connected here (or MEMORY_LEDGER_HOME/DB points at the "
@@ -253,10 +265,16 @@ def render_human(report: dict) -> str:
     lines.append("Paths:")
     if p.get("ok") is not None:
         lines.append(f"  home: {p.get('home')}  ({'exists' if p.get('home_exists') else 'MISSING'})")
+        if p.get("home_link"):
+            lines.append(f"        → {p['home_link']}  (adopted from the pre-rename name)")
         if p.get("db_exists"):
             lines.append(f"  db:   {p.get('db')}  (exists, {p.get('db_size_bytes')} bytes)")
         else:
             lines.append(f"  db:   {p.get('db')}  {bad} MISSING — {p.get('error')}")
+        # Not a warning by itself -- someone may keep an old brain on purpose --
+        # but it is the one thing that silently explains "my notes vanished".
+        for stray in p.get("legacy_homes") or []:
+            lines.append(f"  {warn} another brain at {stray}, not the one in use")
 
     c = report["config"]
     lines.append("")

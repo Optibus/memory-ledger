@@ -15,7 +15,8 @@ work and keeps what is still open: what you owe, to whom, by when.
 > `second-brain` until 0.6.0 and are now `memory-ledger`, matching the product
 > name. Existing installs must reinstall, see
 > [INSTALL.md](INSTALL.md#upgrading-from-second-brain). Your brain is untouched:
-> it lives in `~/.second_brain`, outside the plugin, and keeps that path.
+> the data stays exactly where it is, and `~/.memory-ledger` is pointed at it
+> with a symlink so both names reach the same graph.
 >
 > **Building on it?** [`docs/`](docs/README.md) is the developer reference —
 > [the algorithm](docs/algorithm.md), [query methods](docs/queries.md),
@@ -34,9 +35,11 @@ head, and everything is one link away from its context.
 Storage is a single **SQLite** file — fast to query, trivial to back up, and
 exportable to readable Markdown or JSON any time.
 
-The brain is **global and lives outside any repo**, at `~/.second_brain` (override
-with `$SECOND_BRAIN_HOME`), so every project on your machine shares one brain and
-it's never committed:
+The brain is **global and lives outside any repo**, at `~/.memory-ledger`
+(override with `$MEMORY_LEDGER_HOME`), so every project on your machine shares one
+brain and it's never committed. On any machine that predates the rename that name
+is a symlink to the original `~/.second_brain`, which is still where the bytes
+are — nothing was moved, and both paths work:
 
 ```
 ~/.second_brain/

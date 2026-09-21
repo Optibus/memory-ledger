@@ -9,7 +9,8 @@ run a setup command the plugin itself could trivially run.
 
 This hook removes that step. `graph.connect()` already creates the home dir
 and the schema if they don't exist, so "initialize the ledger" is just calling
-it once. Firing this on every SessionStart makes init happen transparently on
+it once. It also adopts the canonical home (`~/.memory-ledger`), symlinking it
+to a pre-rename `~/.second_brain` when that is where the data actually is. Firing this on every SessionStart makes init happen transparently on
 first use and is a cheap no-op (open a SQLite connection, check the schema)
 every time after.
 
@@ -37,6 +38,12 @@ def main():
     try:
         if graph.disabled():
             return  # explicitly off -> never resurrect, never touch disk
+        # Point ~/.memory-ledger at the pre-rename ~/.second_brain if that is
+        # where the brain actually lives. A symlink, not a move: nothing is
+        # copied and every absolute path already baked into a cron or a backup
+        # job keeps resolving. No-op once adopted, and a failure here is
+        # deliberately silent -- the legacy path still resolves on its own.
+        graph.adopt_canonical_home()
         graph.connect().close()
     except Exception:
         pass  # a broken bootstrap must never block a session

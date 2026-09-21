@@ -8,10 +8,12 @@ project, every session). It works in Claude Code and the Claude app.
 > all **`memory-ledger`**, and the command is `/ledger`. They were `second-brain`
 > up to 0.6.0. `/brain` was the old command name and is gone.
 >
-> **The brain keeps its own name.** Your memory lives in `~/.second_brain` and is
-> addressed by `$SECOND_BRAIN_HOME` / `$SECOND_BRAIN_DB`. None of that moved, and
-> none of it should: the brain is your data, not the plugin. Renaming the plugin
-> does not touch a single node.
+> **Your data does not move.** Your memory lives in `~/.second_brain` and stays
+> there. `~/.memory-ledger` is the name the tools use now, and on an existing
+> machine it is a **symlink** to that directory, created on your next session —
+> both paths reach the same graph. `$SECOND_BRAIN_HOME` / `$SECOND_BRAIN_DB` keep
+> working alongside the `$MEMORY_LEDGER_*` names. Renaming the plugin does not
+> touch a single node.
 >
 > Already running the old plugin? See
 > [Upgrading from second-brain](#upgrading-from-second-brain).
@@ -201,9 +203,20 @@ already have exported breaks.
 - `$MEMORY_LEDGER_REALM` (was `$SECOND_BRAIN_REALM`) — default section for new
   nodes (`optibus`, `personal`, ...).
 
-**The home directory itself is still `~/.second_brain`** — that path was
-deliberately *not* renamed in this release, so there is no data migration to
-do. Don't go looking for `~/.memory_ledger`; it doesn't exist.
+**The home directory is now `~/.memory-ledger`, and your data still isn't
+moving.** On a machine that predates the rename, the first session creates
+`~/.memory-ledger` as a *symlink* to the existing `~/.second_brain`. Nothing is
+copied, nothing is renamed, and every absolute path you have already baked into a
+cron job, a backup or a `$SECOND_BRAIN_DB` keeps resolving. Both names work, and
+so do `$MEMORY_LEDGER_HOME` and `$SECOND_BRAIN_HOME`.
+
+A fresh machine, with no previous brain, just gets a real `~/.memory-ledger`
+directory. Run `/ledger doctor` to see which case you are in — it prints the home
+it resolved and, when it is a link, what it points at.
+
+If you would rather keep the old name as the real path and skip the link
+entirely, set `$MEMORY_LEDGER_HOME=~/.second_brain`; an explicit override outranks
+all of this and no symlink is created.
 
 ## 5. What turns on automatically (no model call)
 

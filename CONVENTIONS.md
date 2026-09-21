@@ -91,9 +91,25 @@ Storage is one SQLite file. Never write SQL yourself — always go through:
 python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" <command> [flags]
 ```
 
-**The brain is global and lives OUTSIDE any repo.** Its home is `~/.second_brain`
-(override with `$SECOND_BRAIN_HOME`), so every project on the machine shares one
-brain. It is never committed. The home holds:
+**The brain is global and lives OUTSIDE any repo.** Its home is
+`~/.memory-ledger` (override with `$MEMORY_LEDGER_HOME`, or the legacy
+`$SECOND_BRAIN_HOME`), so every project on the machine shares one brain. It is
+never committed.
+
+**The canonical name is a door, not a move.** The home used to be
+`~/.second_brain`, and on every machine that predates the rename that is still
+where the data physically is. `adopt_canonical_home()` in `scripts/_switch.py`
+symlinks `~/.memory-ledger` at it rather than renaming the directory, because a
+move would strand every absolute path a user has already baked into a cron, a
+backup job or a `$SECOND_BRAIN_DB`. The link is **relative**, so it survives the
+home directory itself moving. Resolution accepts `.memory-ledger`,
+`.memory_ledger`, `.second_brain` and `.second-brain`, newest first — a near-miss
+should find the brain that exists rather than quietly start an empty second one.
+Adoption runs once per session from `hooks/bootstrap.py` and from `graph.py init`;
+`home_dir()` itself never writes, because a resolver called from every read path
+must not touch the disk. If two of those names are **real directories**, that is
+two brains and only a human can say which is the brain: the canonical one is used
+and `doctor` reports the other, never merging or deleting either. The home holds:
 
 ```
 ~/.second_brain/
