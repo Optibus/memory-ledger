@@ -251,9 +251,43 @@ Two tabs over one dataset:
   the edges. Cards expand on click (`/api/node`), and the date chip opens a picker
   that writes via `/api/set-due`.
 
+### shade instead of hide
+
+The filters pick **which** nodes fall out. This toggle picks what falling out
+**looks like**, and the split matters because the two modes answer different
+questions. Hiding answers *"get this out of my way"*: the node leaves the canvas,
+drops out of the force simulation, and the layout closes the gap. Shading answers
+*"show me just this"*: the node stays exactly where it is, dimmed to 20% with its
+edges dimmed alongside it, and the graph keeps its shape so what you kept can be
+read in context instead of floating alone.
+
+One predicate feeds both, which is what keeps them honest:
+
+```js
+function filteredOut(n){ return directHidden(n) || cascadeOff.has(n.id); }
+function hidden(n){ return !shade && filteredOut(n); }
+function shaded(n){ return  shade && filteredOut(n); }
+```
+
+Every filter — the three facet dropdowns, hide-done, and the cascade below —
+computes `filteredOut` and nothing else, so none of them knows the mode exists and
+flipping it can never change *which* nodes are affected, only how they are painted.
+
+Two rules make shading readable rather than just dimmer:
+
+- **A shaded node loses its label.** It keeps its dot and its edges, which is the
+  shape it was kept for, but a few thousand dimmed labels over the handful you
+  isolated is noise, not context. Selected, hovered and search-hit nodes keep theirs.
+- **A search hit stays lit.** You asked for it by name; dimming it because a type
+  filter also excluded it would read as *"no results"* rather than *"filtered out"*.
+
+An edge is only as lit as its dimmer end — one shaded endpoint dims the edge —
+or a shaded node would stay wired into the lit graph by full-strength lines and
+read as part of it.
+
 ### drop unsupported
 
-The map's second toggle turns the filters from *hiding* into *unwinding*. Normally
+The map's other filter toggle turns the filters from *hiding* into *unwinding*. Normally
 hiding a type or realm leaves its dependants floating with nothing attached. With
 **drop unsupported** on, a node survives only while at least one edge still points
 at it from something visible. A node nothing points at is a root, and only the
@@ -267,7 +301,9 @@ hide A        B goes with it (A was its only support).
 hide A and E  B falls, then C, then D — the whole chain unwinds.
 ```
 
-It runs to a fixpoint, because order matters: C has to fall before D can. Cycles
+It runs on the filter, not on what is drawn, so shade mode reaches exactly the
+same set — the unwound nodes are dimmed rather than removed. It runs to a
+fixpoint, because order matters: C has to fall before D can. Cycles
 hold each other up and so are never cascaded away on their own; a self-loop does
 not count as support. The result is cached in `cascadeOff` and recomputed only
 when a filter or the graph changes — never per frame. On an 830-node / 1393-edge
