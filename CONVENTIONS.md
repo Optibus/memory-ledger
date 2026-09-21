@@ -428,6 +428,16 @@ only; the button says what the closed menu is doing (`all`, `none`, `4/9`). Noth
 in there is hardcoded: the options and their counts come from `/api/graph` meta, so
 a realm or kind invented today is a filter on the next poll.
 
+**A filter decides which nodes fall out; Display decides what that looks like.**
+The two are separate questions and the UI keeps them separate: hiding answers "get
+this out of my way" and the layout closes the gap, **shade instead of hide** answers
+"show me just this" and leaves the rest dimmed in place. The set is identical either
+way — every filter, the cascade included, obeys the choice without knowing about it,
+so flipping it never changes *which* nodes are affected. Shaded nodes keep their dot
+and their edges and lose their label, because a few thousand dimmed labels over the
+handful you isolated is noise rather than context; a search hit keeps both, since
+dimming what you just asked for by name reads as "no results".
+
 **Settings are server-side, in `<home>/settings.json`.** `tz`, `realm`,
 `map_poll_seconds`, `dash_refresh_seconds` — read by the CLI, the hooks and any
 cron over the same brain, because a preference only one browser knows is not a

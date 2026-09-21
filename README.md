@@ -442,8 +442,11 @@ hamburger menu on the left (`m` toggles it):
 
 - **Map** — the live force-directed graph: zoom/pan, a search you can clear, and
   one multi-select dropdown per facet (node types / realms / kinds / display),
-  each with its own **all** and **none**. Click any node to inspect every
-  connection and its direction. Polls the DB so changes appear in real time. The
+  each with its own **all** and **none**. Under Display, **shade instead of hide**
+  changes what filtering *looks like*: filtered-out nodes stay on the map, dimmed
+  and unlabelled, so what you kept can be read against the shape it sits in rather
+  than in isolation. Same set either way — a search hit stays lit through it.
+  Click any node to inspect every connection and its direction. Polls the DB so changes appear in real time. The
   inspect card is also where you **act on** what it's showing, so working in the
   graph never means leaving it:
   - `✓ Complete` on a `task`, `subtask` or `reminder` — archived, not deleted.
