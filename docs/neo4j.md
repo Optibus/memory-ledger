@@ -30,15 +30,17 @@ Nothing breaks if neo4j is absent — the outbox simply accumulates and
 | Concurrent writers | single-writer, `database is locked` | proper transactions |
 | Visual exploration | the bundled map UI | neo4j Browser / Bloom |
 | Backup | copy a file | standard dumps |
-| Resident memory (measured, same brain) | **26 MiB** | **836–862 MiB** |
+| Resident memory (measured, same brain) | **26 MiB** | **~430–460 MiB** (492 MiB empty) |
 | Read latency (measured, same brain) | **0.03–0.07 ms** in-process | **7–17 ms** over localhost HTTP |
 | Cost at 250k nodes | broad search ~440 ms (see [performance](performance.md#scaling)) | indexed, and traversal is its native case |
 
-**Measured, so do not guess at this.** The real brain (623 nodes) synced into a
-local neo4j costs ~850 MiB resident and 7–17 ms per query, against 26 MiB and
-0.03 ms for SQLite. That cost is **fixed** — it comes from the JVM heap, the page
-cache and an HTTP round trip, not from graph size, so it does not amortise as the
-graph grows. Full table in [comparison.md](comparison.md#measured-sqlite-vs-neo4j-same-brain-same-questions).
+**Measured, so do not guess at this.** The real brain synced into a local neo4j
+costs ~450 MiB resident and 7–17 ms per query, against 26 MiB and 0.03 ms for
+SQLite. That cost is **fixed** — it comes from the JVM heap, the page cache and an
+HTTP round trip, not from graph size, so it does not amortise as the graph grows.
+An empty container with zero nodes already costs 492 MiB and 516 MB of disk; the
+brain's 647 nodes add 736 KB. Tuning `heap_max` and `pagecache_size` down moves the
+floor. Full table in [comparison.md](comparison.md#measured-sqlite-vs-neo4j-same-brain-same-questions).
 
 The honest summary: **for one person's brain, SQLite is enough and the map UI is
 good enough.** The reason to add neo4j is **query shape, not node count** — the
