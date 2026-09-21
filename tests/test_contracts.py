@@ -673,8 +673,125 @@ def test_web_odd_shapes():
         shutil.rmtree(home, ignore_errors=True)
 
 
+# ------------------------------------------------------- where home is
+def test_home_adoption():
+    """`~/.memory-ledger` is the canonical home and `~/.second_brain` is where
+    the data actually is on any machine that predates the rename. The bridge is
+    a symlink, so the thing that must never happen is a second, empty brain
+    appearing while the real one sits unreachable beside it."""
+    print("\n== the canonical home adopts the legacy one without moving data ==")
+    import _switch
+
+    def run(setup, env=None):
+        """One case, in its own fake $HOME. Returns (resolved home, action,
+        link target or None, stray legacy homes)."""
+        fake = tempfile.mkdtemp(prefix="home-case-")
+        saved = {k: os.environ.get(k) for k in
+                 ("HOME", "MEMORY_LEDGER_HOME", "SECOND_BRAIN_HOME")}
+        for k in ("MEMORY_LEDGER_HOME", "SECOND_BRAIN_HOME"):
+            os.environ.pop(k, None)
+        os.environ["HOME"] = fake
+        if env:
+            os.environ.update(env)
+        try:
+            setup(Path(fake))
+            action = _switch.adopt_canonical_home()["action"]
+            home = _switch.home_dir()
+            link = os.readlink(str(home)) if home.is_symlink() else None
+            return home, action, link, [p.name for p in _switch.legacy_homes()]
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+            shutil.rmtree(fake, ignore_errors=True)
+
+    home, action, link, _ = run(lambda h: None)
+    ck("a fresh machine gets a real directory at the canonical name",
+       action == "created" and home.name == ".memory-ledger" and link is None, action)
+
+    home, action, link, strays = run(lambda h: (h / ".second_brain").mkdir())
+    ck("a pre-rename machine is adopted by symlink, not by moving anything",
+       action == "linked" and home.name == ".memory-ledger" and link == ".second_brain",
+       f"{action} -> {link}")
+    ck("and the adopted legacy dir is not then reported as a stray brain",
+       strays == [], str(strays))
+
+    # Relative, so the link survives $HOME itself moving — a migrated account,
+    # a remounted volume, a launchd agent with a different HOME.
+    ck("the link is relative, so it survives the home directory moving",
+       link is not None and not link.startswith("/"), str(link))
+
+    for name in (".second-brain", ".memory_ledger"):
+        home, action, link, _ = run(lambda h, n=name: (h / n).mkdir())
+        ck(f"a brain at {name} is found and adopted, not ignored",
+           action == "linked" and link == name, f"{action} -> {link}")
+
+    home, action, link, _ = run(lambda h: ((h / ".second_brain").mkdir(),
+                                           (h / ".memory-ledger").symlink_to(".second_brain")))
+    ck("adoption is idempotent — a second session changes nothing",
+       action == "already" and link == ".second_brain", action)
+
+    home, action, link, strays = run(lambda h: ((h / ".second_brain").mkdir(),
+                                                (h / ".memory-ledger").mkdir()))
+    ck("two real brains: the canonical one wins and the other is reported, "
+       "never silently merged or deleted",
+       action == "already" and home.name == ".memory-ledger" and strays == [".second_brain"],
+       f"{action} strays={strays}")
+
+    home, action, link, _ = run(lambda h: (h / ".memory-ledger").symlink_to(".gone"))
+    ck("a dangling home is reported, not quietly recreated over",
+       action == "broken-link", action)
+
+    home, action, link, _ = run(lambda h: (h / ".second_brain").mkdir(),
+                                env={"MEMORY_LEDGER_HOME": "/tmp/explicit-brain"})
+    ck("an explicit $MEMORY_LEDGER_HOME outranks adoption entirely",
+       action == "skipped" and home.name == "explicit-brain", action)
+
+
+def test_home_adoption_keeps_the_data():
+    """The end of the story: a brain written before the rename is still the
+    brain being read after it, through the new name, with no second copy."""
+    print("\n== data written before the rename survives adoption ==")
+    fake = tempfile.mkdtemp(prefix="home-e2e-")
+    legacy = os.path.join(fake, ".second_brain")
+    os.makedirs(legacy)
+    g("init", home=legacy)
+    g("add-node", "--type", "note", "--title", "written before the rename", home=legacy)
+
+    saved = {k: os.environ.get(k) for k in
+             ("HOME", "MEMORY_LEDGER_HOME", "SECOND_BRAIN_HOME")}
+    for k in ("MEMORY_LEDGER_HOME", "SECOND_BRAIN_HOME"):
+        os.environ.pop(k, None)
+    os.environ["HOME"] = fake
+    try:
+        env = {**os.environ}
+        env.pop("MEMORY_LEDGER_HOME", None)
+        env.pop("SECOND_BRAIN_HOME", None)
+        subprocess.run([sys.executable, str(ROOT / "hooks" / "bootstrap.py")],
+                       input="{}", capture_output=True, text=True, env=env)
+        dbs = [str(p) for p in Path(fake).rglob("graph.db")]
+        ck("bootstrap created exactly one database, the one already there",
+           len(dbs) == 1 and ".second_brain" in dbs[0], str(dbs))
+        p = subprocess.run([sys.executable, str(ROOT / "scripts" / "graph.py"), "stats"],
+                           capture_output=True, text=True, env=env)
+        n = json.loads(p.stdout).get("nodes") if p.returncode == 0 else None
+        ck("and the pre-rename node is still there, read through the new name",
+           n == 1, f"nodes={n}")
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(fake, ignore_errors=True)
+
+
 def main():
     g("init")
+    test_home_adoption()
+    test_home_adoption_keeps_the_data()
     test_render_and_parse()
     test_refusals()
     sid, rid = test_authoring()

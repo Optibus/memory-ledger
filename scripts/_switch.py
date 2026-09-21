@@ -34,15 +34,126 @@ def _env(name: str, default: str = "") -> str:
             or default)
 
 
+# ---------------------------------------------------------------------------
+# where home is
+#
+# The product is `memory-ledger`, so the brain lives at `~/.memory-ledger`. It
+# used to live at `~/.second_brain`, and on most machines it still physically
+# does: adopt_canonical_home() points the new name at the old directory with a
+# symlink rather than moving anything. Nothing is copied, nothing is renamed,
+# and one directory of data keeps one identity on disk — which matters because
+# the alternative, a move, would strand every absolute path a user has already
+# baked into a cron, a backup job or a $SECOND_BRAIN_DB.
+#
+# Resolution accepts every spelling either name has plausibly been written in,
+# newest first. A near-miss (`.memory_ledger` when you meant `.memory-ledger`)
+# should find the brain that is there, not silently start an empty second one.
+# ---------------------------------------------------------------------------
+HOME_DIRNAME = ".memory-ledger"          # canonical
+
+# Recognised in this order. The first that exists wins, so the canonical name
+# always beats a legacy one when both are present.
+HOME_CANDIDATES = (
+    ".memory-ledger",
+    ".memory_ledger",
+    ".second_brain",                     # what it was actually called
+    ".second-brain",
+)
+
+
 def home_dir() -> Path:
     """The brain's home — a single global directory OUTSIDE any repo, so every
     project on the machine shares one brain (memory, learned skills, configs,
     routines, definitions). Override with $MEMORY_LEDGER_HOME (or the legacy
-    $SECOND_BRAIN_HOME). Default: ~/.second_brain."""
+    $SECOND_BRAIN_HOME). Default: ~/.memory-ledger, falling back to whichever
+    legacy name exists (~/.second_brain on any machine that predates the
+    rename).
+
+    Pure: this only ever reads the filesystem. Creating the directory, and
+    linking the canonical name to a legacy one, is adopt_canonical_home()'s
+    job — a resolver that writes to disk every time something asks it a
+    question is a resolver you cannot call from a read path."""
     env = _env("HOME")
     if env:
         return Path(env).expanduser()
-    return Path.home() / ".second_brain"
+    base = Path.home()
+    for name in HOME_CANDIDATES:
+        p = base / name
+        if p.exists():                   # follows the symlink, so a live link wins
+            return p
+    return base / HOME_DIRNAME           # fresh install: the canonical name
+
+
+def legacy_homes() -> list:
+    """Every recognised non-canonical home that exists on this machine, as real
+    directories rather than links to the canonical one. Normally empty (after
+    adoption the canonical name IS the legacy dir, reached through a symlink);
+    non-empty means two separate brains, which only a human can resolve."""
+    base = Path.home()
+    canonical = base / HOME_DIRNAME
+    try:
+        target = canonical.resolve() if canonical.exists() else None
+    except OSError:
+        target = None
+    out = []
+    for name in HOME_CANDIDATES[1:]:
+        p = base / name
+        if not p.exists():
+            continue
+        try:
+            if target is not None and p.resolve() == target:
+                continue                 # same directory, reached by two names
+        except OSError:
+            pass
+        out.append(p)
+    return out
+
+
+def adopt_canonical_home() -> dict:
+    """Make `~/.memory-ledger` the way in, without moving a byte.
+
+    Called once per session by hooks/bootstrap.py, and by `graph.py init`.
+    Idempotent, and never raises — a machine where the symlink cannot be created
+    (no permission, a filesystem without links) must keep working on the legacy
+    path, so every failure here degrades to "carry on as before".
+
+      env override set   -> do nothing; an explicit path outranks any default
+      canonical exists   -> do nothing
+      legacy exists      -> symlink canonical -> legacy
+      neither exists     -> mkdir canonical
+
+    Returns what it did, so `init` and `doctor` can say so out loud.
+    """
+    if _env("HOME"):
+        return {"action": "skipped", "reason": "$MEMORY_LEDGER_HOME/$SECOND_BRAIN_HOME is set"}
+    base = Path.home()
+    canonical = base / HOME_DIRNAME
+    try:
+        # A symlink whose target is gone: exists() is False but the name is
+        # taken, so mkdir would fail. Say so rather than papering over it —
+        # a dangling home is someone's deleted brain, not a thing to recreate.
+        if canonical.is_symlink() and not canonical.exists():
+            return {"action": "broken-link", "path": str(canonical),
+                    "points_at": os.readlink(str(canonical)),
+                    "reason": "the canonical home is a symlink to something that no longer exists"}
+        if canonical.exists():
+            return {"action": "already", "path": str(canonical)}
+        for name in HOME_CANDIDATES[1:]:
+            legacy = base / name
+            if legacy.exists():
+                # Relative (".second_brain", not "/Users/x/.second_brain") so the
+                # link survives the home directory itself moving — a migrated
+                # account, a remounted volume, a $HOME that differs between a
+                # login shell and a launchd agent. An absolute link would break
+                # in exactly the cases a symlink is supposed to survive.
+                canonical.symlink_to(legacy.name, target_is_directory=True)
+                return {"action": "linked", "path": str(canonical), "legacy": str(legacy)}
+        canonical.mkdir(parents=True, exist_ok=True)
+        return {"action": "created", "path": str(canonical)}
+    except Exception as e:                # never block a session over this
+        return {"action": "failed", "path": str(canonical),
+                "error": f"{type(e).__name__}: {e}",
+                "reason": "falling back to whichever home already resolves"}
 
 
 # ---------------------------------------------------------------------------

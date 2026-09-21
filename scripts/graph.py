@@ -36,6 +36,7 @@ from pathlib import Path
 # caller that already reads them through the engine.
 from _switch import (  # noqa: E402,F401
     _env, home_dir, disabled, enabled, DISABLE_MARKER, _OFF_TRUTHY,
+    HOME_DIRNAME, HOME_CANDIDATES, adopt_canonical_home, legacy_homes,
 )
 
 
@@ -626,8 +627,12 @@ def _parse_props(raw: str | None) -> dict:
 # commands
 # ---------------------------------------------------------------------------
 def cmd_init(args):
+    # Adopt first: on a machine that predates the rename this points
+    # ~/.memory-ledger at the existing ~/.second_brain, so the connect() below
+    # opens the brain that is already there instead of starting a second one.
+    home = adopt_canonical_home()
     connect().close()
-    out({"ok": True, "db": str(db_path())})
+    out({"ok": True, "db": str(db_path()), "home": home})
 
 
 def cmd_disable(args):
