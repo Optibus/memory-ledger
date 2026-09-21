@@ -247,9 +247,15 @@ with it. Nothing about the brain requires a network.
 no manual init step and — just as importantly — deleting the home dir is **not**
 an off switch (bootstrap just recreates it next session). The brain is OFF only
 when `$MEMORY_LEDGER_OFF`/`$SECOND_BRAIN_OFF` is truthy for the current process, or
-`<home>/.disabled` exists; `graph.disabled()` / `graph.enabled()` in `scripts/
-graph.py` are the single source of truth for this check — read from there, never
-re-implement it. Toggle the marker with `graph.py disable` / `graph.py enable`
+`<home>/.disabled` exists; `disabled()` / `enabled()` are the single source of
+truth for this check — read them, never re-implement them. They live in
+**`scripts/_switch.py`**, a module that imports nothing heavier than `pathlib`,
+and `graph.py` re-exports them (along with `_env` and `home_dir`) so
+`graph.disabled()` still resolves for every caller that already reads it through
+the engine. The split is deliberate: a SessionStart hook whose first act may be
+to do nothing should not import a 5k-line engine to find that out — ~12 ms
+against ~55 ms — and the user who turned capture **off** is the last person who
+should pay for the machinery they switched off. Toggle the marker with `graph.py disable` / `graph.py enable`
 (`/ledger off` / `/ledger on`). `scripts/doctor.py` (`/ledger doctor`) reports
 whether the brain is currently enabled, where the DB lives, and whether anything
 looks mis-wired — reach for it before assuming a broken install.

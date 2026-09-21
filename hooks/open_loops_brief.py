@@ -26,12 +26,16 @@ import datetime
 root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.dirname(
     os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(root, "scripts"))
-import graph as _graph  # noqa: E402  (the engine — shared enablement contract)
+# _switch, not graph: this runs on every SessionStart and the very next line may
+# decide to do nothing at all. The engine costs ~55 ms of transitive imports to
+# reach the same answer, and charging that to the user who turned capture OFF is
+# the wrong way round. Same predicate either way — graph re-exports these.
+import _switch  # noqa: E402  (the shared enablement contract — CONVENTIONS §2d)
 
-if _graph.disabled():
+if _switch.disabled():
     sys.exit(0)  # brain explicitly off -> silent (bootstrap.py owns dir creation)
 
-home = str(_graph.home_dir())
+home = str(_switch.home_dir())
 graph = os.path.join(root, "scripts", "graph.py")
 
 
@@ -80,7 +84,7 @@ def consolidate_daily():
     # Via the engine's _env() rather than os.environ, so this honours BOTH
     # prefixes like every other config lookup. Reading os.environ directly here
     # is how an opt-out silently stops working for anyone using the new name.
-    if _graph._env("NO_CONSOLIDATE"):
+    if _switch._env("NO_CONSOLIDATE"):
         return
     stamp = os.path.join(home, ".last_consolidate")
     today = datetime.date.today().isoformat()

@@ -24,6 +24,20 @@ jobs:
       - name: Byte-compile scripts, hooks, viz
         run: python -m compileall -q scripts hooks viz
 
+      # The suites are stdlib-only and self-contained, so there is no install
+      # step and no reason not to run them. SECOND_BRAIN_HOME points at a temp
+      # dir so a run can never touch a real brain -- test_contracts builds its
+      # own graph, and test_traceability starts servers and asserts the hooks
+      # do not block on a slow master.
+      - name: Run the test suites
+        env:
+          SECOND_BRAIN_HOME: ${{ runner.temp }}/brain
+        run: |
+          for t in tests/test_*.py; do
+            echo "== $t"
+            python "$t" || exit 1
+          done
+
       # Manifest validation exists because .claude-plugin/plugin.json and
       # marketplace.json are hand-edited and never executed — a typo or a
       # name mismatch between them silently breaks `/plugin install

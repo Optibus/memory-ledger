@@ -325,7 +325,7 @@ python3 scripts/bundle.py --include ~/.second_brain/exports/<your-doc>.md
 
 It packs **git-tracked files only** — so `.gitignore` decides what is excluded and
 no brain data, eval cases or generated deck can ride along — under a single
-top-level `second-brain/` directory, and generates two files into the archive:
+top-level `memory-ledger/` directory, and generates two files into the archive:
 `INSTALL-FROM-ZIP.md` (the recipient's whole procedure) and `BUNDLE.txt` (version,
 commit, file list). Anything untracked is reported as a warning and left out, so
 `git add` new files before building.

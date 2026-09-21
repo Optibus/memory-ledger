@@ -202,7 +202,7 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--out", default=str(REPO / "dist"),
                    help="output directory (default dist/)")
-    p.add_argument("--name", help="archive filename (default second-brain-<version>.zip)")
+    p.add_argument("--name", help="archive filename (default memory-ledger-<version>.zip)")
     p.add_argument("--include", action="append", default=[], metavar="PATH",
                    help="attach a file that is NOT in the repo (repeatable) — e.g. an "
                         "exported set of team rules from ~/.second_brain. It lands at "
@@ -244,8 +244,8 @@ def main(argv=None) -> int:
 
     out_dir = Path(args.out).expanduser()
     out_dir.mkdir(parents=True, exist_ok=True)
-    target = out_dir / (args.name or f"second-brain-{ver}.zip")
-    root = "second-brain"          # single top-level dir: unzip never spills
+    target = out_dir / (args.name or f"memory-ledger-{ver}.zip")
+    root = "memory-ledger"         # single top-level dir: unzip never spills
 
     install = INSTALL_FROM_ZIP.format(version=ver, commit=info.get("commit", "unknown"),
                                       date=(info.get("date") or "unknown")[:10],
