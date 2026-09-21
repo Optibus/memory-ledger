@@ -168,10 +168,11 @@
   .rule .rt{flex:1;min-width:0}
   .rule .rid{display:block;color:var(--muted);font-size:10.5px;
     font-family:ui-monospace,SFMono-Regular,Menlo,monospace;margin-top:2px}
-  .rbody{display:none;white-space:pre-wrap;background:#0d1117;border:1px solid var(--border);
+  .rbody{display:none;background:#0d1117;border:1px solid var(--border);
     border-radius:8px;padding:10px 12px;margin:7px 0 4px;font-size:12px;
     line-height:1.55;color:var(--muted);max-height:340px;overflow:auto}
   .rule.open + .rbody{display:block}
+  .rbody .rtxt{white-space:pre-wrap}
   .more{background:none;border:0;color:var(--accent);cursor:pointer;font-size:12px;
     padding:6px 0}
   .empty{color:var(--muted);font-size:12px;font-style:italic}
@@ -323,6 +324,138 @@
     background:#0d1117;border:1px solid var(--border);border-radius:7px;padding:9px;
     margin-top:10px;max-height:230px;overflow:auto;color:#c9d1d9;display:none}
   .out.show{display:block}
+
+  /* ---- create: the floating action button and the modal stack ----
+     A stack rather than one modal, because authoring a skill can need a rule
+     that does not exist yet, and sending the person away to make it loses the
+     half-written skill. The rule modal opens ON TOP and hands its result back;
+     nothing is written until the skill itself is saved. */
+  #fab{position:fixed;right:22px;bottom:22px;width:52px;height:52px;border-radius:50%;
+    border:0;background:var(--accent);color:#0d1117;font-size:27px;line-height:1;
+    cursor:pointer;z-index:60;box-shadow:0 6px 20px #0009;display:none;
+    align-items:center;justify-content:center;font-weight:400;padding:0 0 3px}
+  body.mode-skills #fab{display:flex}
+  #fab:hover{filter:brightness(1.1)}
+  #fab:active{transform:translateY(1px)}
+  /* the page behind a modal must not scroll with it: two scrollbars responding
+     to one wheel makes the form feel like it is sliding out from under you */
+  body.modal-open{overflow:hidden}
+  .mask{position:fixed;inset:0;background:#000a;backdrop-filter:blur(2px);
+    display:flex;align-items:flex-start;justify-content:center;padding:32px 14px;
+    overflow:auto;z-index:70}
+  .mdl{background:#161b22;border:1px solid var(--border);border-radius:13px;
+    width:100%;max-width:640px;box-shadow:0 18px 50px #000c;margin:auto}
+  .mdl.narrow{max-width:420px}
+  .mdlh{display:flex;align-items:flex-start;gap:10px;padding:15px 17px 11px;
+    border-bottom:1px solid var(--border);position:sticky;top:0;background:#161b22;
+    border-radius:13px 13px 0 0;z-index:1}
+  .mdlh h3{margin:0;font-size:15px;flex:1}
+  .mdlh p{margin:3px 0 0;color:var(--muted);font-size:11.5px;line-height:1.45;
+    font-weight:400}
+  .mdlh .x{background:none;border:0;color:var(--muted);font-size:17px;cursor:pointer;
+    line-height:1;padding:0 2px}
+  .mdlh .x:hover{color:var(--fg)}
+  .mdlb{padding:14px 17px}
+  .mdlf{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:12px 17px 15px;
+    border-top:1px solid var(--border);position:sticky;bottom:0;background:#161b22;
+    border-radius:0 0 13px 13px}
+  .mdlf .sp{flex:1}
+  .fld{margin-bottom:11px}
+  .fld>label{font-size:11px;text-transform:uppercase;letter-spacing:.5px;
+    color:var(--muted);display:block;margin-bottom:4px}
+  .fld>label .req{color:#f0883e}
+  .fld .hint{color:var(--muted);font-size:11.5px;line-height:1.45;margin:0 0 5px}
+  .fld input[type=text],.fld textarea,.fld select{width:100%;background:#0d1117;
+    color:var(--fg);border:1px solid var(--border);border-radius:7px;padding:7px 9px;
+    font:inherit;font-size:13px}
+  .fld textarea{min-height:64px;resize:vertical;line-height:1.5}
+  .fld input:focus,.fld textarea:focus,.fld select:focus{outline:0;border-color:var(--accent)}
+  .fld.bad input,.fld.bad textarea{border-color:#f85149}
+  .fgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+  .chk{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--fg);
+    cursor:pointer;margin-bottom:11px}
+  .chk input{accent-color:var(--accent);margin:0}
+  .mdls{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);
+    font-weight:600;margin:18px 0 8px;padding-top:13px;border-top:1px solid var(--border)}
+  .mdls:first-child{margin-top:0;padding-top:0;border-top:0}
+  .pick{display:flex;flex-direction:column;gap:6px;margin-bottom:8px}
+  .prow{display:flex;gap:7px;align-items:center}
+  .prow select{flex:1;min-width:0;background:#0d1117;color:var(--fg);
+    border:1px solid var(--border);border-radius:7px;padding:6px 8px;font:inherit;font-size:12.5px}
+  .prow .new{flex:1;min-width:0;background:#0d1117;border:1px dashed #3fb95088;
+    border-radius:7px;padding:6px 9px;font-size:12.5px;color:#3fb950;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .prow .rmv{background:none;border:1px solid var(--border);color:var(--muted);
+    border-radius:7px;width:28px;height:28px;cursor:pointer;flex:none;line-height:1}
+  .prow .rmv:hover{border-color:#f85149;color:#f85149}
+  /* ---- the picker: cards, not a <select> ----
+     A native select shows one line of text per option, which for a rule means
+     its title and nothing about when it fires or what it forbids. Choosing
+     between forty of those is guessing. A card carries the name, the cue, and
+     the full contract one click away, and the same widget does one or many. */
+  .pksearch{position:sticky;top:0;background:#161b22;padding:0 0 10px;z-index:1}
+  .pksearch input{width:100%;background:#0d1117;color:var(--fg);
+    border:1px solid var(--border);border-radius:8px;padding:8px 10px;
+    font:inherit;font-size:13px}
+  .pksearch input:focus{outline:0;border-color:var(--accent)}
+  .pkc{border:1px solid var(--border);border-radius:9px;background:#0d1117;
+    margin-bottom:7px;overflow:hidden}
+  .pkc:hover{border-color:#8b949e66}
+  .pkc.sel{border-color:var(--accent);background:#58a6ff12}
+  .pkh{display:flex;gap:9px;align-items:flex-start;padding:9px 11px;cursor:pointer}
+  .pkh .mk{flex:none;width:15px;height:15px;border:1px solid var(--border);
+    border-radius:4px;margin-top:1px;display:flex;align-items:center;
+    justify-content:center;font-size:10px;color:#0d1117;line-height:1}
+  .pkc.one .pkh .mk{border-radius:50%}
+  .pkc.sel .pkh .mk{background:var(--accent);border-color:var(--accent)}
+  .pkn{flex:1;min-width:0}
+  .pkn .t{font-size:13px;font-weight:600;display:block;word-break:break-word}
+  .pkn .d{color:var(--muted);font-size:11.5px;line-height:1.45;margin-top:2px;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+    overflow:hidden}
+  .pkn .cs{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px}
+  .pkx{flex:none;background:none;border:1px solid var(--border);color:var(--muted);
+    border-radius:6px;font-size:10px;cursor:pointer;padding:3px 7px;line-height:1.2}
+  .pkx:hover{border-color:var(--accent);color:var(--accent)}
+  .pkb{display:none;white-space:pre-wrap;border-top:1px solid var(--border);
+    padding:10px 12px;font-size:11.5px;line-height:1.55;color:var(--muted);
+    max-height:300px;overflow:auto}
+  .pkc.open .pkb{display:block}
+  .pkc.open .pkn .d{-webkit-line-clamp:unset}
+  .pkcount{color:var(--muted);font-size:12px}
+  /* the field the picker fills: chips you can drop one at a time */
+  .chipbox{display:flex;flex-wrap:wrap;gap:5px;align-items:center;
+    border:1px solid var(--border);border-radius:8px;background:#0d1117;
+    padding:6px 7px;min-height:36px}
+  .chipbox .cb{display:inline-flex;align-items:center;gap:5px;background:#21262d;
+    border:1px solid var(--border);border-radius:6px;padding:2px 4px 2px 8px;
+    font-size:12px;max-width:100%}
+  .chipbox .cb span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .chipbox .cb button{background:none;border:0;color:var(--muted);cursor:pointer;
+    font-size:12px;line-height:1;padding:0 3px}
+  .chipbox .cb button:hover{color:#f85149}
+  .chipbox .add{background:none;border:1px dashed var(--border);color:var(--muted);
+    border-radius:6px;padding:3px 9px;font:inherit;font-size:12px;cursor:pointer}
+  .chipbox .add:hover{border-color:var(--accent);color:var(--accent)}
+  .chipbox .none{color:var(--muted);font-size:11.5px;font-style:italic}
+  .mdlerr{color:#f85149;font-size:12px;margin:0 0 10px;white-space:pre-wrap}
+  .mdlok{color:#3fb950;font-size:12px;margin:0 0 10px}
+  /* one level of relations, on an open skill or rule */
+  .relbox{margin-top:9px;border-top:1px dashed var(--border);padding-top:8px}
+  .relgrp{font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;
+    color:var(--muted);margin:7px 0 3px}
+  .relln{display:flex;gap:7px;align-items:baseline;font-size:12px;padding:2px 0}
+  .relln .ar{color:var(--accent);font-family:ui-monospace,monospace}
+  .relln .rl{color:var(--muted);font-style:italic}
+  .relln .tt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .relln .ty{color:var(--muted);font-size:10.5px}
+  /* the markdown sync bar */
+  #sksync{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 16px;
+    padding:11px 13px;border:1px solid var(--border);border-radius:10px;
+    background:var(--panel)}
+  #sksync .t{font-size:12px;color:var(--muted);flex:1;min-width:190px;line-height:1.45}
+  #sksync .t b{color:var(--fg);font-weight:600}
+  #syncout{width:100%;margin:0}
 </style>
 </head>
 <body class="mode-map">
@@ -383,14 +516,27 @@
 </div>
 
 <!-- Skills: the two trees sync-skill-tree wrote into the graph (CONVENTIONS §5a).
-     Read-only on purpose — a skill's contract is edited in its SKILL.md (built-in)
-     or with add-skill (user), both of which are checked; a text box here would be
-     a third way to change a contract, and the one nothing validates. -->
+     Authoring here goes through graph.build_skill_contract / build_rule_contract
+     and is REFUSED when a required section is missing, so the browser is not a
+     third way to write a contract — it is the same shape, checked at write time
+     rather than reported afterwards by audit-contracts. Editing an existing
+     contract still belongs where it is gated: a built-in's SKILL.md. -->
 <div id="skills">
   <h2>Skills</h2>
   <p class="lead">Every skill is a contract: what must be true when it finishes,
     what it reads and writes in the graph, and the rules it answers to. Nesting is
-    the <code>requires</code> edge. Click a skill to open it, then a rule to read it.</p>
+    the <code>requires</code> edge. Click a skill to open it, then a rule to read it.
+    <b>+</b> authors a new one.</p>
+  <!-- markdown is the third route between machines, for when there is no shared
+       master to mirror through: export the learned tree, copy the folder, ingest. -->
+  <div id="sksync">
+    <span class="t"><b>Markdown sync.</b> Export the learned tree to
+      <code>SKILL.md</code> files (rules travel with them), or pull a folder from
+      another machine back into the brain.</span>
+    <button class="dbtn" id="skexport">Export to .md</button>
+    <button class="dbtn" id="skingest">Ingest .md</button>
+    <div class="out" id="syncout"></div>
+  </div>
   <div id="skfilter">
     <input id="skq" placeholder="filter by name, trigger, rule text, node type…">
     <div class="pills" id="skshow">
@@ -414,6 +560,8 @@
 <!-- Settings: preferences that live in <home>/settings.json, plus store upkeep.
      Written server-side, not in the browser — a timezone set here has to hold for
      the CLI, the hooks and any cron reading the same brain. -->
+<button id="fab" title="create a skill or a rule (N)">+</button>
+
 <div id="settings">
   <h2>Settings</h2>
   <p class="lead">Saved to the brain's home directory, so every path into it —
@@ -1603,6 +1751,11 @@ const Skills = (function(){
             `<div class="alw" id="alw-${esc(sk.id)}" style="display:none">`+
             always.map(ruleRow).join('')+`</div>`
           : '')+
+        // One level, never two. The point of showing a skill's neighbours is to
+        // answer "what else is this wired to"; a second hop answers "what is the
+        // graph", which is what the map is for.
+        `<h4>In the graph</h4><div class="relbox" data-rel="${esc(sk.id)}">`+
+          `<p class="empty">Loading relations…</p></div>`+
       `</div>`;
     return `<div class="sk${depth?' kid':''}" id="sk-${esc(sk.id)}">`+
       `<div class="skhead"><span class="tw">▶</span>`+
@@ -1653,6 +1806,39 @@ const Skills = (function(){
     if(i<0) return esc(t);
     return esc(String(t).slice(0,i))+'<span class="hl">'+
       esc(String(t).slice(i,i+F.q.length))+'</span>'+esc(String(t).slice(i+F.q.length));
+  }
+
+  // ---- relations, one level deep ----
+  // Read from /api/node, the same endpoint the dashboard's expander uses, so the
+  // neighbours shown here and the neighbours shown there cannot disagree.
+  function relHTML(d){
+    if(!d.ok) return `<p class="empty">${esc(d.error||'could not read its relations')}</p>`;
+    const groups={out:{},in:{}};
+    (d.edges||[]).forEach(e=>{ (groups[e.dir][e.rel]=groups[e.dir][e.rel]||[]).push(e); });
+    const block=(dir,label)=>{
+      const rels=Object.keys(groups[dir]).sort();
+      if(!rels.length) return '';
+      return `<div class="relgrp">${label}</div>`+rels.map(rel=>
+        groups[dir][rel].map(e=>
+          `<div class="relln"><span class="ar">${dir==='out'?'──▸':'◂──'}</span>`+
+          `<span class="rl">${esc(rel)}</span>`+
+          `<span class="tt">${esc(e.title||e.id)}</span>`+
+          `<span class="ty">${esc(e.type||'')}</span></div>`).join('')).join('');
+    };
+    const html=block('out','Points at')+block('in','Pointed at by');
+    return html||'<p class="empty">Nothing points at it and it points at nothing.</p>';
+  }
+
+  async function loadRel(box){
+    if(box.dataset.done) return;
+    box.dataset.done='1';
+    try{
+      const r=await fetch('/api/node?id='+encodeURIComponent(box.dataset.rel));
+      box.innerHTML=relHTML(await r.json());
+    }catch(e){
+      box.dataset.done='';   // a failed read is worth retrying on the next open
+      box.innerHTML=`<p class="empty">Could not read its relations: ${esc(e.message)}</p>`;
+    }
   }
 
   function ruleCard(r){
@@ -1736,7 +1922,15 @@ const Skills = (function(){
   // container, so a listener on the trees alone silently ignores every click in it.
   document.getElementById('skills').addEventListener('click',async e=>{
     const head=e.target.closest('.skhead');
-    if(head){ head.parentElement.classList.toggle('open'); return; }
+    if(head){
+      const card=head.parentElement;
+      card.classList.toggle('open');
+      if(card.classList.contains('open')){
+        const box=card.querySelector(':scope > .skbody > .relbox');
+        if(box) loadRel(box);
+      }
+      return;
+    }
     const more=e.target.closest('[data-always]');
     if(more){
       const box=document.getElementById('alw-'+more.dataset.always);
@@ -1757,12 +1951,66 @@ const Skills = (function(){
     row.classList.toggle('open');
     if(!row.classList.contains('open')||body.dataset.done) return;
     try{
-      const r=await fetch('/api/rule?id='+encodeURIComponent(id));
-      const d=await r.json();
-      body.textContent=d.ok&&d.rule?d.rule.body:'This rule is no longer in the brain.';
+      const [r,n]=await Promise.all([
+        fetch('/api/rule?id='+encodeURIComponent(id)),
+        fetch('/api/node?id='+encodeURIComponent(id))]);
+      const d=await r.json(), det=await n.json();
+      body.innerHTML=`<div class="rtxt"></div>`+
+        `<div class="relbox"><h4 style="margin-top:0">In the graph</h4>`+
+        relHTML(det)+`</div>`;
+      body.querySelector('.rtxt').textContent=
+        d.ok&&d.rule?d.rule.body:'This rule is no longer in the brain.';
     }catch(err){ body.textContent='Could not read it: '+err.message; }
     body.dataset.done='1';
   });
+
+  // ---- markdown sync (§5a): the file route between two machines ----
+  // Both buttons run the same commands the CLI runs, out of process, so a person
+  // who syncs from the page and a person who syncs from a shell move the same
+  // bytes. Neither one deletes: an export overwrites its own files, an ingest
+  // never overwrites a rule this brain already holds.
+  const syncOut=()=>document.getElementById('syncout');
+  async function sync(path,label,body){
+    const box=syncOut();
+    box.className='out show'; box.textContent=label+'…';
+    try{
+      const r=await fetch(path,{method:'POST',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})});
+      const d=await r.json();
+      if(!d.ok) throw new Error(d.error||'refused');
+      box.textContent=summary(path,d);
+      loaded=false; show();
+    }catch(e){ box.textContent=label+' failed: '+e.message; }
+  }
+  function summary(path,d){
+    if(path.endsWith('export-skills'))
+      return `Exported ${d.skills} skill${d.skills===1?'':'s'} and ${d.rules} `+
+        `rule file${d.rules===1?'':'s'} to\n${d.dir}\n\n`+
+        `Copy that directory to the other machine and ingest it there.`;
+    const acts=(d.ingested||[]).map(r=>`  ${r.action.padEnd(8)} ${r.id}`+
+      (r.rules_not_found?`  (rules not in this brain: ${r.rules_not_found.join(', ')})`:''));
+    const rules=(d.rules||[]).map(r=>`  ${r.action.padEnd(8)} ${r.id}`);
+    return `Ingested ${d.count} skill${d.count===1?'':'s'}.\n`+acts.join('\n')+
+      (rules.length?`\n\nRules that travelled with them:\n`+rules.join('\n'):'')+
+      (d.tree?`\n\nTree: +${d.tree.added} edges, -${d.tree.pruned}.`:'');
+  }
+  document.getElementById('skexport').onclick=()=>
+    sync('/api/export-skills','Exporting',{kind:'learned'});
+  document.getElementById('skingest').onclick=async()=>{
+    const got=await Create.ask({
+      title:'Ingest skills from markdown',
+      sub:'Every <code>SKILL.md</code> under the directory becomes a skill node. '+
+          'Re-running is safe: a skill is refreshed, and a rule this brain '+
+          'already holds is kept, never overwritten by the incoming copy.',
+      label:'Directory', placeholder:'/path/to/learned_skills',
+      hint:'Blank reads both default trees: the plugin’s own <code>skills/</code> '+
+           'and the brain’s <code>learned_skills</code>. A <code>rules/</code> '+
+           'subfolder is ingested first, so the skills beside it can link to the '+
+           'rules that travelled with them.',
+      submit:'Ingest'});
+    if(!got) return;
+    sync('/api/ingest-skills','Ingesting',got.value?{dir:got.value}:{});
+  };
 
   let tmr=null;
   document.getElementById('skq').addEventListener('input',e=>{
@@ -1780,6 +2028,589 @@ const Skills = (function(){
     F.dom=e.target.value; render(); });
 
   return {show, reload(){ loaded=false; show(); }};
+})();
+
+// ---- create: author a skill or a rule from the browser --------------------
+// The contract shape is NOT written here. The server hands over §5.1's eight
+// sections and §5b.1's six in /api/meta, this builds a field per section, and
+// graph.build_*_contract assembles the body. A heading typed into this file
+// would be a second definition of the shape and the one nothing checks.
+const Create = (function(){
+  const esc=t=>String(t==null?'':t).replace(/[&<>"]/g,c=>(
+    {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  let META=null, CAT=null;
+  const stack=[];   // open modals, innermost last — Escape closes the top one
+
+  async function meta(){
+    if(!META) META=await (await fetch('/api/meta')).json();
+    return META;
+  }
+  // The rule catalog and the skill names come from the same payload the Skills
+  // page draws, so a picker can never offer something the page cannot show.
+  async function cat(force){
+    if(!CAT||force) CAT=await (await fetch('/api/skills')).json();
+    return CAT;
+  }
+  // ---- small DOM helpers (no framework; the page has none) ----
+  function el(tag,cls,txt){ const e=document.createElement(tag);
+    if(cls)e.className=cls; if(txt!=null)e.textContent=txt; return e; }
+  function field(label,ctl,opt){
+    opt=opt||{};
+    const f=el('div','fld');
+    const l=el('label'); l.innerHTML=esc(label)+(opt.req?' <span class="req">*</span>':'');
+    f.appendChild(l);
+    if(opt.hint){ const h=el('p','hint'); h.innerHTML=opt.hint; f.appendChild(h); }
+    f.appendChild(ctl); f.ctl=ctl; return f;
+  }
+  function input(ph,val){ const i=el('input'); i.type='text'; i.placeholder=ph||'';
+    i.value=val||''; return i; }
+  function area(ph,val,min){ const t=el('textarea'); t.placeholder=ph||'';
+    t.value=val||''; if(min)t.style.minHeight=min+'px'; return t; }
+  function pick(options,val){ const s=el('select');
+    options.forEach(o=>{ const op=el('option',null,o.label!=null?o.label:o);
+      op.value=o.value!=null?o.value:o; s.appendChild(op); });
+    if(val!=null) s.value=val; return s; }
+  function head(text){ return el('div','mdls',text); }
+  // the server sends the heading exactly as it appears in the contract, because
+  // that is the authority on the shape. A form label wants the name without the
+  // markdown, and a label is the only place that difference matters.
+  const label=h=>String(h||'').replace(/^#+\s*/,'');
+
+  // ---- the modal stack ----
+  // Stacked rather than sequential: authoring a skill can need a rule that does
+  // not exist yet, and sending the person away to make it loses the half-typed
+  // skill. The inner modal returns its value to the outer one.
+  function shell(opt){
+    const mask=el('div','mask');
+    const m=el('div','mdl'+(opt.narrow?' narrow':''));
+    const h=el('div','mdlh');
+    const ttl=el('div'); ttl.style.flex='1';
+    const h3=el('h3',null,opt.title); ttl.appendChild(h3);
+    if(opt.sub){ const p=el('p'); p.innerHTML=opt.sub; ttl.appendChild(p); }
+    const x=el('button','x','✕');
+    h.append(ttl,x);
+    const body=el('div','mdlb'), foot=el('div','mdlf');
+    m.append(h,body,foot); mask.appendChild(m);
+    document.body.appendChild(mask);
+    let done=null;
+    const api={mask,body,foot,
+      close(v){ if(!mask.isConnected)return; mask.remove();
+        const i=stack.indexOf(api); if(i>=0) stack.splice(i,1);
+        if(!stack.length) document.body.classList.remove('modal-open');
+        if(done) done(v===undefined?null:v); }};
+    api.result=new Promise(r=>done=r);
+    x.onclick=()=>api.close(null);
+    // a click on the backdrop closes, a drag that ENDS there does not — losing a
+    // filled-in form to a stray text selection is the worst outcome here
+    mask.addEventListener('mousedown',e=>{ if(e.target===mask) mask._from=true; });
+    mask.addEventListener('mouseup',e=>{
+      if(e.target===mask&&mask._from) api.close(null); mask._from=false; });
+    stack.push(api);
+    document.body.classList.add('modal-open');
+    setTimeout(()=>{ const f=body.querySelector('input,textarea,select'); if(f)f.focus(); },30);
+    return api;
+  }
+  addEventListener('keydown',e=>{
+    if(e.key==='Escape'&&stack.length){ e.stopPropagation(); stack[stack.length-1].close(null); }
+  },true);
+
+  function footer(api,label,onSubmit){
+    // The refusal sits in the sticky footer, beside the button that was just
+    // pressed. At the top of a form this long it lands off screen, and a form
+    // that looks like it did nothing is worse than one that says no.
+    const err=el('p','mdlerr'); err.style.display='none';
+    err.style.cssText+=';flex:0 0 100%;margin:0 0 4px';
+    const cancel=el('button','dbtn','Cancel'); cancel.onclick=()=>api.close(null);
+    const go=el('button','dbtn pri',label);
+    const sp=el('span','sp');
+    api.foot.append(err,cancel,sp,go);
+    api.fail=msg=>{ err.textContent=msg; err.style.display='block';
+      go.disabled=false; go.textContent=label; };
+    go.onclick=async()=>{
+      err.style.display='none'; go.disabled=true; go.textContent='Saving…';
+      try{ await onSubmit(api); }
+      catch(ex){ api.fail(ex.message||String(ex)); }
+    };
+    return go;
+  }
+
+  async function post(path,body){
+    const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(body)});
+    const d=await r.json().catch(()=>({ok:false,error:'server sent no JSON'}));
+    if(!d.ok) throw new Error(d.error||'the write was refused');
+    return d;
+  }
+
+  // ---- the picker ---------------------------------------------------------
+  // One widget for every "which of these" question in the forms. A <select>
+  // gives one line per option, which for a rule is its title and nothing about
+  // when it fires; picking among forty of those is guessing. A card carries the
+  // name, what it is for, and the full text one click away.
+  //
+  // `items` are {id, name, desc, chips[], hay}. `detail(item)` is called at most
+  // once per card, lazily, and returns the long text — a rule body is a fetch,
+  // a node type is already in hand, and neither should be paid for up front.
+  async function picker(opt){
+    const multi=!!opt.multi;
+    const chosen=new Set(opt.selected||[]);
+    const api=shell({title:opt.title,
+      sub:opt.sub+(multi?' Pick as many as apply.':'')});
+    const bar=el('div','pksearch');
+    const q=input(opt.search||'Search…');
+    bar.appendChild(q); api.body.appendChild(bar);
+    const list=el('div','pk'); api.body.appendChild(list);
+    const count=el('span','pkcount');
+
+    function draw(){
+      const term=q.value.trim().toLowerCase();
+      const rows=opt.items.filter(i=>!term||i.hay.includes(term));
+      list.innerHTML='';
+      if(!rows.length){
+        list.appendChild(el('p','empty',
+          opt.items.length?'Nothing matches that.':'There is nothing to choose yet.'));
+      }
+      rows.forEach(item=>{
+        const card=el('div','pkc'+(multi?'':' one')+(chosen.has(item.id)?' sel':''));
+        const h=el('div','pkh');
+        const mk=el('span','mk',chosen.has(item.id)?'✓':'');
+        const n=el('div','pkn');
+        const t=el('span','t',item.name); n.appendChild(t);
+        if(item.desc){ n.appendChild(el('div','d',item.desc)); }
+        if(item.chips&&item.chips.length){
+          const cs=el('div','cs');
+          item.chips.forEach(c=>cs.appendChild(el('span','chip',c)));
+          n.appendChild(cs);
+        }
+        h.append(mk,n);
+        const body=el('div','pkb','Loading…');
+        if(opt.detail){
+          const x=el('button','pkx','more');
+          x.onclick=async e=>{
+            e.stopPropagation();
+            const open=card.classList.toggle('open');
+            x.textContent=open?'less':'more';
+            if(!open||body.dataset.done) return;
+            body.dataset.done='1';
+            try{ body.textContent=await opt.detail(item)||'(nothing more to show)'; }
+            catch(err){ body.dataset.done=''; body.textContent='Could not read it: '+err.message; }
+          };
+          h.appendChild(x);
+        }
+        h.onclick=()=>{
+          if(multi){
+            if(chosen.has(item.id)) chosen.delete(item.id); else chosen.add(item.id);
+            card.classList.toggle('sel',chosen.has(item.id));
+            mk.textContent=chosen.has(item.id)?'✓':'';
+            tally();
+          } else {
+            api.close([item.id]);
+          }
+        };
+        card.append(h,body); list.appendChild(card);
+      });
+      tally(rows.length);
+    }
+    function tally(shown){
+      const parts=[];
+      if(multi) parts.push(chosen.size+' selected');
+      if(shown!=null&&shown!==opt.items.length) parts.push(shown+' of '+opt.items.length);
+      count.textContent=parts.join(' · ');
+    }
+    let t=null;
+    q.addEventListener('input',()=>{ clearTimeout(t); t=setTimeout(draw,110); });
+    draw();
+
+    const cancel=el('button','dbtn','Cancel'); cancel.onclick=()=>api.close(null);
+    api.foot.append(count,el('span','sp'),cancel);
+    if(multi){
+      const done=el('button','dbtn pri','Use these');
+      done.onclick=()=>api.close([...chosen]);
+      api.foot.appendChild(done);
+    } else if(chosen.size){
+      // single-select with something already chosen needs a way to un-choose it
+      const clear=el('button','dbtn','Clear');
+      clear.onclick=()=>api.close([]);
+      api.foot.appendChild(clear);
+    }
+    return api.result;
+  }
+
+  // A field the picker fills: chips you can drop one at a time, and a button.
+  function chipField(opt){
+    const box=el('div','chipbox');
+    let ids=[...(opt.value||[])];
+    const nameOf=id=>{ const it=(opt.items()||[]).find(x=>x.id===id); return it?it.name:id; };
+    function draw(){
+      box.innerHTML='';
+      if(!ids.length) box.appendChild(el('span','none',opt.empty||'none'));
+      ids.forEach(id=>{
+        const c=el('span','cb'); c.appendChild(el('span',null,nameOf(id)));
+        c.title=id;
+        const x=el('button',null,'✕'); x.type='button';
+        x.title='remove'; x.onclick=()=>{ ids=ids.filter(v=>v!==id); draw();
+          if(opt.onchange) opt.onchange(ids); };
+        c.appendChild(x); box.appendChild(c);
+      });
+      const add=el('button','add',ids.length?'＋ change':(opt.add||'＋ choose'));
+      add.type='button';
+      add.onclick=async()=>{
+        const got=await picker({...opt.picker, items:opt.items(), multi:opt.multi,
+                                selected:ids});
+        if(got===null) return;
+        ids=opt.multi?got:got.slice(0,1);
+        draw();
+        if(opt.onchange) opt.onchange(ids);
+      };
+      box.appendChild(add);
+    }
+    draw();
+    return {el:box, get:()=>[...ids], set(v){ ids=[...v]; draw(); }};
+  }
+
+  // ---- what each picker offers -------------------------------------------
+  const ruleItems=c=>(c.rules||[]).map(r=>({
+    id:r.id, name:r.title,
+    desc:r.scenario||'No cue — match-rules will never return it.',
+    chips:[r.source||'rule',
+           ...(r.non_negotiable?['always on']:[]),
+           ...(r.section&&r.section!=='user'?['§'+r.section]:[]),
+           r.chars+' chars'],
+    hay:[r.id,r.title,r.scenario,r.source,r.section].join(' ').toLowerCase()}));
+
+  function skillItems(c){
+    const out=[];
+    const walk=s=>{
+      out.push({id:s.id.replace(/^skill_/,''), name:s.title,
+        desc:s.description||s.triggers||'',
+        chips:[s.kind==='plugin'?'built-in':'learned',
+               ...(s.reads.length?['reads '+s.reads.join(', ')]:[]),
+               ...(s.writes.length?['writes '+s.writes.join(', ')]:[]),
+               ...(s.uses?[s.uses+'× used']:[])],
+        hay:[s.id,s.title,s.description,s.triggers,s.reads.join(' '),
+             s.writes.join(' ')].join(' ').toLowerCase()});
+      (s.children||[]).forEach(walk);
+    };
+    (c.trees||[]).forEach(t=>(t.skills||[]).forEach(walk));
+    return out.sort((a,b)=>a.name.localeCompare(b.name));
+  }
+
+  const typeItems=c=>(c.node_types||[]).map(t=>({
+    id:t.type, name:t.type,
+    desc:(t.read_by.length||t.written_by.length)
+      ? `Touched by ${[...new Set([...t.read_by,...t.written_by])].length} skill(s).`+
+        (t.nodes?` ${t.nodes} in this brain.`:' None in this brain yet.')
+      : (t.nodes?`${t.nodes} in this brain. No skill declares it yet.`
+               :'Nothing of this type yet, and no skill declares it.'),
+    chips:[...(t.declarable?[]:['not in the vocabulary'])],
+    _t:t, hay:[t.type,t.read_by.join(' '),t.written_by.join(' ')].join(' ').toLowerCase()}));
+
+  const typeDetail=i=>Promise.resolve([
+    i._t.body,
+    i._t.read_by.length?'Read by: '+i._t.read_by.join(', '):'Read by: nothing yet.',
+    i._t.written_by.length?'Written by: '+i._t.written_by.join(', ')
+                          :'Written by: nothing yet.'].filter(Boolean).join('\n\n'));
+
+  async function ruleDetail(i){
+    const r=await fetch('/api/rule?id='+encodeURIComponent(i.id));
+    const d=await r.json();
+    return d.ok&&d.rule?d.rule.body:'This rule is no longer in the brain.';
+  }
+  async function skillDetail(i){
+    const r=await fetch('/api/node?id='+encodeURIComponent('skill_'+i.id));
+    const d=await r.json();
+    return d.ok?(d.body||'').replace(/^WHEN TO USE:.*?\n\n/s,''):'Could not read it.';
+  }
+
+  // ---- the rule form, shared by the standalone modal and the one a skill opens
+  function ruleForm(box,m,c,preset){
+    preset=preset||{};
+    const title=input('Ship the link, not the scrollback',preset.title);
+    box.appendChild(field('Title',title,{req:true,
+      hint:'The clause in one line, as you would say it out loud.'}));
+    const scen=area('finish a write-up, share a report, post a summary',
+      preset.scenario,52);
+    box.appendChild(field('Governs (the cue it fires on)',scen,{req:true,
+      hint:'The words you would actually type when this should apply. '+
+        '<code>match-rules</code> indexes THIS, not the body, so a rule whose cue '+
+        'misses never fires however well the body reads (§5b.2).'}));
+    const grid=el('div','fgrid');
+    const src=pick((m.rule_sources||['user']).map(v=>({value:v,label:v})),
+                   preset.source||'user');
+    const sect=input('user',preset.section);
+    const realm=input('shared',preset.realm);
+    grid.append(field('Source',src),field('Section label',sect),field('Section (realm)',realm));
+    box.appendChild(grid);
+    const nnWrap=el('label','chk');
+    const nn=el('input'); nn.type='checkbox'; nn.checked=!!preset.non_negotiable;
+    nnWrap.append(nn,el('span',null,'Non-negotiable — returned by match-rules on every cue'));
+    box.appendChild(nnWrap);
+    const over=chipField({
+      value:preset.overrides?[preset.overrides]:[], multi:false,
+      items:()=>ruleItems(c), empty:'replaces nothing', add:'＋ pick the rule it replaces',
+      picker:{title:'Which rule does this replace?',
+        sub:'Open a card to read the rule in full before retiring it.',
+        search:'Search by title, cue, id…', detail:ruleDetail}});
+    box.appendChild(field('Replaces',over.el,{
+      hint:'The named rule is marked superseded, not deleted, so match-rules stops '+
+           'returning both sides of a contradiction.'}));
+
+    box.appendChild(head('The contract (§5b.1)'));
+    const secs={};
+    (m.rule_sections||[]).forEach(s=>{
+      const t=area('',(preset.sections||{})[s.field],s.required?86:64);
+      secs[s.field]=t;
+      box.appendChild(field(label(s.heading),t,{req:s.required,
+        hint:RULE_HINT[s.field]||''}));
+    });
+    return function read(){
+      const sections={};
+      Object.keys(secs).forEach(k=>sections[k]=secs[k].value.trim());
+      return {title:title.value.trim(),scenario:scen.value.trim(),
+        source:src.value,section:sect.value.trim(),realm:realm.value.trim(),
+        non_negotiable:nn.checked,overrides:over.get()[0]||'',sections};
+    };
+  }
+  const RULE_HINT={
+    the_rule:'What must or must not happen.',
+    why:'The failure it prevents. A rule whose reason is missing loses every '+
+        'argument with a deadline.',
+    how_to_apply:'What to do concretely, at the moment the rule bites.',
+    exceptions:'Where it does NOT apply. Left blank this is written as '+
+               '<code>none</code>, because an unstated exception gets invented '+
+               'under pressure.',
+    judged_against:'How a reader can tell from the artifact ALONE that it was '+
+                   'followed. This is the section that does the work.',
+    related:'<code>[[wikilinks]]</code> to the rules this one leans on.'
+  };
+
+  // ---- rule modal (standalone, or opened on top of the skill form) ----
+  async function rule(opt){
+    opt=opt||{};
+    const m=await meta(), c=await cat();
+    const api=shell({title:opt.defer?'New rule (created with the skill)':'New rule',
+      sub:opt.defer
+        ? 'It is written only when you save the skill, so abandoning the skill '+
+          'leaves nothing behind.'
+        : 'A rule that cannot be checked is advice. Fill the two required '+
+          'sections and it becomes decidable (CONVENTIONS §5b).'});
+    const read=ruleForm(api.body,m,c,opt.preset);
+    footer(api,opt.defer?'Attach to the skill':'Create rule',async()=>{
+      const payload=read();
+      if(!payload.title) return api.fail('a rule needs a title');
+      if(!payload.scenario) return api.fail(
+        'a rule needs a cue to fire on — without it match-rules never returns it');
+      const missing=(m.rule_sections||[]).filter(s=>s.required&&!payload.sections[s.field]);
+      if(missing.length) return api.fail(
+        'incomplete contract (§5b.1): fill '+missing.map(s=>label(s.heading)).join(', '));
+      if(opt.defer){ api.close(payload); return; }
+      const res=await post('/api/create-rule',payload);
+      api.close(res.node);
+    });
+    return api.result;
+  }
+
+  // ---- skill modal ----
+  async function skill(){
+    const m=await meta(), c=await cat(true);
+    const api=shell({title:'New skill',
+      sub:'A skill is a contract: what must be TRUE when it finishes, and what it '+
+          'may not do on the way. Never the keystrokes (CONVENTIONS §5).'});
+    const b=api.body;
+
+    const title=input('Weekly digest');
+    b.appendChild(field('Title',title,{req:true}));
+    const name=input('weekly-digest');
+    b.appendChild(field('Name (slug)',name,{
+      hint:'The id becomes <code>skill_&lt;name&gt;</code>. Left blank it is derived '+
+           'from the title.'}));
+    title.addEventListener('input',()=>{ if(!name.dataset.touched)
+      name.value=title.value.toLowerCase().replace(/[^a-z0-9]+/g,'-')
+        .replace(/^-|-$/g,''); });
+    name.addEventListener('input',()=>{ name.dataset.touched='1'; });
+    const desc=area('One sentence: what this skill is for.','',52);
+    b.appendChild(field('Description',desc,{
+      hint:'Shown on the card and in <code>match-skills</code>.'}));
+    const realm=input('shared');
+    b.appendChild(field('Section (realm)',realm,{
+      hint:'Blank files it under <code>shared</code>: a process applies in every '+
+           'section of life, not just the one you were in when you wrote it.'}));
+
+    b.appendChild(head('The contract (§5.1)'));
+    const secs={};
+    (m.skill_sections||[]).filter(s=>!s.generated).forEach(s=>{
+      const t=area('',null,s.required?86:64);
+      secs[s.field]=t;
+      b.appendChild(field(label(s.heading),t,{req:s.required,
+        hint:SKILL_HINT[s.field]||''}));
+    });
+
+    b.appendChild(head('Depends on (§5a)'));
+    const hint=el('p','hint');
+    hint.innerHTML='Left blank, a field is declared <code>none</code> — silence '+
+      'is not a declaration.';
+    b.appendChild(hint);
+    const decl={};
+    (m.decl_labels||[]).forEach(d=>{
+      const isType=d.field==='reads'||d.field==='writes';
+      const f=chipField({
+        multi:true, value:[], empty:'none',
+        add:isType?'＋ choose node types':'＋ choose skills',
+        items:()=>isType?typeItems(c):skillItems(c),
+        picker:isType
+          ? {title:d.label+' which node types?',
+             sub:'This is the coupling that matters: two skills touching the same '+
+                 'type are wired together whether or not either names the other.',
+             search:'Search a type, or a skill that already touches one…',
+             detail:typeDetail}
+          : {title:d.label+' which skills?',
+             sub:'Open a card to read what that skill actually promises.',
+             search:'Search by name, trigger, node type…', detail:skillDetail}});
+      decl[d.field]=f;
+      b.appendChild(field(d.label,f.el,{hint:DECL_HINT[d.field]||''}));
+    });
+
+    b.appendChild(head('Rules it answers to'));
+    const rh=el('p','hint');
+    rh.innerHTML='Each rule gets its own line, and lands as an <code>honors</code> '+
+      'edge in the graph as well as a line in the contract. A new rule written '+
+      'here is created only when you save the skill.';
+    b.appendChild(rh);
+    const rows=el('div','pick'); b.appendChild(rows);
+    const bar=el('div','prow');
+    const addBtn=el('button','dbtn','＋ Link rules');
+    const newBtn=el('button','dbtn','＋ New rule…');
+    bar.append(addBtn,newBtn); b.appendChild(bar);
+
+    function line(content,role){
+      const row=el('div','prow');
+      const rm=el('button','rmv','✕'); rm.title='remove this line';
+      rm.onclick=()=>row.remove();
+      row.append(content,rm); row.dataset.role=role; rows.appendChild(row);
+      return row;
+    }
+    const linkedIds=()=>[...rows.children]
+      .filter(r=>r.dataset.role==='existing').map(r=>r.dataset.id);
+    addBtn.onclick=async()=>{
+      // Pre-seeded with what is already on the form and multi-select, so the
+      // picker is one pass over the catalog rather than one trip per rule —
+      // but each choice still lands as its own line, droppable on its own.
+      const got=await picker({title:'Which rules is this skill accountable for?',
+        sub:'Open a card to read the whole contract before signing up to it.',
+        search:'Search by title, cue, id…', multi:true,
+        items:ruleItems(c), selected:linkedIds(), detail:ruleDetail});
+      if(got===null) return;
+      [...rows.children].forEach(r=>{ if(r.dataset.role==='existing') r.remove(); });
+      const byId=Object.fromEntries(ruleItems(c).map(i=>[i.id,i]));
+      got.forEach(id=>{
+        const tag=el('div','new'); tag.style.cssText=
+          'border-style:solid;border-color:var(--border);color:var(--fg)';
+        tag.textContent=(byId[id]||{}).name||id;
+        tag.title=id;
+        line(tag,'existing').dataset.id=id;
+      });
+    };
+    newBtn.onclick=async()=>{
+      const payload=await rule({defer:true});
+      if(!payload) return;
+      const tag=el('div','new','new: '+payload.title);
+      tag.title=payload.sections.the_rule||'';
+      line(tag,'new')._payload=payload;
+    };
+
+    footer(api,'Create skill',async()=>{
+      if(!title.value.trim()) return api.fail('a skill needs a title');
+      const sections={};
+      Object.keys(secs).forEach(k=>sections[k]=secs[k].value.trim());
+      const missing=(m.skill_sections||[])
+        .filter(s=>s.required&&!s.generated&&!sections[s.field]);
+      if(missing.length) return api.fail(
+        'incomplete contract (§5.1): fill '+missing.map(s=>label(s.heading)).join(', '));
+      const payload={name:name.value.trim()||title.value.trim(),
+        title:title.value.trim(),description:desc.value.trim(),
+        realm:realm.value.trim(),sections,rules:[],new_rules:[]};
+      Object.keys(decl).forEach(k=>payload[k]=decl[k].get());
+      [...rows.children].forEach(row=>{
+        if(row.dataset.role==='new') payload.new_rules.push(row._payload);
+        else if(row.dataset.id) payload.rules.push(row.dataset.id);
+      });
+      const res=await post('/api/create-skill',payload);
+      api.close(res.node);
+    });
+    return api.result;
+  }
+  const DECL_HINT={
+    requires:'This skill’s output is WRONG without it. The only hard edge, and '+
+      'the one the tree nests by.',
+    waits_for:'When that skill is also running, starting before it makes this '+
+      'one’s output wrong.',
+    enriched_by:'Consume it if it has landed. Never wait for it.',
+    reads:'What it consults in the graph.',
+    writes:'What it leaves behind. A read-only skill declares none, explicitly.'
+  };
+  const SKILL_HINT={
+    when_to_use:'The trigger, in the person’s words. This also becomes the '+
+      'skill’s <code>triggers</code>, which is what <code>match-skills</code> fires on.',
+    given:'What the skill RECEIVES, and what each input is for. Context it cannot '+
+      'infer (where things live, which command runs them) belongs here, named as '+
+      'context, never as procedure.',
+    deliverables:'Named clauses, each stating what must be TRUE or EXIST when the '+
+      'skill finishes. No steps: a skill written as a step list ages into a lie.',
+    judged_against:'What someone who never watched the run can check from the '+
+      'graph and the reply alone.',
+    guardrails:'What it refuses to do, each carrying the failure it prevents.',
+    reply:'The shape of the one-action reply §1 demands.'
+  };
+
+  // ---- the chooser the + button opens ----
+  async function chooser(){
+    const api=shell({narrow:true,title:'Create',
+      sub:'Both are contracts. A rule is a clause the brain answers to; a skill '+
+          'is an ability that answers to rules.'});
+    const wrap=el('div');
+    [['Rule','A clause with a cue it fires on and a way to check it was followed.',
+      'rule'],
+     ['Skill','An ability: what must be true when it finishes, and the rules it '+
+      'honors.','skill']].forEach(([t,d,kind])=>{
+      const btn=el('button','dbtn');
+      btn.style.cssText='display:block;width:100%;text-align:left;padding:11px 13px;'+
+        'margin-bottom:9px';
+      btn.innerHTML='<b style="font-size:13.5px">'+t+'</b><br>'+
+        '<span style="color:var(--muted);font-size:11.5px;line-height:1.45">'+d+'</span>';
+      btn.onclick=()=>api.close(kind);
+      wrap.appendChild(btn);
+    });
+    api.body.appendChild(wrap);
+    const cancel=el('button','dbtn','Cancel'); cancel.onclick=()=>api.close(null);
+    api.foot.append(el('span','sp'),cancel);
+    const kind=await api.result;
+    if(!kind) return null;
+    const made=kind==='rule'?await rule({}):await skill();
+    if(made){ CAT=null; Skills.reload(); }
+    return made;
+  }
+
+  document.getElementById('fab').onclick=()=>chooser();
+  addEventListener('keydown',e=>{
+    if(stack.length) return;
+    if((e.key==='n'||e.key==='N')&&!e.metaKey&&!e.ctrlKey&&
+       !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)&&
+       document.body.classList.contains('mode-skills')) chooser();
+  });
+
+  // A one-field modal, for the places that need an answer rather than a form.
+  // window.prompt would do it in one line and blocks the whole page while it is
+  // open, which on a page that polls the graph means the map stops updating.
+  async function ask(opt){
+    const api=shell({narrow:true,title:opt.title,sub:opt.sub});
+    const box=input(opt.placeholder||'',opt.value||'');
+    api.body.appendChild(field(opt.label,box,{hint:opt.hint}));
+    box.addEventListener('keydown',e=>{ if(e.key==='Enter') go.click(); });
+    const go=footer(api,opt.submit||'Go',()=>api.close({value:box.value.trim()}));
+    return api.result;
+  }
+
+  return {chooser, rule, skill, ask, invalidate(){ CAT=null; }};
 })();
 
 const Settings = (function(){

@@ -97,7 +97,15 @@ EDGE_RELS = [
     # optional-enriching (consume it if it landed, never wait). `reads`/`writes`
     # point at a `node-type`, which is where the real coupling shows.
     "requires", "waits-for", "enriched-by", "reads", "writes",
+    # a skill -> the rule it is accountable for (§5.2). The body naming a rule id
+    # is prose a regex has to guess at; this is the same claim as an edge, so the
+    # map can walk it and a skill's accountability survives a reworded paragraph.
+    "honors",
 ]
+
+# The skill -> rule edge, named once so the UI, the exporter and the tree all
+# reach for the same string.
+HONORS_REL = "honors"
 
 # Skill-tree edges are machine-generated from the declarations, so sync owns them
 # and prunes the ones that stopped being declared. A hand-made edge never carries
@@ -1125,32 +1133,57 @@ def _ingest_skill_file(con, path: Path, kind: str, realm: str):
     text = path.read_text(encoding="utf-8", errors="replace")
     meta, body = _parse_frontmatter(text)
     name = slugify(meta.get("name") or path.parent.name or path.stem)
-    title = meta.get("name") or name
+    # `name` is a slug in every SKILL.md that has one, so using it as the title
+    # renamed a skill to its own id on the way back in. An export writes the real
+    # title out separately; a file without one keeps the old fallback.
+    title = meta.get("title") or meta.get("name") or name
     triggers = _extract_triggers(meta, body)
     node_id = f"skill_{name}"
     node_body = f"WHEN TO USE: {triggers}\n\n{body.strip()}"
     ts = now()
+    kind = meta.get("kind") or kind
+    # A learned skill has no file the tree can re-read at sync time (only a
+    # built-in does, §5a), so its declarations have to land in props HERE or the
+    # import arrives with its dependencies silently dropped.
+    extra = {}
+    if kind != "plugin":
+        decl = _parse_depends_on(body)
+        for key, _label in DECL_LABELS:
+            toks = decl.get(key.replace("_", "-") if key in ("waits_for", "enriched_by")
+                            else key, [])
+            extra[key] = ", ".join(decl_tokens(toks))
     existing = con.execute("SELECT * FROM nodes WHERE id=?", (node_id,)).fetchone()
     if existing:
         cur = _node_dict(existing)
         props = {**cur["props"], "triggers": triggers, "kind": kind,
                  "source_path": str(path), "description": meta.get("description", ""),
-                 "ingested_at": ts}
+                 **extra, "ingested_at": ts}
         con.execute("UPDATE nodes SET title=?, body=?, props=?, realm=?, updated=? WHERE id=?",
                     (title, node_body, json.dumps(props),
-                     cur.get("realm") or realm, ts, node_id))
+                     cur.get("realm") or meta.get("realm") or realm, ts, node_id))
         action = "updated"
     else:
         props = {"triggers": triggers, "kind": kind, "source_path": str(path),
                  "description": meta.get("description", ""), "usage_count": 0,
-                 "confidence": 1.0, "learned_at": ts, "ingested_at": ts}
+                 "confidence": 1.0, "learned_at": ts, "ingested_at": ts, **extra}
         con.execute(
             "INSERT INTO nodes(id,type,title,body,props,status,due,realm,created,updated)"
             " VALUES(?,?,?,?,?,?,?,?,?,?)",
             (node_id, "skill", title, node_body, json.dumps(props),
-             "active", "", realm, ts, ts))
+             "active", "", meta.get("realm") or realm, ts, ts))
         action = "created"
-    return node_id, action
+    # `rules:` in the frontmatter is the portable half of the honors edge. A rule
+    # that did not travel is reported rather than invented: a skill pointing at a
+    # rule id this brain has never held would read as accountable and enforce
+    # nothing.
+    missing = []
+    for rid in decl_tokens(meta.get("rules", "")):
+        if con.execute("SELECT 1 FROM nodes WHERE id=? AND type=?",
+                       (rid, RULE_TYPE)).fetchone():
+            api_link(con, node_id, rid, HONORS_REL)
+        else:
+            missing.append(rid)
+    return node_id, action, missing
 
 
 def _skill_contract_props(args) -> dict:
@@ -1270,18 +1303,11 @@ def skill_trees(con, with_rules: bool = True) -> list:
             # skill says it is accountable for. MATCHED is what match-rules will
             # actually hand it at runtime, from THIS brain — which is where a
             # person's own rules show up against a skill that never named them.
-            named = re.findall(r"rule_[a-z0-9_-]+", n["body"] or "")
-            have = {r["id"]: r for r in (
-                _node_dict(x) for x in con.execute(
-                    "SELECT * FROM nodes WHERE type=?", (RULE_TYPE,)).fetchall())}
-            seen = []
-            for rid in dict.fromkeys(named):
-                if rid in have:
-                    seen.append({"id": rid, "title": have[rid]["title"],
-                                 "source": have[rid]["props"].get("source", ""),
-                                 "non_negotiable": bool(
-                                     have[rid]["props"].get("non_negotiable")),
-                                 "why": "declared"})
+            seen = [{"id": r["id"], "title": r["title"],
+                      "source": r["props"].get("source", ""),
+                      "non_negotiable": bool(r["props"].get("non_negotiable")),
+                      "linked": r["linked"], "why": "declared"}
+                     for r in honored_rules(con, sid)]
             row["declared"] = bool(seen)
             cue = " ".join(filter(None, [n["title"], row["triggers"][:400]]))
             for r in rules_for(con, cue, 6):
@@ -1456,6 +1482,34 @@ def rule_catalog(con) -> list:
     return out_rows
 
 
+def node_type_catalog(con) -> list:
+    """Every node type a skill can declare, with enough to choose one by.
+
+    A picker that offers bare type names asks the person to already know what
+    `gauge` or `transition` means. The count says whether this brain uses it at
+    all, and the readers/writers say what would become coupled to a skill that
+    declares it — which is the actual question §5a's reads/writes answer."""
+    described = {r["title"]: r["body"] for r in con.execute(
+        "SELECT title, body FROM nodes WHERE type='node-type'")}
+    counts = {r["type"]: r["c"] for r in con.execute(
+        "SELECT type, COUNT(*) c FROM nodes GROUP BY type")}
+    touch = {}
+    for r in con.execute(
+            "SELECT e.rel, e.dst, n.title FROM edges e JOIN nodes n ON n.id=e.src"
+            " WHERE e.rel IN ('reads','writes') AND e.dst LIKE 'nodetype_%'"):
+        t = r["dst"][len("nodetype_"):]
+        touch.setdefault(t, {}).setdefault(r["rel"], set()).add(r["title"])
+    # NODE_TYPES is the declarable vocabulary, but §3 calls it soft and the live
+    # graph legitimately holds types outside it. Offer both, or the picker would
+    # be the one place that pretends the vocabulary is closed.
+    names = list(dict.fromkeys(list(NODE_TYPES) + sorted(counts)))
+    return [{"type": t, "body": described.get(t, ""), "nodes": counts.get(t, 0),
+             "read_by": sorted(touch.get(t, {}).get("reads", [])),
+             "written_by": sorted(touch.get(t, {}).get("writes", [])),
+             "declarable": t in NODE_TYPES}
+            for t in names]
+
+
 def area_titles(con) -> dict:
     """hub id -> its title, so the UI labels a domain filter with the person's own
     words instead of a slug it made up."""
@@ -1463,23 +1517,26 @@ def area_titles(con) -> dict:
         "SELECT id, title FROM nodes WHERE type=? AND id LIKE 'hub_%'", (AREA_TYPE,))}
 
 
-def cmd_sync_skill_tree(args):
+def sync_skill_tree(con, realm="shared", no_node_types=False) -> dict:
     """Project the skill contracts into the graph as two trees (CONVENTIONS §5a).
 
     Built-in skills hang off `hub_skills_builtin` and declare in their SKILL.md;
     user skills hang off `hub_skills_user` and declare in props. Idempotent, and
-    a true sync: edges this command previously wrote that are no longer declared
-    are removed, so the graph cannot keep asserting a dependency the corpus
-    dropped. Hand-made edges carry no marker and are never touched."""
-    con = connect()
+    a true sync: edges this run previously wrote that are no longer declared are
+    removed, so the graph cannot keep asserting a dependency the corpus dropped.
+    Hand-made edges carry no marker and are never touched.
+
+    Callable rather than a command body, because creating a skill has to project
+    it immediately — a skill the page cannot draw until someone remembers to run
+    a CLI command is a skill the page draws wrong."""
     ts = now()
-    realm = getattr(args, "realm", None) or "shared"
+    realm = realm or "shared"
     want, hubs, types_seen, unresolved = set(), {}, set(), {}
     trees = {"plugin": [], "learned": []}
 
     rows = con.execute("SELECT * FROM nodes WHERE type='skill' ORDER BY id").fetchall()
     if not rows:
-        out({"ok": False, "error": "no skill nodes — run ingest-skills first"}); return
+        return {"ok": False, "error": "no skill nodes — run ingest-skills first"}
 
     for kind, (hub_id, hub_title) in TREE_HUBS.items():
         if not con.execute("SELECT 1 FROM nodes WHERE id=?", (hub_id,)).fetchone():
@@ -1507,7 +1564,7 @@ def cmd_sync_skill_tree(args):
             others = []
             for token in decl.get(rel, []):
                 t = token.strip().lstrip("`").rstrip("`")
-                if t in known_types and not args.no_node_types:
+                if t in known_types and not no_node_types:
                     tid = f"nodetype_{t}"
                     if tid not in types_seen:
                         if not con.execute("SELECT 1 FROM nodes WHERE id=?", (tid,)).fetchone():
@@ -1539,12 +1596,17 @@ def cmd_sync_skill_tree(args):
     con.commit()
     sync = _after_write(con, del_edges=pruned) if pruned else None
 
-    out({"ok": True,
-         "trees": {"builtin": {"hub": hubs["plugin"], "skills": len(trees["plugin"])},
-                   "user": {"hub": hubs["learned"], "skills": len(trees["learned"])}},
-         "node_types": len(types_seen), "edges": len(want),
-         "added": len(added), "pruned": len(pruned),
-         "unresolved": unresolved or None, "sync": sync})
+    return {"ok": True,
+            "trees": {"builtin": {"hub": hubs["plugin"], "skills": len(trees["plugin"])},
+                      "user": {"hub": hubs["learned"], "skills": len(trees["learned"])}},
+            "node_types": len(types_seen), "edges": len(want),
+            "added": len(added), "pruned": len(pruned),
+            "unresolved": unresolved or None, "sync": sync}
+
+
+def cmd_sync_skill_tree(args):
+    out(sync_skill_tree(connect(), getattr(args, "realm", None) or "shared",
+                        getattr(args, "no_node_types", False)))
 
 
 def cmd_ingest_skills(args):
@@ -1558,22 +1620,491 @@ def cmd_ingest_skills(args):
         dirs = [_plugin_skills_dir(), learned_skills_dir()]
     kind_for = {str(_plugin_skills_dir()): "plugin",
                 str(learned_skills_dir()): "learned"}
-    results, touched = [], []
+    results, touched, rules = [], [], []
     for d in dirs:
         if not d.exists():
             continue
         kind = kind_for.get(str(d), args.kind or "plugin")
+        # Rules first, always: a skill file names the rules it honors, and a rule
+        # that is not in the brain yet when the skill lands cannot be linked to.
+        if not args.no_rules:
+            for rpath in sorted((d / "rules").glob("*.md")):
+                rid, action = _ingest_rule_file(con, rpath)
+                rules.append({"id": rid, "action": action, "path": str(rpath)})
+                if action == "created":
+                    touched.append(rid)
         for path in sorted(d.rglob("SKILL.md")) + (
                 sorted(d.rglob("*.md")) if args.all_md else []):
             if path.name != "SKILL.md" and not args.all_md:
                 continue
-            nid, action = _ingest_skill_file(con, path, kind, args.realm)
+            if path.parent.name == "rules":
+                continue
+            nid, action, missing = _ingest_skill_file(con, path, kind, args.realm)
             touched.append(nid)
-            results.append({"id": nid, "action": action, "kind": kind,
-                            "path": str(path)})
+            row = {"id": nid, "action": action, "kind": kind, "path": str(path)}
+            if missing:
+                row["rules_not_found"] = missing
+            results.append(row)
     con.commit()
     sync = _after_write(con, nodes=touched) if touched else None
-    out({"ok": True, "count": len(results), "ingested": results, "sync": sync})
+    tree = sync_skill_tree(con, args.realm) if touched else None
+    out({"ok": True, "count": len(results), "ingested": results,
+         "rules": rules, "tree": tree, "sync": sync})
+
+
+# ---------------------------------------------------------------------------
+# contracts as data: build one, parse one back, check one is complete
+#
+# §5.1 and §5b.1 describe the two shapes in prose, and until now the only thing
+# that could produce them was a person typing the headings. That made every
+# non-prose author — the web UI, an export, an import from another machine — a
+# second definition of the same shape, free to drift. These functions ARE the
+# shape: one renderer, one parser, one validator, and every author goes through
+# them.
+# ---------------------------------------------------------------------------
+
+# (field, heading, required). `rules_honored` and `depends_on` are rendered from
+# the links and declarations rather than typed, so they are never required input.
+SKILL_SECTIONS = [
+    ("when_to_use",    "## When to use",           True),
+    ("given",          "## Given",                 True),
+    ("rules_honored",  "## Rules honored",         False),
+    ("depends_on",     "## Depends on",            False),
+    ("deliverables",   "## Deliverables",          True),
+    ("judged_against", "## Judged against",        True),
+    ("guardrails",     "## Guardrails - must not", True),
+    ("reply",          "## Reply (focus contract)", True),
+]
+
+# Only THE RULE and JUDGED AGAINST are required (§5b.1): a rule with no checkable
+# outcome is the thing the shape exists to prevent. EXCEPTIONS is always emitted
+# even when empty, because an unstated exception gets invented under pressure.
+RULE_SECTIONS = [
+    ("the_rule",       "THE RULE",      True),
+    ("why",            "WHY",           False),
+    ("how_to_apply",   "HOW TO APPLY",  False),
+    ("exceptions",     "EXCEPTIONS",    False),
+    ("judged_against", "JUDGED AGAINST", True),
+    ("related",        "RELATED",       False),
+]
+
+# label in a `## Depends on` block  <->  the declaration key (§5a)
+DECL_LABELS = [("requires", "Requires"), ("waits_for", "Optional (ordered)"),
+               ("enriched_by", "Optional (enriching)"),
+               ("reads", "Reads"), ("writes", "Writes")]
+
+
+def decl_tokens(value) -> list:
+    """A declaration field from any author: a list, or a comma/newline string."""
+    if isinstance(value, (list, tuple)):
+        items = list(value)
+    else:
+        items = re.split(r"[,\n]", str(value or ""))
+    seen, keep = set(), []
+    for t in items:
+        t = str(t).strip().strip("`").strip()
+        if t and t.lower() not in seen:
+            seen.add(t.lower())
+            keep.append(t)
+    return keep
+
+
+def render_depends_on(decl: dict) -> str:
+    """The `## Depends on` block, in exactly the shape `_parse_depends_on` reads.
+
+    `none` is written out for an empty field rather than the line being dropped:
+    §5a says silence is never a declaration, and a round-trip through a file has
+    to be able to tell "declared nothing" from "did not say"."""
+    lines = []
+    for key, label in DECL_LABELS:
+        toks = decl_tokens((decl or {}).get(key))
+        lines.append(f"- **{label}:** " +
+                     (", ".join(f"`{t}`" for t in toks) if toks else "none."))
+    return "\n".join(lines)
+
+
+def render_rules_honored(rules: list, cue: str, extra: str = "") -> str:
+    """The `## Rules honored` block: the match-rules call, then the rules this
+    skill is accountable for, by id.
+
+    The ids are written into the prose AND carried as `honors` edges. That is
+    not duplication for its own sake: the body is what a person reads when the
+    skill fires, the edge is what the graph can walk, and a skill whose
+    accountability only existed in one of the two would be invisible to the
+    other."""
+    call = cue or "what you are about to do"
+    out_lines = [
+        "Ask the genome for the rules that apply before acting (CONVENTIONS §5.2):",
+        "", "```",
+        f'python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" match-rules "{call}"',
+        "```", "",
+    ]
+    if rules:
+        out_lines.append("Accountable for:")
+        out_lines += [f"- `{r['id']}`: {r['title']}" for r in rules]
+    else:
+        out_lines.append("Accountable for: whatever `match-rules` returns for that "
+                         "cue. No rule is named here yet.")
+    if (extra or "").strip():
+        out_lines += ["", extra.strip()]
+    return "\n".join(out_lines)
+
+
+def build_skill_contract(sections: dict, decl=None, rules=None, cue="") -> str:
+    """The eight sections of §5.1, in order, as one node body."""
+    sections = sections or {}
+    parts = []
+    for field, heading, _req in SKILL_SECTIONS:
+        if field == "depends_on":
+            text = render_depends_on(decl or {})
+        elif field == "rules_honored":
+            text = render_rules_honored(rules or [], cue,
+                                        sections.get("rules_honored", ""))
+        else:
+            text = str(sections.get(field) or "").strip()
+        # An empty section is LEFT OUT, never written as a bare heading. The
+        # audit asks whether a heading appears in the body, so an empty one
+        # would report a contract as complete and hide exactly the gap the
+        # audit exists to find.
+        if not text:
+            continue
+        parts.append(f"{heading}\n\n{text}")
+    return "\n\n".join(parts) + "\n"
+
+
+def build_rule_contract(sections: dict) -> str:
+    """The rule contract of §5b.1 as one node body. GOVERNS is NOT written: it is
+    rendered from props.scenario by whoever displays the rule (§5b.2)."""
+    sections = sections or {}
+    parts = []
+    for field, heading, _req in RULE_SECTIONS:
+        text = str(sections.get(field) or "").strip()
+        if field == "exceptions" and not text:
+            text = "none"
+        # Same reason as build_skill_contract: a heading with nothing under it
+        # reads as a filled section to every checker, including this project's.
+        if not text:
+            continue
+        parts.append(f"{heading}\n\n{text}")
+    return "\n\n".join(parts) + "\n"
+
+
+def _norm_heading(line: str) -> str:
+    """A heading reduced to what identifies it.
+
+    Every dash becomes a hyphen, because the corpus writes
+    `## Guardrails — must not` with an em dash and the generated form uses a
+    plain one. Comparing them literally silently dropped that whole section on
+    the way back in, and a lost guardrail is the one loss §5.3 calls
+    unacceptable."""
+    s = re.sub(r"[\u2010-\u2015\u2212\-]+", "-", (line or "").strip().lower())
+    return re.sub(r"\s+", " ", s).strip(" .:")
+
+
+def _split_sections(body: str, headings: list, level: str) -> dict:
+    """Cut a contract body back into its sections. `level` is '## ' for a skill
+    (markdown headings) or '' for a rule (bare uppercase lines)."""
+    heads = {}
+    for field, heading, _req in headings:
+        norm = _norm_heading(heading)
+        heads[norm] = field
+        # `## Guardrails` on its own is the same section as
+        # `## Guardrails - must not`, and the audit already treats it that way.
+        heads.setdefault(norm.split(" - ")[0].strip(), field)
+    found, cur = {}, None
+    for line in (body or "").splitlines():
+        stripped = line.strip()
+        is_heading = stripped.startswith("##") if level else stripped.isupper()
+        hit = heads.get(_norm_heading(line)) if is_heading else None
+        if hit:
+            cur = hit
+            found.setdefault(cur, [])
+            continue
+        if cur is not None:
+            found[cur].append(line)
+    return {k: "\n".join(v).strip() for k, v in found.items()}
+
+
+def parse_skill_contract(body: str) -> dict:
+    return _split_sections(body, SKILL_SECTIONS, "## ")
+
+
+def parse_rule_contract(body: str) -> dict:
+    return _split_sections(body, RULE_SECTIONS, "")
+
+
+def missing_skill_sections(sections: dict) -> list:
+    return [h for f, h, req in SKILL_SECTIONS
+            if req and not str((sections or {}).get(f) or "").strip()]
+
+
+def missing_rule_sections(sections: dict) -> list:
+    return [h for f, h, req in RULE_SECTIONS
+            if req and not str((sections or {}).get(f) or "").strip()]
+
+
+# ---------------------------------------------------------------------------
+# authoring a rule / a skill, from anywhere
+#
+# The CLI used to be the only author, so `cmd_add_rule` did the parsing, the
+# validation and the writing in one function. The web UI needs the same write
+# without the argparse namespace around it, so the write lives here and the
+# command is a thin caller. One author, one set of invariants.
+# ---------------------------------------------------------------------------
+
+def api_add_rule(con, *, title, body="", sections=None, scenario="", source="user",
+                 section="", non_negotiable=False, overrides="", realm="",
+                 node_id="", require_contract=True):
+    """Author or override a convention rule.
+
+    `sections` (the §5b.1 fields) is the structured way in; `body` is the raw
+    way, kept for callers that already hold a written contract. Either produces
+    the same node, and the contract is checked before the write rather than
+    reported afterwards by `audit-contracts`: a rule authored through a form has
+    no excuse to arrive incomplete."""
+    title = (title or "").strip()
+    if not title:
+        return {"ok": False, "error": "a rule needs a title"}
+    if sections:
+        body = build_rule_contract(sections)
+    body = (body or "").strip()
+    if require_contract:
+        gaps = missing_rule_sections(sections or parse_rule_contract(body))
+        if gaps:
+            return {"ok": False, "error": "incomplete rule contract (§5b.1): "
+                                          "missing " + ", ".join(gaps)}
+    if source not in RULE_PRECEDENCE:
+        return {"ok": False, "error": f"unknown source: {source}"}
+    aid = _ensure_area(con, AREA_CONVENTION, realm or "shared")
+    props = {"section": section or "user",
+             "scenario": (scenario or title).strip(),
+             "source": source,
+             "precedence": RULE_PRECEDENCE[source],
+             "authored_at": now()}
+    if non_negotiable:
+        props["non_negotiable"] = True
+    if overrides:
+        props["overrides"] = overrides
+    nid = node_id or f"rule_{source}_{slugify(title)[:48]}"
+    if con.execute("SELECT 1 FROM nodes WHERE id=?", (nid,)).fetchone():
+        return {"ok": False, "error": f"{nid} already exists — edit it, or give "
+                                      f"the new rule a different title"}
+    res = api_create_node(con, RULE_TYPE, title, body, props,
+                          "active", "", realm or "shared", nid)
+    if not res.get("ok"):
+        return res
+    api_link(con, nid, aid, AREA_REL)
+    if overrides:
+        # Retire the shipped rule rather than deleting it — history stays, and
+        # match-rules stops surfacing both sides of a contradiction.
+        api_update_node(con, overrides, status="superseded",
+                        props_patch={"superseded_by": nid})
+        api_link(con, nid, overrides, "follows-up")
+    res["area"] = aid
+    return res
+
+
+def api_add_skill(con, *, name, title, description="", triggers="", sections=None,
+                  body="", decl=None, rules=(), realm="", node_id="",
+                  kind="learned", require_contract=True, sync_tree=True):
+    """Author a learned skill: the node, its `honors` edges, and its place in the
+    user tree.
+
+    A skill created here is complete the moment it is written — contract checked,
+    rules linked, tree edges projected — because a skill that needs a follow-up
+    CLI run before the page can show it is a skill the page will show wrong."""
+    name = slugify(name or title)
+    title = (title or "").strip()
+    if not name or not title:
+        return {"ok": False, "error": "a skill needs a name and a title"}
+    triggers = (triggers or (sections or {}).get("when_to_use", "")).strip()
+    rule_rows = []
+    for rid in dict.fromkeys(rules or ()):
+        row = con.execute("SELECT id,title FROM nodes WHERE id=? AND type=?",
+                          (rid, RULE_TYPE)).fetchone()
+        if not row:
+            return {"ok": False, "error": f"no rule {rid}"}
+        rule_rows.append({"id": row["id"], "title": row["title"]})
+    if sections:
+        if require_contract:
+            gaps = missing_skill_sections(sections)
+            if gaps:
+                return {"ok": False, "error": "incomplete skill contract (§5.1): "
+                                              "missing " + ", ".join(gaps)}
+        body = build_skill_contract(sections, decl, rule_rows, triggers[:120])
+    body = (body or "").strip()
+    nid = node_id or f"skill_{name}"
+    if con.execute("SELECT 1 FROM nodes WHERE id=?", (nid,)).fetchone():
+        return {"ok": False, "error": f"{nid} already exists — edit it, or give "
+                                      f"the new skill a different name"}
+    props = {"triggers": triggers, "kind": kind, "description": description,
+             "usage_count": 0, "confidence": 1.0, "learned_at": now()}
+    for key, _label in DECL_LABELS:
+        toks = decl_tokens((decl or {}).get(key))
+        if toks:
+            props[key] = ", ".join(toks)
+    res = api_create_node(con, "skill", title, f"WHEN TO USE: {triggers}\n\n{body}",
+                          props, "active", "", realm or "shared", nid)
+    if not res.get("ok"):
+        return res
+    for r in rule_rows:
+        api_link(con, nid, r["id"], HONORS_REL)
+    res["rules"] = [r["id"] for r in rule_rows]
+    if sync_tree:
+        res["tree"] = sync_skill_tree(con, realm=realm or "shared")
+    return res
+
+
+def honored_rules(con, skill_id: str) -> list:
+    """The rules a skill declares itself accountable for, edges first.
+
+    Both halves are read, because the corpus predates the edge: a built-in skill
+    names its rules in the `## Rules honored` prose and has no `honors` edge
+    until someone adds one, and a skill authored in the UI has the edge from the
+    first save. Reading only one of the two would hide half the corpus."""
+    seen, out_rows = set(), []
+    for r in con.execute(
+            "SELECT n.id, n.title, n.props FROM edges e JOIN nodes n ON n.id=e.dst"
+            " WHERE e.src=? AND e.rel=? AND n.type=? ORDER BY n.title",
+            (skill_id, HONORS_REL, RULE_TYPE)):
+        seen.add(r["id"])
+        out_rows.append({"id": r["id"], "title": r["title"],
+                         "props": json.loads(r["props"] or "{}"), "linked": True})
+    row = con.execute("SELECT body FROM nodes WHERE id=?", (skill_id,)).fetchone()
+    for rid in dict.fromkeys(re.findall(r"rule_[a-z0-9_-]+", (row["body"] if row else "") or "")):
+        if rid in seen:
+            continue
+        hit = con.execute("SELECT id,title,props FROM nodes WHERE id=? AND type=?",
+                          (rid, RULE_TYPE)).fetchone()
+        if hit:
+            seen.add(rid)
+            out_rows.append({"id": hit["id"], "title": hit["title"],
+                             "props": json.loads(hit["props"] or "{}"),
+                             "linked": False})
+    return out_rows
+
+
+# ---------------------------------------------------------------------------
+# markdown <-> graph, so a skill can travel between machines
+#
+# The DB is the source of truth and the neo4j mirror is how two machines share
+# it. Markdown is the third route, and the one that works with no server: export
+# a skill folder, commit it or copy it, ingest it on the other side. The export
+# is the same contract the node holds, so a round trip changes nothing.
+# ---------------------------------------------------------------------------
+
+def _fm_value(v) -> str:
+    """One frontmatter line's value. The parser is line-based single values, so
+    anything multi-line is folded to spaces rather than silently truncated."""
+    return " ".join(str(v or "").split())
+
+
+def rule_markdown(con, rule_id: str) -> str:
+    row = con.execute("SELECT * FROM nodes WHERE id=? AND type=?",
+                      (rule_id, RULE_TYPE)).fetchone()
+    if not row:
+        return ""
+    n = _node_dict(row)
+    p = n["props"]
+    fm = [f"id: {n['id']}", f"title: {_fm_value(n['title'])}",
+          f"scenario: {_fm_value(p.get('scenario'))}",
+          f"source: {p.get('source', 'user')}",
+          f"section: {p.get('section', 'user')}",
+          f"realm: {n.get('realm', '')}",
+          f"non_negotiable: {'true' if p.get('non_negotiable') else 'false'}"]
+    if p.get("overrides"):
+        fm.append(f"overrides: {p['overrides']}")
+    return "---\n" + "\n".join(fm) + "\n---\n\n" + (n["body"] or "").strip() + "\n"
+
+
+def skill_markdown(con, skill_id: str) -> tuple:
+    """(markdown, [rule ids]) for one skill node, as a portable SKILL.md."""
+    row = con.execute("SELECT * FROM nodes WHERE id=? AND type='skill'",
+                      (skill_id,)).fetchone()
+    if not row:
+        return "", []
+    n = _node_dict(row)
+    p = n["props"]
+    _kind, decl = _skill_declarations(con, row)
+    rules = honored_rules(con, skill_id)
+    name = slugify(p.get("name") or n["id"][len("skill_"):] or n["title"])
+    # the body already carries the contract; strip the WHEN TO USE preamble the
+    # node stores for full-text matching, since the contract states it properly
+    body = re.sub(r"^WHEN TO USE:.*?\n\n", "", n["body"] or "", flags=re.S)
+    if "## When to use" not in body:
+        body = build_skill_contract({"when_to_use": p.get("triggers", ""),
+                                     "deliverables": body}, decl, rules,
+                                    (p.get("triggers") or "")[:120])
+    fm = [f"name: {name}",
+          f"title: {_fm_value(n['title'])}",
+          f"description: {_fm_value(p.get('description') or n['title'])}",
+          f"kind: {p.get('kind', 'learned')}",
+          f"realm: {n.get('realm', '')}",
+          f"triggers: {_fm_value(p.get('triggers'))}"]
+    if rules:
+        fm.append("rules: " + ", ".join(r["id"] for r in rules))
+    md = ("---\n" + "\n".join(fm) + "\n---\n\n"
+          f"# {n['title']}\n\n" + body.strip() + "\n")
+    return md, [r["id"] for r in rules]
+
+
+def _ingest_rule_file(con, path: Path) -> tuple:
+    """Upsert one exported rule file. A rule already in this brain is NEVER
+    overwritten by an incoming file: the other machine's copy may be older, and
+    silently losing an edit is worse than skipping an import you can redo."""
+    meta, body = _parse_frontmatter(path.read_text(encoding="utf-8", errors="replace"))
+    rid = meta.get("id") or f"rule_{meta.get('source', 'user')}_{slugify(meta.get('title', ''))[:48]}"
+    if not meta.get("title"):
+        return rid, "skipped (no title)"
+    if con.execute("SELECT 1 FROM nodes WHERE id=?", (rid,)).fetchone():
+        return rid, "kept"
+    res = api_add_rule(
+        con, title=meta["title"], body=body,
+        scenario=meta.get("scenario", ""),
+        source=meta.get("source", "user") if meta.get("source") in RULE_PRECEDENCE else "user",
+        section=meta.get("section", ""),
+        non_negotiable=str(meta.get("non_negotiable", "")).lower() == "true",
+        realm=meta.get("realm", ""), node_id=rid,
+        # an imported rule is reported, not refused: the gap belongs to whoever
+        # authored it on the other machine, and dropping it here loses the rule
+        require_contract=False)
+    return rid, ("created" if res.get("ok") else f"failed: {res.get('error')}")
+
+
+def cmd_export_skills(args):
+    """Write skill nodes back out as markdown, so a brain can be moved by file.
+
+    Rules a skill honors travel with it, into a shared `rules/` folder beside the
+    skill folders: a skill whose rules stayed behind arrives on the other machine
+    accountable to nothing, which is the failure this whole shape exists to
+    prevent."""
+    con = connect()
+    dest = Path(args.dir).expanduser() if args.dir else learned_skills_dir()
+    kinds = None if args.kind == "all" else {args.kind or "learned"}
+    written, rule_ids = [], set()
+    for row in con.execute("SELECT * FROM nodes WHERE type='skill' ORDER BY id"):
+        p = json.loads(row["props"] or "{}")
+        if kinds and (p.get("kind") or "learned") not in kinds:
+            continue
+        md, rules = skill_markdown(con, row["id"])
+        name = slugify(row["id"][len("skill_"):] or row["title"])
+        path = dest / name / "SKILL.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(md, encoding="utf-8")
+        written.append({"id": row["id"], "path": str(path), "rules": len(rules)})
+        rule_ids.update(rules)
+    rules_written = []
+    if not args.no_rules:
+        for rid in sorted(rule_ids):
+            md = rule_markdown(con, rid)
+            path = dest / "rules" / f"{rid}.md"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(md, encoding="utf-8")
+            rules_written.append(str(path))
+    out({"ok": True, "dir": str(dest), "skills": len(written),
+         "rules": len(rules_written), "exported": written,
+         "rule_files": rules_written,
+         "hint": "copy this directory to the other machine and run ingest-skills"})
 
 
 def _plugin_root() -> Path:
@@ -1636,9 +2167,7 @@ def cmd_ingest_conventions(args):
     if not path.exists():
         out({"ok": False, "error": f"no conventions file at {path}"}); return
     realm = getattr(args, "realm", None) or "shared"
-    aid, err = _resolve_area(con, AREA_CONVENTION)
-    if err:
-        out(err); return
+    aid = _ensure_area(con, AREA_CONVENTION, realm)
     sections = _parse_conventions_sections(path.read_text(encoding="utf-8", errors="replace"))
     ts = now()
     results, touched = [], []
@@ -1688,35 +2217,21 @@ def cmd_ingest_conventions(args):
 
 def cmd_add_rule(args):
     """Author or override a convention rule. This is the neuroplastic half: a
-    user rule outranks the plugin default it names via --overrides."""
-    con = connect()
-    aid, err = _resolve_area(con, AREA_CONVENTION)
-    if err:
-        out(err); return
-    source = args.source or "user"
-    props = {"section": args.section or "user",
-             "scenario": args.scenario or args.title,
-             "source": source,
-             "precedence": RULE_PRECEDENCE.get(source, RULE_PRECEDENCE["user"]),
-             "authored_at": now()}
-    if args.non_negotiable:
-        props["non_negotiable"] = True
-    if args.overrides:
-        props["overrides"] = args.overrides
-    nid = args.id or f"rule_{source}_{slugify(args.title)[:48]}"
-    res = api_create_node(con, RULE_TYPE, args.title, args.body or "", props,
-                          "active", "", getattr(args, "realm", None) or "shared", nid)
-    if not res.get("ok"):
-        out(res); return
-    api_link(con, nid, aid, AREA_REL)
-    if args.overrides:
-        # Retire the shipped rule rather than deleting it — history stays, and
-        # match-rules stops surfacing both sides of a contradiction.
-        api_update_node(con, args.overrides, status="superseded",
-                        props_patch={"superseded_by": nid})
-        api_link(con, nid, args.overrides, "follows-up")
-    res["area"] = aid
-    out(res)
+    user rule outranks the plugin default it names via --overrides.
+
+    The write itself is `api_add_rule`, shared with the web UI, so a rule typed
+    into a form and a rule typed into a shell are the same node."""
+    sections = {f: getattr(args, f, "") for f, _h, _r in RULE_SECTIONS}
+    out(api_add_rule(
+        connect(), title=args.title, body=args.body or "",
+        sections=sections if any(sections.values()) else None,
+        scenario=args.scenario or "", source=args.source or "user",
+        section=args.section or "", non_negotiable=bool(args.non_negotiable),
+        overrides=args.overrides or "", realm=getattr(args, "realm", None) or "shared",
+        node_id=args.id or "",
+        # a --body handed in whole is the author's business; only the structured
+        # form is held to §5b.1 here, since that is the path that can fill it in
+        require_contract=bool(getattr(args, "strict", False))))
 
 
 def rules_for(con, query: str, limit: int = 8) -> list:
@@ -3148,6 +3663,26 @@ def cmd_add_area(args):
                         "", "", getattr(args, "realm", None), aid))
 
 
+# The hub the genome is filed under is not a user choice — it is a constant of
+# the engine — so every writer of a rule may create it. Before this, authoring a
+# rule on a brain that had never run `add-area` failed with an error about a hub
+# the person had no reason to know existed.
+GENOME_HUBS = {
+    AREA_CONVENTION: "Conventions — how this brain behaves",
+    AREA_GENOME: "Genome — how this brain is built",
+}
+
+
+def _ensure_area(con, area_id: str, realm="shared"):
+    """The area id, creating it first if this brain has never held it."""
+    if not con.execute("SELECT 1 FROM nodes WHERE id=? AND type=?",
+                       (area_id, AREA_TYPE)).fetchone():
+        api_create_node(con, AREA_TYPE, GENOME_HUBS.get(area_id, area_id),
+                        "", {"domain": area_id[len("hub_"):]}, "", "",
+                        realm, area_id)
+    return area_id
+
+
 def _resolve_area(con, area):
     """An area id (or bare domain name) -> the area node id, or an error dict."""
     for candidate in (area, f"hub_{slugify(area)}"):
@@ -4325,6 +4860,13 @@ def build_parser():
     a.add_argument("--non-negotiable", dest="non_negotiable", action="store_true",
                    help="always returned by match-rules, cue or no cue")
     a.add_argument("--realm")
+    a.add_argument("--strict", action="store_true",
+                   help="refuse an incomplete contract instead of reporting it later")
+    # the §5b.1 sections, so a rule can be authored structured rather than as one
+    # --body the author has to remember the headings for
+    for _f, _h, _r in RULE_SECTIONS:
+        a.add_argument("--" + _f.replace("_", "-"), dest=_f,
+                       help=f"the {_h} section")
 
     a = sub.add_parser("match-rules", description=(
         "Which conventions apply to THIS situation — the token-light replacement "
@@ -4502,6 +5044,20 @@ def build_parser():
     a.add_argument("--kind", help="label for skills from a custom --dir (default plugin)")
     a.add_argument("--all-md", action="store_true",
                    help="also ingest non-SKILL.md markdown files in the dirs")
+    a.add_argument("--no-rules", dest="no_rules", action="store_true",
+                   help="skip the exported rules/ folder beside the skills")
+
+    a = sub.add_parser("export-skills", description=(
+        "Write skill nodes back out as markdown so a brain can move by file: one "
+        "folder per skill, plus a shared rules/ folder holding every rule they "
+        "honor. Re-ingest on the other machine with ingest-skills."))
+    a.set_defaults(func=cmd_export_skills)
+    a.add_argument("--dir", help="destination (default: <home>/learned_skills)")
+    a.add_argument("--kind", choices=["learned", "plugin", "all"], default="learned",
+                   help="which tree to export (default learned — the built-ins "
+                        "already ship as files)")
+    a.add_argument("--no-rules", dest="no_rules", action="store_true",
+                   help="skills only; leave the rules behind")
 
     a = sub.add_parser("match-skills"); a.set_defaults(func=cmd_match_skills)
     a.add_argument("query", nargs="?", default="")

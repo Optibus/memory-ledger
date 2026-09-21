@@ -143,7 +143,7 @@ Commands:
 | `ingest-conventions [--file F] [--realm R]` | Load this file into the brain as `rule` nodes, one per section (§2i). Idempotent and **never overwrites a user-authored or user-edited rule**. |
 | `audit-contracts [--kind K] [--source S]... [--count-only]` | Check the contracts that live in the **DB**, which the file checker cannot see: learned skills (§5.1) and user/learned rules (§5b.1). Reports gaps, **never rewrites** — the missing clause is a judgment call, and filling it mechanically produces exactly the unfalsifiable sentence §5b exists to prevent. |
 | `snapshot-rules [--label L] [--source S]...` | Copy every rule **verbatim** into the `rules-backup` realm before a bulk edit (§5b.3). Stores `rule-snapshot` nodes, never `rule`, so `match-rules` cannot return one; captures body, title and props, because a rule without its `scenario` could not be restored to firing. Idempotent by content: an unchanged rule stores nothing, a changed one stores a new generation, nothing is overwritten. |
-| `add-rule --title T [--body ...] [--scenario CUES] [--section S] [--source user\|learned\|plugin] [--overrides ID] [--non-negotiable] [--id ID] [--realm R]` | Author or override a rule — the mutable half of the genome (§2i). `--overrides` marks the shipped rule `superseded`. **`--scenario` is indexed** — put the words a person would actually type there, including ones the body never uses; that is what `match-rules` fires on. Same for a skill's `triggers`/`description`. |
+| `add-rule --title T [--body ...] [--scenario CUES] [--section S] [--source user\|learned\|plugin] [--overrides ID] [--non-negotiable] [--id ID] [--realm R]` | Author or override a rule — the mutable half of the genome (§2i). `--overrides` marks the shipped rule `superseded`. **`--scenario` is indexed** — put the words a person would actually type there, including ones the body never uses; that is what `match-rules` fires on. Same for a skill's `triggers`/`description`. The §5b.1 sections also have flags of their own (`--the-rule`, `--why`, `--how-to-apply`, `--exceptions`, `--judged-against`, `--related`) so a rule can be authored structured rather than as one `--body` whose headings you have to remember; `--strict` refuses an incomplete one instead of leaving it for `audit-contracts`. |
 | `park [--body TEXT] [--title T] [--about ID] [--area A]` | **Move context OUT of the window** (§2j): stores the blob (stdin or `--body`) and returns a tiny receipt, so the model can drop the content. |
 | `unpark --id ID [--offset N] [--chars N]` | Read parked context back, whole or sliced. |
 | `resume [--budget CHARS] [--days N] [--limit N]` | **Rehydrate after `/clear`** (§2j) — the thread that was in play, what's parked, what's open, inside a budget. No model call. |
@@ -155,7 +155,8 @@ Commands:
 | `done [--limit N]` | The done archive — everything completed. |
 | `add-skill --name slug --title T [--when triggers] [--body steps] [--with-file] [--requires S] [--waits-for S] [--enriched-by S] [--reads T] [--writes T]` | **Learn a skill at runtime** — stores a `skill` node (triggers + full procedure in the DB, synced everywhere), stamped `kind: learned`. **Node-first**: a local `SKILL.md` is written only with `--with-file`. The five declaration flags are a user skill's contract (§5a): comma-separated skill names for the first three, node types for `--reads`/`--writes`. They are what puts it in the user tree with edges rather than as a leaf. |
 | `sync-skill-tree [--realm R] [--no-node-types]` | Project the skill contracts into the graph as **two trees** (§5a): built-in skills under `hub_skills_builtin`, user skills under `hub_skills_user`. Built-in skills declare in their `SKILL.md` `## Depends on` block, user skills in props (`add-skill --requires/--reads/--writes`). Idempotent, and a **true sync**: generated edges that stopped being declared are pruned. Hand-made edges carry no marker and are never touched. |
-| `ingest-skills [--dir D]... [--realm R]` | Pull existing markdown skills (plugin `skills/` + `learned_skills/`) into the DB as `skill` nodes (idempotent; re-run to refresh). |
+| `ingest-skills [--dir D]... [--realm R] [--no-rules]` | Pull existing markdown skills (plugin `skills/` + `learned_skills/`) into the DB as `skill` nodes (idempotent; re-run to refresh). A `rules/` folder beside them is read **first**, so the skills landing next to it can link to the rules that travelled with them, and a rule this brain already holds is **kept**, never overwritten. Re-projects the tree when anything changed. |
+| `export-skills [--dir D] [--kind learned\|plugin\|all] [--no-rules]` | The other direction (§5a): write skill nodes back out as `D/<name>/SKILL.md` plus `D/rules/<rule id>.md` for every rule they honor, so a brain can move between machines by file when there is no master to mirror through. A round trip is lossless — contract, declarations and `honors` edges all survive. |
 | `match-skills "situation" [--limit N]` | Find skills matching the situation — ranked by **relevance first**, with reinforcement (usage) as a bounded booster. Read the procedure from the node body (`get-node`). |
 | `use-skill --id ID` | **Reinforce** a skill after it fires (usage_count↑, confidence↑, last_used stamped). |
 | `conversation-start --session SID [--cwd D] [--owner O] [--title T]` | Get-or-create this session's conversation node (§2k). Idempotent — the id is derived from the session id. |
@@ -418,7 +419,7 @@ expose the UI (`--host 0.0.0.0` for phone access), pass **`--no-write`**: every
 `POST` then returns 403 and the UI hides its editing controls (`/api/meta`
 reports `writable: false`).
 
-**Three sections, behind one hamburger: Map, Dashboard, Settings.** The sections
+**Four sections, behind one hamburger: Map, Dashboard, Skills, Settings.** The sections
 live in a left drawer (`m` toggles it, Settings pinned at the bottom) so nothing
 sits on top of the search bar, and each section owns the whole viewport. The map's
 facet filters — node types, realms, kinds, and the display toggles — are one
@@ -464,11 +465,50 @@ A skill matches on the rules it pulled *specifically*, never on the always-on
 ones. Every skill carries those, so matching them would answer "which skills obey
 the no-emoji rule" with the entire corpus: true, and useless.
 
-It is **read-only**, unlike the Dashboard. A contract is edited in its `SKILL.md`
-or with `add-skill`, both of which are checked; a text box here would be a third
-way to change a contract and the only one nothing validates. The page reads the
-edges `sync-skill-tree` wrote, so a stale tree means the sync has not been run,
-not that the page is wrong.
+Opening a skill or a rule also shows **its relations, one level deep** — every
+edge in and out, named, read from `/api/node`, the same endpoint the dashboard's
+expander uses. One level, never two: the question a card answers is "what else is
+this wired to". "What is the graph" is what the map is for.
+
+**Authoring is a write, reading an existing contract is not.** The `+` button
+creates a new skill or a new rule; it does not edit one that exists. That split
+is not squeamishness about the browser — it is about where the check lives. A new
+contract written here goes through `build_skill_contract` / `build_rule_contract`
+and is **refused when a required section is empty**, which is stricter than the
+CLI, where `audit-contracts` reports the gap afterwards. An existing contract is
+edited where its check already lives: a built-in in its `SKILL.md`, gated by the
+pre-commit checker.
+
+| Do this in the browser | Endpoint | Notes |
+|---|---|---|
+| Write a rule | `POST /api/create-rule` | `{title, scenario, source, section, realm, non_negotiable, overrides, sections{}}`. Refused unless `THE RULE` and `JUDGED AGAINST` are filled (§5b.1). |
+| Write a skill | `POST /api/create-skill` | `{name, title, description, realm, sections{}, requires, waits_for, enriched_by, reads, writes, rules[], new_rules[]}`. Refused unless the six typed sections of §5.1 are filled. |
+| Export the learned tree | `POST /api/export-skills` | `graph.py export-skills` — SKILL.md per skill, plus every rule they honor. |
+| Read markdown back in | `POST /api/ingest-skills` | `graph.py ingest-skills` — idempotent; a rule this brain already holds is kept. |
+| Read the contract shapes | `GET /api/meta` | `skill_sections`, `rule_sections`, `decl_labels`, `node_types`. The form is generated from these, never from headings typed into the page. |
+
+**Choosing is done on cards, never in a `<select>`.** Every "which of these"
+in the forms — the rules a skill honors, the rule a new one replaces, the
+skills and node types it declares — opens a searchable picker whose rows carry
+the name, what the thing is *for*, and the full text one click away. A native
+select shows one line of text per option, which for a rule is its title and
+nothing about when it fires or what it forbids; choosing among forty of those is
+guessing. The picker is multi-select wherever the field takes more than one, and
+`/api/skills` carries `node_types` so a type card can say how many of it this
+brain holds and which skills already touch it — which is the actual question
+`reads`/`writes` answer.
+
+**Rules a skill needs but does not have yet are written in the same flow.** The
+skill form's rule lines each take an existing rule, and `+ New rule…` opens a
+rule form **on top** of the half-filled skill one. Nothing is written until the
+skill is saved: the inline rules are created first, in one call, and a rule that
+fails to write aborts the skill rather than leaving one accountable to a rule
+that does not exist. Sending someone away to author a rule and losing their
+half-typed skill is the failure this shape prevents.
+
+The page reads the edges `sync-skill-tree` wrote, so a stale tree means the sync
+has not been run, not that the page is wrong — except after an authoring write,
+which projects the tree itself so a new skill is drawable immediately.
 
 ## 2h. Memory dynamics — how recall behaves like memory
 
@@ -805,7 +845,7 @@ resolved, merged, shipped, deployed, declined.
 `has-subtask`, `assigned-to`, `about`, `depends-on`, `causes`, `caused-by`,
 `mentions`, `authored-by`, `example-of`, `follows-up`, and for learned skills:
 `applies-to`, `learned-from`, `reinforces`, `triggered-by`; and for the skill
-tree (§5a): `requires`, `waits-for`, `enriched-by`, `reads`, `writes`.
+tree (§5a): `requires`, `waits-for`, `enriched-by`, `reads`, `writes`, `honors`.
 Traceability (§2k)
 reuses `part-of` for the agent tree and message→agent, `about` for a transition
 to its idea, `blocked-by` for an idea to the gauge holding it back, `caused-by`
@@ -1025,7 +1065,8 @@ The trees are not sealed off from each other, though. A learned skill may
 onto the shipped corpus.
 
 Each skill hangs `part-of` its hub. `requires`, `waits-for` and `enriched-by`
-connect skills to each other. `reads` and `writes` point at a `node-type` node,
+connect skills to each other, and `honors` connects a skill to a rule it is
+accountable for. `reads` and `writes` point at a `node-type` node,
 one per type, which is what makes the coupling visible: open `nodetype_task` in
 the map and every skill that touches a task is one hop away, whether or not any of
 them mention each other.
@@ -1040,6 +1081,43 @@ after any change to a `## Depends on` block.
 A token named in `Reads`/`Writes` that is not a known node type (a command, an
 external system) is kept on the skill as `reads_other` / `writes_other` rather
 than being turned into a node, so the graph stays types-only and nothing is lost.
+
+### Accountability is an edge, not only a paragraph
+
+`## Rules honored` names the rules a skill answers to in prose. That is what a
+person reads when the skill fires, and it is the wrong thing to make the graph
+depend on: finding it means regexing `rule_[a-z0-9_-]+` out of a body, which
+guesses, and which a reworded paragraph silently breaks.
+
+So a skill also carries an **`honors`** edge to each rule it is accountable for.
+The two are written together — `api_add_skill` puts the ids in the body and the
+edges in the graph in one call — and read together: `honored_rules()` takes the
+edges first and falls back to the ids in the prose, because the built-in corpus
+predates the edge and naming its rules in prose is still a valid declaration.
+
+### The third route between machines: markdown
+
+The DB is the source of truth and the neo4j mirror (§2d) is how two machines
+share it. Not everyone has a master to mirror through, so the same content also
+moves as files:
+
+```
+graph.py export-skills [--dir D] [--kind learned|plugin|all]
+graph.py ingest-skills [--dir D]
+```
+
+The export writes `D/<name>/SKILL.md` per skill and `D/rules/<rule id>.md` for
+every rule any of them honors, and the ingest reads both back — rules **first**,
+so a skill landing beside them can link to them. A round trip is lossless: the
+contract, the `## Depends on` declarations, and the `honors` edges all survive,
+and the result passes `audit-contracts`.
+
+Two asymmetries are deliberate. The export **overwrites its own files** but the
+ingest **never overwrites a rule this brain already holds** — the incoming copy
+may be the older one, and silently losing an edit is worse than skipping an
+import you can redo by hand. And a skill naming a rule that did not travel is
+**reported, not invented**: a skill pointing at a rule id this brain has never
+held would read as accountable and enforce nothing.
 ## 5b. Rule contracts: a rule that cannot be checked is advice
 
 The same argument as §5, one level down. A rule written as a paragraph of
@@ -1060,6 +1138,11 @@ thing this shape exists to prevent.
 | `EXCEPTIONS` | Where it does NOT apply. Write `none` explicitly: an unstated exception gets invented under pressure, and a rule with no stated limit gets over-applied until someone drops it entirely. |
 | `JUDGED AGAINST` | How a reader can tell, from the artifact alone, that it was followed. |
 | `RELATED` | `[[wikilinks]]` to the rules this one leans on or bounds. |
+
+**An empty section is left out, never written as a bare heading.** Both checkers
+ask whether a heading appears in the body, so a heading with nothing under it
+would report the contract as complete and hide the one gap the check exists to
+find. A section that is missing looks missing.
 
 `JUDGED AGAINST` is the section that does the work. Compare:
 

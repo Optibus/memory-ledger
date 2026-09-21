@@ -401,6 +401,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, json.dumps({
                     "ok": True, "trees": graph.skill_trees(con),
                     "rules": graph.rule_catalog(con),
+                    # what the pickers offer, so a card can show more than a
+                    # bare token the person is expected to already recognise
+                    "node_types": graph.node_type_catalog(con),
                     "areas": graph.area_titles(con)}), "application/json")
             elif path == "/api/rule":    # one rule in full, for the skill drawer
                 rid = (parse_qs(parsed.query).get("id") or [""])[0]
@@ -429,6 +432,21 @@ class Handler(BaseHTTPRequestHandler):
                     "kinds": brain_query.kinds("auto"),
                     "no_kind_token": brain_query.NO_KIND,
                     "types": brain_query.node_types("auto"),
+                    # The contract shapes (§5.1, §5b.1) come from the engine too.
+                    # A form that hard-coded the eight headings would be a second
+                    # definition of the shape, and the one nothing checks.
+                    "skill_sections": [
+                        {"field": f, "heading": h, "required": r,
+                         "generated": f in ("rules_honored", "depends_on")}
+                        for f, h, r in graph.SKILL_SECTIONS],
+                    "rule_sections": [{"field": f, "heading": h, "required": r}
+                                      for f, h, r in graph.RULE_SECTIONS],
+                    "decl_labels": [{"field": f, "label": l}
+                                    for f, l in graph.DECL_LABELS],
+                    "rule_sources": sorted(graph.RULE_PRECEDENCE),
+                    # the declarable vocabulary, not just the types in use: a new
+                    # skill legitimately writes a type this brain has never held
+                    "node_types": graph.NODE_TYPES,
                     "writable": WRITABLE, "boot": BOOT,
                 }), "application/json")
             elif path == "/api/suggest-links":
@@ -527,6 +545,10 @@ class Handler(BaseHTTPRequestHandler):
             "/api/neo4j-test": self._test_neo4j,
             "/api/flush": self._flush,
             "/api/prune": self._prune,
+            "/api/create-rule": self._create_rule,
+            "/api/create-skill": self._create_skill,
+            "/api/export-skills": self._export_skills,
+            "/api/ingest-skills": self._ingest_skills,
         }
         handler = routes.get(path)
         try:
@@ -729,6 +751,130 @@ class Handler(BaseHTTPRequestHandler):
     def _unlink(self, data):
         args, err = self._edge_args(data)
         return err or graph.api_unlink(graph.connect(), *args)
+
+    # ------------------------------------------- authoring skills and rules
+    # The Skills page used to be read-only, on the argument that a text box here
+    # would be a third way to write a contract and the one nothing validates.
+    # That argument was about validation, not about the browser: these routes
+    # build the contract through `graph.build_*_contract` and refuse an
+    # incomplete one, so this path is checked at write time, which is stricter
+    # than the CLI's (where `audit-contracts` reports the gap afterwards).
+
+    def _sections(self, data, key, spec):
+        """The contract sections out of a request body, keyed by field name."""
+        raw = data.get(key)
+        if not isinstance(raw, dict):
+            return {}
+        return {f: self._str(raw, f, 12000) for f, _h, _r in spec
+                if isinstance(raw.get(f), str)}
+
+    def _rule_payload(self, data):
+        title = self._str(data, "title", 300)
+        if not title:
+            return None, {"ok": False, "error": "a rule needs a title"}
+        source = self._str(data, "source", 20) or "user"
+        if source not in graph.RULE_PRECEDENCE:
+            return None, {"ok": False, "error": f"unknown source: {source}"}
+        return {
+            "title": title,
+            "sections": self._sections(data, "sections", graph.RULE_SECTIONS),
+            "scenario": self._str(data, "scenario", 2000),
+            "source": source,
+            "section": self._str(data, "section", 40),
+            "non_negotiable": bool(data.get("non_negotiable")),
+            "overrides": self._str(data, "overrides", 200),
+            "realm": self._str(data, "realm", 40),
+            "node_id": self._str(data, "id", 200),
+        }, None
+
+    def _create_rule(self, data):
+        args, err = self._rule_payload(data)
+        return err or graph.api_add_rule(graph.connect(), **args)
+
+    def _create_skill(self, data):
+        """Create a skill, and the rules it was given inline, in one call.
+
+        Inline rules are created FIRST and only inside this call: the modal can
+        author a rule without leaving the skill form, and abandoning the skill
+        leaves nothing behind. A rule that fails to write aborts the skill rather
+        than producing one accountable to a rule that does not exist.
+        """
+        con = graph.connect()
+        title = self._str(data, "title", 300)
+        name = self._str(data, "name", 120) or title
+        if not title:
+            return {"ok": False, "error": "a skill needs a title"}
+        sections = self._sections(data, "sections", graph.SKILL_SECTIONS)
+        decl = {}
+        for field, _label in graph.DECL_LABELS:
+            val = data.get(field)
+            if isinstance(val, list):
+                decl[field] = [str(x)[:120] for x in val[:40]]
+            elif isinstance(val, str):
+                decl[field] = val[:1200]
+        rule_ids = [str(r)[:200] for r in (data.get("rules") or [])[:40]
+                    if isinstance(r, str) and r.strip()]
+        created = []
+        for item in (data.get("new_rules") or [])[:20]:
+            if not isinstance(item, dict):
+                continue
+            args, err = self._rule_payload(item)
+            if err:
+                return err
+            res = graph.api_add_rule(con, **args)
+            if not res.get("ok"):
+                return {"ok": False,
+                        "error": f"rule {args['title']!r}: {res.get('error')}",
+                        "created_rules": created}
+            created.append(res["node"]["id"])
+            rule_ids.append(res["node"]["id"])
+        res = graph.api_add_skill(
+            con, name=name, title=title,
+            description=self._str(data, "description", 1000),
+            triggers=self._str(data, "triggers", 2000),
+            sections=sections, decl=decl,
+            rules=list(dict.fromkeys(rule_ids)),
+            realm=self._str(data, "realm", 40),
+            node_id=self._str(data, "id", 200))
+        if created:
+            res["created_rules"] = created
+        return res
+
+    # ------------------------------------------------ markdown sync (§5a)
+    def _export_skills(self, data):
+        """Write the learned tree out as markdown — the file route between two
+        machines, for when there is no shared master to mirror through."""
+        return self._graph_cmd(
+            ["export-skills", "--kind",
+             self._str(data, "kind", 10) or "learned"] +
+            (["--dir", self._str(data, "dir", 500)] if self._str(data, "dir", 500) else []))
+
+    def _ingest_skills(self, data):
+        cmd = ["ingest-skills"]
+        d = self._str(data, "dir", 500)
+        if d:
+            cmd += ["--dir", d]
+        return self._graph_cmd(cmd)
+
+    @staticmethod
+    def _graph_cmd(argv, timeout=300):
+        """Run a graph.py command out of process and hand back its JSON.
+
+        Same reason `prune` shells out: these commands report by printing, and a
+        long scan must not be able to wedge the server's own connection."""
+        import subprocess
+        cmd = [sys.executable, str(HERE.parent / "scripts" / "graph.py"), *argv]
+        try:
+            pr = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "error": f"{argv[0]} timed out"}
+        if pr.returncode != 0:
+            return {"ok": False,
+                    "error": (pr.stderr or pr.stdout or "failed").strip()[-400:]}
+        try:
+            return json.loads(pr.stdout)
+        except ValueError:
+            return {"ok": False, "error": (pr.stdout or "no output").strip()[-400:]}
 
     # -------------------------------------------------- settings + maintenance
     def _save_settings(self, data):

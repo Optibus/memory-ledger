@@ -1,6 +1,6 @@
 ---
 name: visualize
-description: Open the live brain UI in the browser — one local server, three sections behind a hamburger menu: a force-directed Map of every node/edge/relation (zoom/pan, search, multi-select filter dropdowns, click-to-inspect), a token-free Dashboard of the date views (agenda/open/today/tomorrow/week/closed/range) that also EDITS the brain (create tasks with auto-recognised links, complete, status/assignee/due, rename, manage relations), and Settings (timezone, default realm, database connection, prune). Use for "show me the graph", "visualize my brain/memory", "open the map/dashboard", "see the connections", "what's due", "add a task in the UI", "let me edit it myself", "change the timezone", "run prune". Auto-refreshes as the graph changes.
+description: Open the live brain UI in the browser — one local server, four sections behind a hamburger menu: a force-directed Map of every node/edge/relation (zoom/pan, search, multi-select filter dropdowns, click-to-inspect), a token-free Dashboard of the date views (agenda/open/today/tomorrow/week/closed/range) that also EDITS the brain (create tasks with auto-recognised links, complete, status/assignee/due, rename, manage relations), Skills (the two contract trees and the rule catalogue, where new skills and rules are AUTHORED and where markdown export/ingest moves a brain between machines), and Settings (timezone, default realm, database connection, prune). Use for "show me the graph", "visualize my brain/memory", "open the map/dashboard", "see the connections", "what's due", "add a task in the UI", "create a skill/rule in the UI", "sync my skills to another machine", "let me edit it myself", "change the timezone", "run prune". Auto-refreshes as the graph changes.
 ---
 
 # visualize
@@ -12,7 +12,8 @@ keeps working when the model is not in the room.
 ## When to use
 
 "Show me the graph", "open the dashboard", "see the connections", "what is due",
-"let me edit it myself", "change the timezone", "run prune".
+"let me edit it myself", "write a skill myself", "add a rule in the UI", "move my
+skills to my other machine", "change the timezone", "run prune".
 
 ## Given
 
@@ -25,7 +26,7 @@ keeps working when the model is not in the room.
   It prints a URL, defaulting to `http://127.0.0.1:8770/`, and runs until Ctrl-C.
   Because it is long-running, start it in the background and give the person the
   URL. It binds to 127.0.0.1 only unless `--host 0.0.0.0` is passed.
-- **Three sections behind the hamburger menu** (`m` toggles it), reading the same
+- **Four sections behind the hamburger menu** (`m` toggles it), reading the same
   brain file and a configured graph mirror when one is reachable:
   - **Map.** Zoom, pan, pin a node by dragging, reset with a double-click. Search
     highlights matches and dims the rest. Four multi-select filters with live
@@ -38,10 +39,16 @@ keeps working when the model is not in the room.
     nested by `requires`, **and the full rule catalogue beside them**. Opening a
     skill shows what node types it reads and writes, what it waits for or is
     enriched by, and the rules it answers to, split into declared, matched and
-    always-on. Clicking a rule reads it in full, from either place. One filter
-    narrows both: free text over names, triggers, `scenario` and node types, plus
-    source (built-in / user / learned) and domain. Read-only: contracts are edited
-    in `SKILL.md` or with `add-skill`.
+    always-on, plus its relations one level deep. Clicking a rule reads it in
+    full, from either place. One filter narrows both: free text over names,
+    triggers, `scenario` and node types, plus source (built-in / user / learned)
+    and domain. The `+` button **authors** a new skill or rule, refusing an
+    incomplete contract at write time; rules, skills and node types are chosen
+    from searchable cards rather than dropdowns, so the full contract is one
+    click away while choosing. An existing contract is still edited where its
+    check lives, in `SKILL.md` or with `add-skill`. Two buttons export the
+    learned tree to markdown and read a folder back, which is how a brain moves
+    between machines with no master to mirror through.
   - **Settings.** Timezone, default realm, map and dashboard refresh intervals,
     the database connection including the neo4j master with Test and Flush
     queued, and Prune.
@@ -79,8 +86,8 @@ See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTION
   so the session is not blocked.
 - **They know which section answers their question.** Map for connections,
   Dashboard for dates and edits, Skills for what a skill is accountable for,
-  which rules govern it, and what the genome holds, Settings for preferences and
-  upkeep.
+  which rules govern it, what the genome holds, and where a new contract is
+  written or moved between machines, Settings for preferences and upkeep.
 - **They know they can edit without you.** When the request was about maintaining
   the brain rather than understanding it, the dashboard's write surface is named,
   because depending on the model for upkeep is the failure this section prevents.
@@ -107,6 +114,10 @@ See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTION
 - **Must not present a stale Skills tree as the truth.** The section draws the
   edges `sync-skill-tree` wrote. If a declaration changed since the last sync, say
   to re-run it rather than reading the page as current.
+- **Must not offer the `+` button as a way to edit an existing contract.** It
+  authors new ones. A built-in skill's contract is gated by the pre-commit
+  checker against its `SKILL.md`, and pointing someone at the page to change one
+  routes them around the only check it has.
 
 ## Reply (focus contract)
 

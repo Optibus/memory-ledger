@@ -49,7 +49,9 @@ disabled"}`.
 | `/api/realms` | every realm in the brain + `{nodes, open_tasks}` counts, and the server's `default` |
 | `/api/kinds` | every `props.kind` + the same counts, and the `none_token` for nodes carrying no kind |
 | `/api/node?id=<id>` | one node in full plus its edges (the expand view) |
-| `/api/meta` | the vocabulary — node types, realms, kinds, edge rels, statuses |
+| `/api/meta` | the vocabulary — node types, realms, kinds, edge rels, statuses, and the two contract shapes (`skill_sections`, `rule_sections`, `decl_labels`, `node_types`) |
+| `/api/skills` | the two skill trees, the rule catalog, `node_types` (each with its description, how many of it the brain holds, and which skills read or write it), and the area titles the filters label themselves with |
+| `/api/rule?id=<id>` | one rule in full, for the skill drawer |
 | `/api/suggest-links` | proposed edges awaiting acceptance |
 | `/api/search?q=<q>` | node picker results for the relation editor |
 | `/api/settings` | stored preferences, plus what is actually `effective` and which keys the environment has overridden |
@@ -116,6 +118,45 @@ since the dashboard lists tasks and a kind with none would be dead UI.
 | `/api/neo4j-test` | `{}` | runs `RETURN 1` against the configured master |
 | `/api/flush` | `{}` | drains the outbox to the master |
 | `/api/prune` | `{keep_days?}` | runs `graph.py maintain` (default `2`). Non-destructive — consolidates, never deletes |
+| `/api/create-rule` | `{title, scenario, source?, section?, realm?, non_negotiable?, overrides?, sections{}}` | authors a rule (§5b). **Refused** unless `sections.the_rule` and `sections.judged_against` are filled |
+| `/api/create-skill` | `{name, title, description?, realm?, sections{}, requires?, waits_for?, enriched_by?, reads?, writes?, rules[], new_rules[]}` | authors a skill (§5). **Refused** unless the six typed sections of §5.1 are filled. `rules[]` are existing rule ids, `new_rules[]` are whole rule bodies created first in the same call |
+| `/api/export-skills` | `{kind?, dir?}` | `graph.py export-skills` — a `SKILL.md` per skill plus every rule they honor |
+| `/api/ingest-skills` | `{dir?}` | `graph.py ingest-skills` — reads a folder back in; a rule this brain already holds is kept, never overwritten |
+
+### Authoring contracts
+
+The two create routes exist so the brain can grow without a model call, and they
+are **stricter than the CLI**, not looser. `graph.py add-rule` accepts a half
+contract and leaves the gap for `audit-contracts` to report; these refuse it at
+write time, because a form has all the fields in front of it and no excuse to
+submit one that cannot be checked.
+
+The shapes come from `/api/meta` rather than being written into the page. A
+heading typed into `index.html` would be a second definition of §5.1, and the one
+nothing checks:
+
+```json
+"skill_sections": [
+  {"field": "when_to_use",   "heading": "## When to use", "required": true,  "generated": false},
+  {"field": "rules_honored", "heading": "## Rules honored", "required": false, "generated": true},
+  …
+]
+```
+
+`generated: true` marks the two sections nobody types — `## Rules honored` is
+rendered from `rules[]`, `## Depends on` from the declaration fields — so the
+form knows to leave them out.
+
+The pickers those forms open are fed from `/api/skills`, which is why
+`node_types` carries more than a list of names: a card that says only `gauge`
+asks the person to already know what a gauge is, and the readers and writers are
+what say which skills would become coupled to one that declares it.
+
+A skill's rules land **twice on purpose**: as ids in the `## Rules honored` prose,
+which is what a person reads when the skill fires, and as `honors` edges, which
+is what the graph can walk (§5a). `new_rules[]` are written before the skill and a
+failure in one aborts the whole call, so a skill is never left accountable to a
+rule that does not exist.
 
 Example:
 

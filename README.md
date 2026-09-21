@@ -437,7 +437,7 @@ done
 
 ## Visualize the brain
 
-A dependency-free local server serves one page with **three sections**, behind a
+A dependency-free local server serves one page with **four sections**, behind a
 hamburger menu on the left (`m` toggles it):
 
 - **Map** — the live force-directed graph: zoom/pan, a search you can clear, and
@@ -459,6 +459,12 @@ hamburger menu on the left (`m` toggles it):
   week / closed / range) as cards, over the same store. It is also a **full
   editor**: create tasks, tick them off, change status/assignee/due, rename them,
   and add or remove relations — all token-free (see below).
+- **Skills** — the two contract trees (built-in and learned), nested by the
+  `requires` edge, beside the rule catalogue, with one filter over both. Open a
+  skill to see what it reads and writes in the graph, the rules it answers to,
+  and **its relations one level deep**; open a rule to read it in full. The `+`
+  button authors a new skill or rule — see
+  [Grow the brain from the page](#grow-the-brain-from-the-page).
 - **Settings** — timezone (which day "today" means), default realm, poll
   intervals, the database connection (local mirror + neo4j master, with a test
   and a queue flush), and **prune**. Preferences are saved to
@@ -483,6 +489,45 @@ Every suggestion is a row you can re-point or uncheck before saving. Expand any
 card to complete it, move its state, reassign it, edit it, or manage its links
 with a `×` and a search box. No model call, no tokens — the same engine the CLI
 uses (`graph.py suggest-links "…"`).
+
+### Grow the brain from the page
+
+The `+` on the Skills section writes new **contracts** — a rule, or a skill —
+without a model call. Both forms are generated from the shapes the server sends,
+so the page can never disagree with the engine about what a contract is, and both
+are **refused when a required section is empty**: a rule with no `JUDGED AGAINST`
+cannot be checked, and a skill with no `Deliverables` is a step list waiting to
+age into a lie.
+
+Nothing is chosen from a dropdown. Rules, skills and node types are picked from
+searchable cards that show what each one is for, with the full contract one click
+away, so you are choosing between things you can read rather than between titles.
+
+A skill's rules get **one line each**, added and removed freely. `+ New rule…`
+opens a rule form on top of the half-filled skill one and hands the result back
+as a pending line — nothing is written until you save the skill, so abandoning it
+leaves nothing behind. Each linked rule lands as an `honors` edge in the graph as
+well as a line in the contract, so a skill's accountability is something the
+graph can walk and not just a paragraph a regex has to guess at.
+
+Editing an existing contract still happens where its check lives: a built-in in
+its `SKILL.md`, gated by the pre-commit checker.
+
+### Move a brain between machines by file
+
+The neo4j mirror is the usual way to share one brain across machines. When there
+is no master to mirror through, the same content travels as markdown:
+
+```bash
+python3 scripts/graph.py export-skills --dir ~/brain-out   # SKILL.md + rules/
+python3 scripts/graph.py ingest-skills --dir ~/brain-out   # on the other machine
+```
+
+Or the two buttons on the Skills section. The export writes one folder per skill
+plus every rule they honor; the ingest reads the rules first so the skills can
+link to them. A round trip is lossless — contract, declarations and `honors`
+edges all survive — and it never overwrites a rule the receiving brain already
+holds, because the incoming copy may be the older one.
 
 Writes are unauthenticated and bound to localhost; serve with `--no-write` if you
 expose the UI on your network.
