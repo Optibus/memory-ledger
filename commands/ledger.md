@@ -15,6 +15,20 @@ owe, to whom, by when. The person just said:
 
 ## Do this
 
+0. **Operational requests come first, before any of the routing below.**
+   Memory Ledger runs with zero-touch install now, so there is no manual init
+   step left to reassure anyone it's working — `doctor` is that reassurance:
+   - "/ledger doctor", "is the ledger working", "ledger status", "health check"
+     → run `python3 "$CLAUDE_PLUGIN_ROOT/scripts/doctor.py"` and report its
+     findings in plain language (don't just paste the raw output).
+   - "/ledger off", "turn the ledger off", "stop capturing"
+     → `python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" disable`
+   - "/ledger on", "turn the ledger back on", "resume capturing"
+     → `python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" enable` — if it warns
+     that `$MEMORY_LEDGER_OFF`/`$SECOND_BRAIN_OFF` is still set in this shell,
+     say so plainly; the ledger is not actually back on until that's unset.
+   If the request is one of these, do it and stop — skip steps 1-6.
+
 1. **Load the rules that apply**, not the whole conventions file:
    `python3 "$CLAUDE_PLUGIN_ROOT/scripts/graph.py" match-rules "<the request in a few words>"`.
    It is a no-model-call lookup returning ~8% of the text, and the always-apply

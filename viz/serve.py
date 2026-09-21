@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""second-brain graph visualizer — a tiny, dependency-free local web server.
+"""memory-ledger graph visualizer — a tiny, dependency-free local web server.
 
 Reads the same brain the CLI uses (~/.second_brain/graph.db, or $SECOND_BRAIN_DB /
 $SECOND_BRAIN_HOME) and serves an interactive force-directed graph you can zoom,
@@ -256,9 +256,14 @@ def settings_payload() -> dict:
     env var overrides the file, and a settings page that hides that is lying —
     so `env` names every key the shell has taken over."""
     stored = graph.settings()
-    env = {k: os.environ["SECOND_BRAIN_" + k.upper()]
+    # Resolved through graph._env(), which honours MEMORY_LEDGER_* first and
+    # SECOND_BRAIN_* as fallback. Checking only the legacy prefix here would
+    # make the page claim a setting is "from the file" while the engine is in
+    # fact using a MEMORY_LEDGER_* override — precisely the lie this dict exists
+    # to prevent.
+    env = {k: graph._env(k.upper())
            for k in graph.SETTING_KEYS
-           if os.environ.get("SECOND_BRAIN_" + k.upper())}
+           if graph._env(k.upper())}
     tz = graph.setting("tz")
     return {
         "ok": True, "writable": WRITABLE, "keys": graph.SETTING_KEYS,
@@ -1042,7 +1047,7 @@ def main():
     # a restart re-execs with the same argv; don't open a new tab each time
     respawned = os.environ.pop("SECOND_BRAIN_VIZ_RESPAWN", "") == "1"
     if not respawned:
-        print(f"second-brain map → {url}")
+        print(f"memory-ledger map → {url}")
         print(f"  brain: {graph.db_path()}")
         print("  Ctrl-C to stop.")
     else:

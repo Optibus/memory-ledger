@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""second-brain pre-commit — enforce CONVENTIONS §4 (docs ship with behavior).
+"""memory-ledger pre-commit — enforce CONVENTIONS §4 (docs ship with behavior).
 
 Fails the commit if it changes behavior (engine, hooks, viz, or plugin config)
 without also staging a docs change (any *.md — README / CONVENTIONS / INSTALL /
 a SKILL.md / commands). Bypass a false positive with `git commit --no-verify`.
 
 Enable once per clone:  git config core.hooksPath .githooks
+
+CI enforces the same rule (`.github/workflows/ci.yml`), so it holds even for a
+contributor who never ran that command — this local hook just catches it sooner.
 """
 
 import os

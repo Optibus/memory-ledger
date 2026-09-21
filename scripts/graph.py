@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""second-brain graph engine.
+"""memory-ledger graph engine.
 
 A tiny, dependency-free graph database over SQLite. Everything the plugin
 remembers is a NODE (a person, task, requirement, decision, note, writing
@@ -28,9 +28,15 @@ import urllib.request
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-def _env(name: str, default: str = "") -> str:
-    """Config env lookup: SECOND_BRAIN_<name>, else the default."""
-    return os.environ.get("SECOND_BRAIN_" + name) or default
+# Where the ledger lives and whether it is on come from _switch, a module that
+# imports nothing heavier than pathlib. They live there rather than here so a
+# SessionStart hook can ask "am I enabled?" for ~12 ms instead of importing this
+# engine for ~55 ms — see scripts/_switch.py. Re-exported so `graph._env`,
+# `graph.home_dir`, `graph.disabled` and `graph.enabled` keep resolving for every
+# caller that already reads them through the engine.
+from _switch import (  # noqa: E402,F401
+    _env, home_dir, disabled, enabled, DISABLE_MARKER, _OFF_TRUTHY,
+)
 
 
 # Default section (realm) for new nodes; override with $SECOND_BRAIN_REALM or
@@ -122,17 +128,6 @@ DONE_STATUSES = ("done", "cancelled")
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
-def home_dir() -> Path:
-    """The brain's home — a single global directory OUTSIDE any repo, so every
-    project on the machine shares one brain (memory, learned skills, configs,
-    routines, definitions). Override with $SECOND_BRAIN_HOME. Default:
-    ~/.second_brain."""
-    env = _env("HOME")
-    if env:
-        return Path(env).expanduser()
-    return Path.home() / ".second_brain"
 
 
 def db_path() -> Path:
@@ -635,6 +630,41 @@ def cmd_init(args):
     out({"ok": True, "db": str(db_path())})
 
 
+def cmd_disable(args):
+    """Turn the ledger off machine-wide: write `<home>/.disabled`. Idempotent —
+    calling this twice is a no-op the second time. Every capture hook and the
+    bootstrap check `disabled()` first, so this is enough to stop capture
+    without uninstalling anything or deleting data."""
+    home_dir().mkdir(parents=True, exist_ok=True)
+    marker = home_dir() / DISABLE_MARKER
+    marker.touch(exist_ok=True)
+    res = {"ok": True, "disabled": True, "marker": str(marker)}
+    if _env("OFF").strip().lower() in _OFF_TRUTHY:
+        res["note"] = ("$MEMORY_LEDGER_OFF/$SECOND_BRAIN_OFF is also set in this "
+                        "shell — that was already forcing the ledger off.")
+    out(res)
+
+
+def cmd_enable(args):
+    """Turn the ledger back on: remove `<home>/.disabled` if present. Idempotent
+    — calling this when already enabled is a no-op. NOTE: if
+    $MEMORY_LEDGER_OFF/$SECOND_BRAIN_OFF is set in the current shell, this
+    command cannot turn capture back on for that shell — the env var wins over
+    the marker file every time `disabled()` is checked (see its docstring)."""
+    marker = home_dir() / DISABLE_MARKER
+    existed = marker.exists()
+    if existed:
+        marker.unlink()
+    res = {"ok": True, "disabled": False, "marker_removed": existed}
+    if _env("OFF").strip().lower() in _OFF_TRUTHY:
+        res["warning"] = ("$MEMORY_LEDGER_OFF/$SECOND_BRAIN_OFF is set in this "
+                           "shell — the ledger is STILL OFF here despite removing "
+                           "the marker. Unset that env var (or fix it wherever it "
+                           "is exported: rc file, cron, launchd) to actually "
+                           "resume capture in this shell.")
+    out(res)
+
+
 def cmd_add_node(args):
     con = connect()
     area = getattr(args, "area", None)
@@ -931,7 +961,7 @@ def cmd_export(args):
         for e in edges:
             adj.setdefault(e["src"], []).append((e["rel"], e["dst"]))
             adj.setdefault(e["dst"], []).append(("(" + e["rel"] + ")", e["src"]))
-        lines = ["# second-brain memory export", f"_generated {now()}_", ""]
+        lines = ["# memory-ledger memory export", f"_generated {now()}_", ""]
         for n in nodes:
             lines.append(f"## {n['title']}  `{n['id']}`")
             meta = [f"type: {n['type']}"]
@@ -985,7 +1015,7 @@ description: {title}
 {body}
 
 ---
-_Learned skill — created at runtime by second-brain on {date}. The graph node
+_Learned skill — created at runtime by memory-ledger on {date}. The graph node
 `{node_id}` tracks how often it fires and reinforces the trigger over time._
 """
 
@@ -4792,11 +4822,19 @@ def cmd_context_at(args):
 
 
 def build_parser():
-    p = argparse.ArgumentParser(prog="graph", description="second-brain graph engine")
+    p = argparse.ArgumentParser(prog="graph", description="memory-ledger graph engine")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("init").set_defaults(func=cmd_init)
     sub.add_parser("stats").set_defaults(func=cmd_stats)
+
+    sub.add_parser("disable", help=(
+        "turn the ledger off machine-wide (writes <home>/.disabled); "
+        "idempotent")).set_defaults(func=cmd_disable)
+    sub.add_parser("enable", help=(
+        "turn the ledger back on (removes <home>/.disabled); idempotent. "
+        "Does NOT override $MEMORY_LEDGER_OFF/$SECOND_BRAIN_OFF if set in "
+        "this shell")).set_defaults(func=cmd_enable)
 
     a = sub.add_parser("add-node"); a.set_defaults(func=cmd_add_node)
     a.add_argument("--type", required=True)

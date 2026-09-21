@@ -1,0 +1,169 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # fetch-depth: 0 gives us full history + the base ref, needed by the
+          # "docs ship with behavior" step to diff against the PR's merge base.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Byte-compile scripts, hooks, viz
+        run: python -m compileall -q scripts hooks viz
+
+      # The suites are stdlib-only and self-contained, so there is no install
+      # step and no reason not to run them. SECOND_BRAIN_HOME points at a temp
+      # dir so a run can never touch a real brain -- test_contracts builds its
+      # own graph, and test_traceability starts servers and asserts the hooks
+      # do not block on a slow master.
+      - name: Run the test suites
+        env:
+          SECOND_BRAIN_HOME: ${{ runner.temp }}/brain
+        run: |
+          for t in tests/test_*.py; do
+            echo "== $t"
+            python "$t" || exit 1
+          done
+
+      # Manifest validation exists because .claude-plugin/plugin.json and
+      # marketplace.json are hand-edited and never executed — a typo or a
+      # name mismatch between them silently breaks `/plugin install
+      # memory-ledger@memory-ledger` for every user, with no error until
+      # someone tries to install.
+      - name: Validate plugin manifests
+        run: |
+          python - <<'PY'
+          import json
+          import re
+          import sys
+
+          def load(path):
+              with open(path) as f:
+                  return json.load(f)
+
+          try:
+              plugin = load(".claude-plugin/plugin.json")
+          except Exception as e:
+              sys.exit(f"plugin.json is not valid JSON: {e}")
+
+          try:
+              marketplace = load(".claude-plugin/marketplace.json")
+          except Exception as e:
+              sys.exit(f"marketplace.json is not valid JSON: {e}")
+
+          for field in ("name", "description", "version"):
+              value = plugin.get(field)
+              if not isinstance(value, str) or not value.strip():
+                  sys.exit(f"plugin.json: '{field}' must be a non-empty string")
+
+          version = plugin["version"]
+          if not re.match(r"^\d+\.\d+\.\d+$", version):
+              sys.exit(f"plugin.json: version '{version}' does not match ^\\d+\\.\\d+\\.\\d+$")
+
+          mp_name = marketplace.get("name")
+          if not isinstance(mp_name, str) or not mp_name.strip():
+              sys.exit("marketplace.json: 'name' must be a non-empty string")
+
+          plugins = marketplace.get("plugins")
+          if not isinstance(plugins, list) or not plugins:
+              sys.exit("marketplace.json: 'plugins' must be a non-empty array")
+
+          for i, entry in enumerate(plugins):
+              for field in ("name", "source", "description"):
+                  value = entry.get(field) if isinstance(entry, dict) else None
+                  if not isinstance(value, str) or not value.strip():
+                      sys.exit(f"marketplace.json: plugins[{i}].'{field}' must be a non-empty string")
+
+          self_entries = [e for e in plugins if e.get("source") == "./"]
+          if not self_entries:
+              sys.exit("marketplace.json: no entry with source == \"./\" found")
+
+          mp_plugin_name = self_entries[0]["name"]
+          plugin_name = plugin["name"]
+          if mp_plugin_name != plugin_name:
+              sys.exit(
+                  "plugin name mismatch: plugin.json name="
+                  f"'{plugin_name}' but marketplace.json entry (source=\"./\") name="
+                  f"'{mp_plugin_name}' — this breaks `/plugin install <plugin>@<marketplace>`"
+              )
+
+          print("manifests OK")
+          PY
+
+      # Hook manifest validation exists because hooks/hooks.json is also
+      # hand-edited and never executed at commit time — a hook registered
+      # against a renamed/deleted file is a silent no-op in production: the
+      # event fires, the command fails to launch, and nothing surfaces that
+      # to a user.
+      - name: Validate hook manifest paths
+        run: |
+          python - <<'PY'
+          import json
+          import re
+          import sys
+          from pathlib import Path
+
+          repo_root = Path(".").resolve()
+
+          with open("hooks/hooks.json") as f:
+              manifest = json.load(f)
+
+          missing = []
+          checked = 0
+
+          def walk(node):
+              if isinstance(node, dict):
+                  if "command" in node and isinstance(node["command"], str):
+                      yield node["command"]
+                  for v in node.values():
+                      yield from walk(v)
+              elif isinstance(node, list):
+                  for v in node:
+                      yield from walk(v)
+
+          for command in walk(manifest):
+              # commands look like: python3 "${CLAUDE_PLUGIN_ROOT}/hooks/foo.py"
+              for match in re.finditer(r'"\$\{CLAUDE_PLUGIN_ROOT\}([^"]+)"', command):
+                  checked += 1
+                  rel_path = match.group(1).lstrip("/")
+                  full_path = repo_root / rel_path
+                  if not full_path.is_file():
+                      missing.append(str(full_path))
+
+          if checked == 0:
+              sys.exit("no ${CLAUDE_PLUGIN_ROOT}-relative commands found in hooks/hooks.json — check the parser")
+
+          if missing:
+              sys.exit("hooks.json references missing files:\n" + "\n".join(f"  - {p}" for p in missing))
+
+          print(f"hook manifest OK ({checked} command paths verified)")
+          PY
+
+      # Docs-ship-with-behavior is CONVENTIONS.md §4, enforced locally by the
+      # .githooks/pre-commit hook. That hook reads `git diff --cached`, i.e.
+      # index-vs-HEAD, which in a CI checkout is empty — the PR's changes are
+      # already IN HEAD. `git reset --soft` moves HEAD back to the merge base
+      # while leaving the index and worktree alone, so index-vs-HEAD becomes
+      # exactly base-vs-PR and the existing hook runs unmodified. (Staging the
+      # files instead does nothing: `git add` on content already identical to
+      # HEAD is a no-op, and the check would silently pass on every PR.)
+      - name: Docs ship with behavior (CONVENTIONS §4)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git reset --soft "$BASE_REF"
+          python3 .githooks/pre-commit

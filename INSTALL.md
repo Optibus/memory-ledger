@@ -29,20 +29,36 @@ Nothing else. The brain has zero third-party dependencies.
 The plugin ships its own marketplace manifest (`.claude-plugin/marketplace.json`),
 so you add the repo as a marketplace, then install from it.
 
-**From a local clone** (what you'll do on your own machines):
+**From GitHub directly** (no manual clone — this is now the normal path):
+```
+/plugin marketplace add Optibus/memory-ledger
+/plugin install memory-ledger@memory-ledger
+```
+`Optibus/memory-ledger` is a **private** repo, so this shells out to `git
+clone` over HTTPS using your own git credentials — Claude Code doesn't
+prompt for a login. Make sure `git` can already clone it before you run
+`/plugin marketplace add`:
+```
+gh auth setup-git     # wires gh's token into git's credential helper
+```
+(or configure any other credential helper that already works for private
+Optibus repos). Skip this and the failure you get is an opaque `git clone`
+error, not a helpful "auth required" message — if the marketplace add fails,
+check git auth first.
 
+Prefer SSH? Use the SSH remote instead:
+```
+/plugin marketplace add git@github.com:Optibus/memory-ledger.git
+/plugin install memory-ledger@memory-ledger
+```
+
+**From a local clone** (if you already keep one, or want to hack on it):
 ```
 git clone git@github.com:Optibus/memory-ledger.git ~/dev/memory-ledger
 ```
 then, inside Claude Code:
 ```
 /plugin marketplace add ~/dev/memory-ledger
-/plugin install memory-ledger@memory-ledger
-```
-
-**From GitHub directly** (no manual clone):
-```
-/plugin marketplace add Optibus/memory-ledger
 /plugin install memory-ledger@memory-ledger
 ```
 
@@ -71,29 +87,28 @@ Nothing extra is needed to "make it global" — user-level enable is the switch.
 (Sub-agents don't double-capture: they have no `UserPromptSubmit`, and `Stop` is
 the main agent's turn, not `SubagentStop`.)
 
-## 2. Enable the brain
+## 2. That's it — no manual init
 
-The brain is **enabled when its home directory exists**. Skills and hooks no-op
-silently until then, so create it once:
+Older versions required you to `mkdir ~/.second_brain` and run `graph.py
+init` by hand before anything worked. That step is gone. A `SessionStart`
+hook (`hooks/bootstrap.py`) now runs on every session, before the open-loops
+brief, and calls `graph.connect()` — which creates the home dir, the DB file,
+and the schema the first time it's missing. It prints nothing, and after that
+first run it's a cheap no-op (open a SQLite connection, confirm the schema is
+there).
 
-```
-mkdir -p ~/.second_brain
-python3 ~/dev/memory-ledger/scripts/graph.py init
-```
+Installing the plugin is enough. Send any message in a fresh session and the
+ledger is already capturing it.
 
-- Home dir: `~/.second_brain` (override with `$SECOND_BRAIN_HOME`; exact DB file with
-  `$SECOND_BRAIN_DB`).
-- Set your timezone once so date views bucket correctly — either in the UI
-  (**Settings › Time zone**, which writes `~/.second_brain/settings.json` and is
-  read by the CLI, the hooks and any cron too), or in your shell rc:
-  `export SECOND_BRAIN_TZ="America/Sao_Paulo"`. The env var wins over the file.
-- `$SECOND_BRAIN_*` is the **only** config prefix, and `~/.second_brain` the only
-  default home. Since v0.1.1 there is no fallback to the pre-rebrand `WORK_BRAIN_*`
-  vars or `~/.work_brain` home — if you still have an old home dir, move it to
-  `~/.second_brain` yourself; it will not be picked up.
+The one thing bootstrap deliberately won't do is turn a disabled ledger back
+on — see the switch below.
 
-To **disable** the brain anywhere, unset/rename that dir — the hooks detect it and
-go quiet.
+### Optional: set your timezone
+
+Date views (open loops, agenda) bucket by timezone, so set yours once — either
+in the UI (**Settings › Time zone**, which writes `~/.second_brain/settings.json`
+and is read by the CLI, the hooks, and any cron too), or in your shell rc:
+`export MEMORY_LEDGER_TZ="America/Sao_Paulo"`. The env var wins over the file.
 
 ### Optional: a local neo4j, in one command
 
@@ -137,7 +152,7 @@ control by creating `~/.second_brain/neo4j.json`:
 ```json
 { "url": "https://<your-graph-host>:<port>", "db": "neo4j", "user": "…", "password": "…" }
 ```
-(or the env vars `SECOND_BRAIN_NEO4J_URL / _DB / _USER / _PASSWORD`). Writes land in
+(or the env vars `MEMORY_LEDGER_NEO4J_URL / _DB / _USER / _PASSWORD`). Writes land in
 SQLite immediately and mirror through an offline outbox, so an unreachable mirror
 never blocks or loses a write.
 
@@ -147,18 +162,61 @@ Two things worth getting right if you do this:
   `chmod 600`, and never paste the credentials into a command that gets saved (a
   shell history or a tool-permission allowlist counts as saved).
 
-## 3. What turns on automatically (no model call)
+## 3. The on/off switch
 
-Once enabled, hooks run in **pure Python/SQL — no model call**:
+Enablement used to just mean "the home dir exists" — deleting `~/.second_brain`
+*was* the off switch. Now that bootstrap auto-creates that dir on every
+session, its absence can't mean "off" any more (bootstrap would just recreate
+it, empty, on the next session start). So being off is now a state you set
+explicitly, on purpose, in one of two ways:
 
-- **SessionStart** → injects a brief of your open loops (`open_loops_brief.py`),
-  and **once a day** kicks off consolidation in the background: closed days'
-  captures are folded into digest notes (originals kept). Detached, so it never
-  delays the session; disable with `SECOND_BRAIN_NO_CONSOLIDATE=1`. It runs here
-  rather than as a scheduled cloud routine because the brain is a local file — a
-  cloud routine cannot read it. If you want it to run even on days you never open
-  Claude Code, add a launchd agent calling
-  `graph.py consolidate --older-than 1`.
+- **`/ledger off`** (or `python3 scripts/graph.py disable`) — writes
+  `<home>/.disabled`. Machine-wide and persistent: it survives restarts,
+  every hook checks for it first, and it stays off until you turn it back on.
+  **`/ledger on`** (or `graph.py enable`) removes the marker. Both are
+  idempotent.
+- **`MEMORY_LEDGER_OFF=1`** — per-process. Scopes to one shell, one CI job, or
+  one session, and forces the ledger off for exactly that process regardless
+  of the marker file. Note: `graph.py enable` will **warn** (not silently
+  succeed) if this is set in your shell, because removing the marker alone
+  won't turn capture back on there — you also have to unset the env var
+  wherever it's exported (rc file, cron, launchd).
+
+**Deleting `~/.second_brain` still deletes your DATA** — it is not, any more,
+how you turn the ledger off. Bootstrap will just recreate an empty home dir
+on the next session. Use `/ledger off` if you want the ledger off; only
+delete the directory if you actually want to lose what's in it.
+
+## 4. Env vars
+
+`MEMORY_LEDGER_*` is the canonical prefix. The legacy
+`SECOND_BRAIN_*` names all still work as a fallback (checked in that order —
+see `_env()` in `scripts/graph.py`) and are not going away, so nothing you
+already have exported breaks.
+
+- `$MEMORY_LEDGER_HOME` (was `$SECOND_BRAIN_HOME`) — override the home dir.
+- `$MEMORY_LEDGER_DB` (was `$SECOND_BRAIN_DB`) — override the exact DB file.
+- `$MEMORY_LEDGER_TZ` (was `$SECOND_BRAIN_TZ`) — timezone for date bucketing;
+  the env var wins over `settings.json`.
+- `$MEMORY_LEDGER_REALM` (was `$SECOND_BRAIN_REALM`) — default section for new
+  nodes (`optibus`, `personal`, ...).
+
+**The home directory itself is still `~/.second_brain`** — that path was
+deliberately *not* renamed in this release, so there is no data migration to
+do. Don't go looking for `~/.memory_ledger`; it doesn't exist.
+
+## 5. What turns on automatically (no model call)
+
+Once installed, hooks run in **pure Python/SQL — no model call**:
+
+- **SessionStart** → runs `bootstrap.py` (see step 2), then injects a brief of
+  your open loops (`open_loops_brief.py`), and **once a day** kicks off
+  consolidation in the background: closed days' captures are folded into
+  digest notes (originals kept). Detached, so it never delays the session;
+  disable with `MEMORY_LEDGER_NO_CONSOLIDATE=1`. It runs here rather than as a
+  scheduled cloud routine because the brain is a local file — a cloud routine
+  cannot read it. If you want it to run even on days you never open Claude
+  Code, add a launchd agent calling `graph.py consolidate --older-than 1`.
 - **UserPromptSubmit** → `capture_prompt.py` stores each prompt as a `capture` node
   and auto-creates `task` nodes for explicit to-dos ("remind me…", "todo:", "follow
   up…"), linked back to the turn.
@@ -202,10 +260,38 @@ Settings rather than per command. Add `--host 0.0.0.0` to reach it from your pho
 on the LAN / a tunnel; because the write API is **unauthenticated**, pair that with
 `--no-write` unless you trust every device on the network.
 
-## 4. Verify
+## 6. Verify
+
+With the manual init step gone, there's no longer an obvious moment that
+proves the ledger is wired up — so there's a dedicated health check:
 
 ```
-/plugin              # second-brain shows as installed + enabled
+/ledger doctor          # or: python3 scripts/doctor.py
+```
+
+It reports, in plain language:
+- **Status** — enabled or disabled, and if disabled, which switch did it (the
+  `.disabled` marker or the `MEMORY_LEDGER_OFF`/`SECOND_BRAIN_OFF` env var).
+- **Paths** — the resolved home dir and DB file, and whether each exists.
+- **Config** — the effective timezone and realm, and where each came from
+  (env var, `settings.json`, or a built-in default).
+- **Content** — total node count, a breakdown by type, open-loop count, and
+  how stale the newest capture is (a warning if nothing's landed in the last
+  2 days, or ever).
+- **Hook registration** — every hook in `hooks.json` per event, with its
+  matchers, and whether the script file it points at actually exists.
+- **Mirror status** — whether a neo4j mirror is configured and how many
+  writes are pending in the offline outbox, without ever printing the
+  credentials themselves.
+
+Add `--json` for machine-readable output. It exits non-zero only when
+something is **actionably** wrong (a missing DB, a hook pointing at a missing
+script, unreadable config) — being disabled is a choice, not a fault, and
+never affects the exit code by itself.
+
+Complementary, Claude-Code-side checks:
+```
+/plugin              # memory-ledger shows as installed + enabled
 /hooks               # SessionStart, UserPromptSubmit, Stop, PreToolUse,
                      # PostToolUse, PreCompact, SessionEnd are listed
 claude plugin list   # from the CLI
@@ -239,7 +325,7 @@ python3 scripts/bundle.py --include ~/.second_brain/exports/<your-doc>.md
 
 It packs **git-tracked files only** — so `.gitignore` decides what is excluded and
 no brain data, eval cases or generated deck can ride along — under a single
-top-level `second-brain/` directory, and generates two files into the archive:
+top-level `memory-ledger/` directory, and generates two files into the archive:
 `INSTALL-FROM-ZIP.md` (the recipient's whole procedure) and `BUNDLE.txt` (version,
 commit, file list). Anything untracked is reported as a warning and left out, so
 `git add` new files before building.
@@ -309,6 +395,8 @@ resolves itself from `$CLAUDE_PLUGIN_ROOT`, never from what the folder is called
 ```
 /plugin uninstall memory-ledger@memory-ledger
 ```
-Your brain data in `~/.second_brain` is left untouched (delete that dir to remove it).
+Your brain data in `~/.second_brain` is left untouched (delete that dir to remove it —
+but see the on/off switch above if what you actually want is to turn capture off,
+not lose your data).
 A local neo4j container is separate: `python3 scripts/neo4j_local.py down --remove`,
 and delete `~/.second_brain/neo4j` to drop its copy of the graph.
