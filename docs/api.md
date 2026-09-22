@@ -1,14 +1,14 @@
 # HTTP API
 
 `scripts/serve.py` is a dependency-free stdlib HTTP server. It serves two things
-over one port: this JSON API, and the React single-page app from `frontend/`,
-which it builds on the first run. It calls **no model** — it is the graph engine
-behind a socket, so everything it does is token-free.
+over one port: this JSON API, and the React single-page app built from
+`frontend/`. It calls **no model** — it is the graph engine behind a socket, so
+everything it does is token-free.
 
-The API has no toolchain of its own and never waits on one. If `npm` is missing
-the server still starts and every endpoint below answers; only the page comes
-back 503, saying why. Pass `--no-build` to skip the build entirely, `--rebuild`
-to force one.
+Neither half needs a toolchain to run: `frontend/dist` is committed, so a machine
+with no `npm` serves the same page as any other. When the source IS newer than
+the bundle and npm is there, the server rebuilds it before binding the port;
+`--no-build` skips that and `--rebuild` forces it.
 
 ```bash
 python3 scripts/serve.py                    # http://127.0.0.1:8770

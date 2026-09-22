@@ -460,9 +460,9 @@ expose the UI (`--host 0.0.0.0` for phone access), pass **`--no-write`**: every
 reports `writable: false`).
 
 **Four sections, behind one hamburger: Map, Dashboard, Skills, Settings.** The UI
-is a React single-page app (`frontend/`, which `scripts/serve.py` builds on first
-run and then serves — see [the frontend](docs/frontend.md); npm is required for
-the page, never for the API). The
+is a React single-page app (`frontend/`, built to a committed `frontend/dist`
+that `scripts/serve.py` serves, and rebuilds when your source is newer — see
+[the frontend](docs/frontend.md)). The
 sections live in a left drawer (`m` toggles it, Settings pinned at the bottom) so
 nothing sits on top of the search bar, each section owns the whole viewport, and
 **the section is in the URL** (`/map`, `/dashboard`, `/skills`, `/settings`), so
@@ -952,9 +952,10 @@ without matching doc updates is **incomplete**.
 - a new or changed script / endpoint (`brain_query.py`, `scripts/serve.py`, sync) —
   and a new endpoint also means describing it in `scripts/openapi.py`, which
   `tests/test_openapi.py` enforces;
-- a change to the web UI (`frontend/src/`). The bundle is NOT committed —
-  `scripts/serve.py` rebuilds it whenever a source file is newer — so there is
-  no artifact to keep in step, only the docs;
+- a change to the web UI (`frontend/src/`), which also means **rebuilding
+  `frontend/dist` in the same commit** — it is committed so the server needs no
+  node, and a stale bundle ships behavior nobody wrote (`serve.py` rebuilds it
+  locally, but only your own machine sees that);
 - a change to storage, sync, realms, vocabulary (node types, edges, states), or
   the install/enable flow.
 

@@ -52,17 +52,20 @@ jobs:
         working-directory: frontend
         run: npm test
 
-      # The build output is NOT committed -- `scripts/serve.py` produces it on
-      # first run. Nothing to compare here; the build step above is the check,
-      # and it fails on a type error or a broken import like any other.
-      - name: The build output stays out of git
+      # The build output is COMMITTED, because `python3 scripts/serve.py` must
+      # work with no node installed. That promise is only kept if the committed
+      # bundle matches the source it was built from -- so rebuild it above and
+      # fail here if the working tree moved. The fix is to run `npm run build`
+      # and commit the result with the change that caused it.
+      - name: The committed build matches the source
         run: |
-          if git ls-files --error-unmatch frontend/dist >/dev/null 2>&1; then
-            echo "frontend/dist is tracked — it is a build artifact and must not be:"
-            echo "    git rm -r --cached frontend/dist"
+          if ! git diff --quiet -- frontend/dist; then
+            echo "frontend/dist is stale — rebuild it and commit it with this change:"
+            echo "    cd frontend && npm run build"
+            git --no-pager diff --stat -- frontend/dist
             exit 1
           fi
-          echo "frontend/dist is untracked, as it should be"
+          echo "frontend/dist is up to date"
 
       # The suites are stdlib-only and self-contained, so there is no install
       # step and no reason not to run them. SECOND_BRAIN_HOME points at a temp

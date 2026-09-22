@@ -1,8 +1,8 @@
 # The frontend
 
 The brain UI is a **React single-page app** in `frontend/`, built with Vite and
-TypeScript. `scripts/serve.py` builds it on first run and serves it from
-`frontend/dist`.
+TypeScript. `scripts/serve.py` serves it from `frontend/dist`, which is
+**committed** — see below.
 
 ```
 frontend/
@@ -14,21 +14,43 @@ frontend/
     lib/          pure logic with no React in it — filters, physics, colours, formatting
     styles/       the design tokens everything paints with
     test/         fixtures, the mock server, and the render helpers
-  dist/           the built app. NOT in git — the server produces it. See below.
+  dist/           the built app. IN git, deliberately. See below.
 ```
 
-## The server builds it
+## The build ships, and stays in step
 
-`frontend/dist` is a build artifact and is not committed: a generated artifact
-in git is a second copy of the source that drifts from it silently.
+`frontend/dist` is committed, which is the opposite of the usual instinct about
+generated files. It is committed because of a promise made one layer up: the
+plugin says `python3 scripts/serve.py` gives you your brain in a browser, and
+the people who install it have Python and often no node at all. A compiled SPA
+and that promise can only both hold if the compiled SPA ships. Asking someone to
+run `npm install` before they can read their own notes would be a worse product
+than any argument about artifacts in git.
 
-So `scripts/serve.py` builds it. On startup, before it binds the port, it checks
-whether the bundle is current and produces one when it is not:
+The real objection to a committed artifact is that it drifts from its source —
+a UI change lands, the bundle is not rebuilt, and the repo quietly ships
+behaviour nobody wrote. Three things answer it:
+
+1. **CI rebuilds and diffs.** `npm run build` runs on every push, and the job
+   fails if `frontend/dist` moved. A stale bundle cannot reach `main`.
+2. **The server rebuilds locally.** On startup, before it binds the port,
+   `scripts/serve.py` compares mtimes and rebuilds when your source is ahead of
+   the bundle — so whoever is changing the UI sees the change without
+   remembering a command.
+3. **The suite checks the bundle itself.** `tests/test_contracts.py` asserts
+   `index.html` is there, that every asset it references is on disk, and that
+   the script parses (`node --check`). A half-committed build is the worst
+   failure here: the server starts, the API answers, and the page is blank.
+
+**Rebuild it in the same commit as the source change** (CONVENTIONS §4). CI will
+tell you if you forget, but it is your commit that should carry it.
+
+### When the server rebuilds
 
 1. no `frontend/dist/index.html` → build;
 2. any file in `frontend/src/`, or `package.json` / `package-lock.json` /
-   `vite.config.ts` / `tsconfig.json` / `index.html`, newer than the bundle →
-   rebuild;
+   `vite.config.ts` / `tsconfig.json` / `index.html`, more than two seconds
+   newer than the bundle → rebuild;
 3. `frontend/node_modules` missing → `npm ci` first (`npm install` when there is
    no lockfile).
 
@@ -36,22 +58,24 @@ A `*.test.tsx` edit is deliberately **not** a rebuild: tests never reach the
 bundle, and rebuilding on every one would put a compile in front of every start
 while someone is writing them.
 
+The two-second margin is what keeps rule 2 from firing on a fresh clone: git
+writes every file at one instant in index order, which puts `src/` after
+`dist/`, so without a margin every checkout would compile its own committed
+bundle before serving it. A real edit lands minutes after a build.
+
 ```bash
-python3 scripts/serve.py              # builds if needed, then serves
+python3 scripts/serve.py              # rebuilds if your source moved, then serves
 python3 scripts/serve.py --rebuild    # build even when it looks current
-python3 scripts/serve.py --no-build   # never build; the page says why
+python3 scripts/serve.py --no-build   # never run npm; serve the committed bundle
 ```
 
-**This means npm is required for the UI.** It is not required for the API, and
-that split is deliberate: with no node on the machine the server still starts,
-every endpoint answers, `/api/docs` works, and the page returns a 503 that names
-the reason and the command that fixes it. The brain does not depend on a
-JavaScript toolchain — only its UI does.
-
-`tests/test_contracts.py` tests the *decision* rather than running npm, so the
-Python suite stays stdlib-only: never rebuilding would serve a page that
-predates its source, and always rebuilding would put a compile in front of every
-start.
+**None of this is required to run the UI.** With no npm on the machine the
+server serves the committed bundle exactly as it is; it only says, on the
+terminal, that it could not refresh one it thought was stale. It never deletes
+the bundle to force a rebuild, because on that machine the trade would be a
+possibly-stale page for no page at all. Only a checkout with no
+`frontend/dist` at all loses the page, and then it returns a 503 naming the
+reason while every endpoint keeps answering.
 
 ## Working on it
 

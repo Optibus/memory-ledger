@@ -5,12 +5,12 @@ install.** `python3 scripts/graph.py` runs on a clean machine, and so does
 `python3 scripts/serve.py`. Please keep that true — a dependency here is a
 dependency in everyone's shell startup path.
 
-The one exception is `frontend/`, which is a React app with a build.
-`scripts/serve.py` runs that build itself on first start, so there is still no
-install step to perform by hand — but **npm is required for the UI**. It is not
-required for the API: with no node on the machine the server starts, every
-endpoint answers, and only the page is missing, with a 503 that says why. See
-[the frontend](docs/frontend.md).
+The one exception is `frontend/`, which is a React app with a build. It earns its
+place by not costing anyone anything at runtime: the compiled bundle is
+**committed**, so a person who installed the plugin and has no node still gets
+the UI from `serve.py`. The toolchain is a contributor's problem, never a user's
+— and `serve.py` rebuilds the bundle for a contributor whose source has moved
+ahead of it. See [the frontend](docs/frontend.md).
 
 ## Ground rules
 
@@ -70,7 +70,7 @@ claude --plugin-dir ~/dev/memory-ledger
 | `scripts/serve.py` | the local HTTP server: the JSON API, and the built UI |
 | `scripts/openapi.py` | the API description, served at `/api/docs` and generated into `docs/` |
 | `frontend/src/` | the React SPA — map, dashboard, skills, settings |
-| `frontend/dist/` | its build output. Not in git; `serve.py` produces it |
+| `frontend/dist/` | its committed build, so `serve.py` needs no node |
 | `skills/<name>/SKILL.md` | model-driven skills (these may spend tokens) |
 | `commands/` | `/ledger`, `/plan-today` |
 | `CONVENTIONS.md` | the operating rules every skill reads first |
@@ -127,10 +127,11 @@ cd frontend && npm test               # the UI: unit + integration
 
 The Python suites build THROWAWAY brains in temp dirs, so a run can never touch
 the one in your home. `test_contracts.py` also starts the real
-`scripts/serve.py` and drives it over HTTP, checks the server decides correctly
-when the UI needs rebuilding, and asserts the running server serves the same
-OpenAPI document it was built from. It never runs npm, so the Python suite stays
-stdlib-only.
+`scripts/serve.py` and drives it over HTTP, checks the committed bundle is
+present and parses (`node --check`, skipped when node is absent) and that the
+server decides correctly when to rebuild it, and asserts the running server
+serves the same OpenAPI document it was built from. It never runs npm, so the
+Python suite stays stdlib-only.
 
 `test_openapi.py` is the one worth understanding before you add an endpoint. It
 reads serve.py's ACTUAL routes out of its source — the `path ==` chain and the
@@ -146,10 +147,9 @@ mock server, asserting on the writes that reach the wire). See
 
 **CI** (`.github/workflows/ci.yml`) runs all of them on every pull request and
 every push to `main`, alongside byte-compilation, the plugin and hook manifests,
-and `scripts/check-contracts.sh`. It builds the frontend (a type error fails the
-run), checks `frontend/dist` has not been committed by accident, and regenerates
-`docs/openapi.json`, failing if it moved — that one IS committed, and a stale
-copy is a lie the repo tells quietly. The §4 docs-ship-with-behavior check runs on pull
+and `scripts/check-contracts.sh`. It also rebuilds `frontend/dist` and
+regenerates `docs/openapi.json`, failing if either moved — both are generated
+artifacts that are committed, and a stale one is a lie the repo tells quietly. The §4 docs-ship-with-behavior check runs on pull
 requests only, because a direct push may legitimately have taken the
 `--no-verify` bypass that check documents.
 

@@ -264,10 +264,10 @@ python3 scripts/graph.py recheck               # what became possible again (§2
 python3 scripts/serve.py                 # http://127.0.0.1:8770
 python3 scripts/serve.py --no-write      # read-only
 ```
-**Nothing to install by hand.** It is a React app, and the server builds it on
-the first run (and rebuilds it when the source changes), so the command above is
-all there is. That build needs `npm` on the machine; if there is none, the API
-still works in full and the page says so rather than failing silently.
+**No install step.** It is a React app, but the compiled bundle ships with the
+plugin, so this works on a machine with no node and nothing to `npm install`.
+(Change the UI's source with node installed and the server rebuilds the bundle
+on the next start, so you never serve a page older than your edit.)
 
 Four sections behind the hamburger menu (`m`), each with its own URL: **Map**
 (live graph), **Dashboard** (the query views), **Skills** (the two contract trees

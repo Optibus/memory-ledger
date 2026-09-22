@@ -793,18 +793,67 @@ def test_home_adoption_keeps_the_data():
 # skill before the rule it honors, or before the skill it requires, produces a
 # zip that imports without complaint and arrives wired to nothing — the same
 # silent-lie failure §5 exists to prevent, one layer out.
-def test_ui_build_is_decided_correctly():
-    """The server decides when to build the UI, and the decision is the test.
+def test_built_ui_is_shipped():
+    """The committed build exists, is coherent, and parses.
 
-    `frontend/dist` is a build artifact and is NOT in git, so a fresh checkout
-    has no bundle and `scripts/serve.py` produces one. What can go wrong is the
-    DECISION: never rebuilding leaves a page that predates its source (the
-    failure the whole reload mechanism exists to prevent), and always rebuilding
-    puts an npm run in front of every start.
+    The UI is a React app, which means it has a BUILD — and the plugin promises
+    `python3 scripts/serve.py` works with no npm and no install step. The only
+    way to keep both is to commit `frontend/dist`, and the only way to keep THAT
+    honest is to check it is there and intact on every run. A missing or
+    half-written bundle is the worst kind of failure here: the API answers, the
+    server starts, and the person gets a blank page.
+
+    The syntax check is skipped when node is not installed; it is a guard, not a
+    dependency (CI installs node so the guard cannot pass vacuously)."""
+    print("\n== the built UI ships with the plugin ==")
+    dist = ROOT / "frontend" / "dist"
+    index = dist / "index.html"
+    ck("frontend/dist/index.html is committed", index.is_file(), str(index))
+    if not index.is_file():
+        return
+
+    html = index.read_text(encoding="utf-8")
+    import re
+    refs = re.findall(r'(?:src|href)="\.?/?(assets/[^"]+)"', html)
+    ck("its entry point references built assets", bool(refs), str(refs))
+    missing = [r for r in refs if not (dist / r).is_file()]
+    ck("and every one of them is on disk — a half-committed build is a blank page",
+       not missing, ", ".join(missing))
+
+    ck("the app mounts on the root the bundle expects", 'id="root"' in html, "")
+
+    node = shutil.which("node")
+    if not node:
+        print("  SKIP  node not installed")
+        return
+    scripts = [r for r in refs if r.endswith(".js")]
+    ck("the bundle is a single script, so one syntax error is visible at once",
+       len(scripts) == 1, str(scripts))
+    for rel in scripts:
+        # .mjs so `node --check` parses it as the ES module the build emits.
+        src = Path(tempfile.mkdtemp(prefix="second-brain-js-")) / "bundle.mjs"
+        src.write_text((dist / rel).read_text(encoding="utf-8"), encoding="utf-8")
+        pr = subprocess.run([node, "--check", str(src)], capture_output=True, text=True)
+        why = next((l for l in (pr.stderr or "").splitlines() if "Error" in l), "")
+        ck(f"{rel} parses — a dead bundle takes the whole page with it",
+           pr.returncode == 0, why.strip())
+        shutil.rmtree(src.parent, ignore_errors=True)
+
+
+def test_ui_build_is_decided_correctly():
+    """The server decides when to REBUILD the committed UI, and that is the test.
+
+    The bundle ships (above), so nobody needs npm to see the page. But whoever
+    changes `frontend/src/` needs the page to follow, and `scripts/serve.py`
+    rebuilds it when the source is newer. The DECISION is what can go wrong:
+    never rebuilding serves a page that predates its source (the failure the
+    whole reload mechanism exists to prevent), always rebuilding puts an npm run
+    in front of every start — including on a fresh clone, where every file lands
+    with the same mtime and nothing was edited at all.
 
     So this exercises `ui_stale()` against a real directory rather than running
     npm, which would make the suite need a toolchain it otherwise does not."""
-    print("\n== the server knows when the UI needs building ==")
+    print("\n== the server knows when the UI needs rebuilding ==")
     import serve
 
     work = Path(tempfile.mkdtemp(prefix="second-brain-ui-"))
@@ -851,9 +900,26 @@ def test_ui_build_is_decided_correctly():
         os.utime(spec, (later, later))
         ck("a test edit is NOT a rebuild", serve.ui_stale() == "", serve.ui_stale())
 
-        # --no-build never runs npm, and says so rather than silently serving
-        # a stale page.
-        index.unlink()
+        # A CLONE is not an edit. git writes every file at one instant, in index
+        # order, which puts src/ after dist/ — without the grace window a fresh
+        # checkout would compile its own committed bundle before serving it.
+        same = newer + 30
+        for path in (index, src / "App.tsx", cfg, work / "package.json"):
+            os.utime(path, (same, same))
+        ck("a checkout, where everything has one mtime, is NOT a rebuild",
+           serve.ui_stale() == "", serve.ui_stale())
+
+        # --rebuild builds whatever the mtimes say...
+        why = serve.ensure_ui(auto=False, force=True)
+        ck("--rebuild does not care that the bundle looks current",
+           "rebuild" in why, why)
+        # ...but never by DELETING the committed bundle to force the issue: on a
+        # machine that cannot rebuild, that trades a stale page for no page.
+        ck("and it leaves the shipped bundle on disk", index.is_file(), "")
+
+        # --no-build never runs npm, and says so rather than pretending the
+        # bundle was refreshed.
+        os.utime(src / "App.tsx", (same + 60, same + 60))
         why = serve.ensure_ui(auto=False)
         ck("--no-build refuses to build and explains itself",
            "no-build" in why, why)
@@ -861,10 +927,12 @@ def test_ui_build_is_decided_correctly():
         serve.FRONTEND, serve.DIST, serve.INDEX = orig_front, orig_dist, orig_index
         shutil.rmtree(work, ignore_errors=True)
 
-    # A machine with no toolchain still gets the whole API; only the page is
-    # missing, and the page says why rather than 404ing.
+    # The bundle is committed, so this page means a broken checkout rather than
+    # a missing toolchain — and it says which, rather than 404ing.
     ck("the fallback page names the reason it was given",
        "{reason}" in serve.MISSING_UI, "")
+    ck("and says the bundle ships, so it can be restored from git",
+       "git checkout" in serve.MISSING_UI, "")
     ck("and points at the API, which is unaffected",
        "/api/docs" in serve.MISSING_UI, "")
 
@@ -1193,6 +1261,7 @@ def main():
     test_server_error_paths()
     test_web()
     test_web_odd_shapes()
+    test_built_ui_is_shipped()
     test_ui_build_is_decided_correctly()
     test_api_docs_are_served()
     test_bundle_round_trip()

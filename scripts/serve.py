@@ -13,8 +13,10 @@ $SECOND_BRAIN_HOME) and serves two things over one port:
 
 **No npm at runtime.** The build output is committed precisely so that a person
 who installs the plugin runs this file and gets the UI, with no node toolchain
-and no install step. `npm run dev` in `frontend/` is for changing the UI, and it
-proxies /api straight back here.
+and no install step. The server rebuilds the bundle when it finds the source
+NEWER than it (see `ensure_ui`), which is a convenience for whoever is changing
+the UI — never something a user has to have. `npm run dev` in `frontend/` is the
+real loop for that work, and it proxies /api straight back here.
 
 It restarts itself when its own code changes, so a long-running server never
 serves a page newer than the API behind it. See RELOAD below.
@@ -43,8 +45,9 @@ import graph  # noqa: E402  (the engine — single source of truth for the DB)
 import brain_query  # noqa: E402  (the off-token query layer — powers the dashboard views)
 import openapi  # noqa: E402  (the API description, and the Swagger UI over it)
 
-# The SPA, and where it is built from. `dist/` is a BUILD ARTIFACT and is not in
-# git — this server produces it (see `ensure_ui`) rather than shipping it.
+# The SPA, and where it is built from. `dist/` is a build artifact that IS
+# committed, so this file works on a machine with no node; `ensure_ui` refreshes
+# it when the source has moved ahead of it.
 FRONTEND = ROOT / "frontend"
 DIST = FRONTEND / "dist"
 INDEX = DIST / "index.html"
@@ -54,6 +57,13 @@ INDEX = DIST / "index.html"
 # without touching a single component.
 UI_CONFIG_FILES = ("package.json", "package-lock.json", "vite.config.ts",
                    "tsconfig.json", "index.html")
+
+# How much newer a source file has to be before it means someone edited it.
+# A checkout writes every file at effectively the same instant, in index order,
+# which puts frontend/src/ AFTER frontend/dist/ — with no margin, every fresh
+# clone would decide its own committed bundle was stale and compile it before
+# serving. A real edit lands minutes after a build, never microseconds.
+STALE_GRACE_NS = 2_000_000_000
 
 # What to say when the page could not be built. It names the reason and the one
 # command that fixes it, because "the server is broken" is what a bare 404 says
@@ -68,10 +78,12 @@ pre{{background:#161b22;padding:12px 14px;border-radius:8px;overflow:auto}}
 a{{color:#58a6ff}} .why{{color:#8b949e}}</style>
 <h1>The UI is not built</h1>
 <p class="why">{reason}</p>
-<p>Build it by hand:</p>
+<p>The compiled app ships with the plugin, so this page normally cannot happen —
+<code>frontend/dist</code> is in git. It means the bundle was deleted, or this is
+a partial checkout. Restore it:</p>
+<pre>git checkout -- frontend/dist</pre>
+<p>Or build it yourself, if you have node:</p>
 <pre>cd frontend &amp;&amp; npm install &amp;&amp; npm run build</pre>
-<p>Then reload this page. The server rebuilds it automatically on the next start
-once <code>npm</code> is available.</p>
 <p><b>The API is running and fully usable meanwhile:</b>
 <a href="/api/docs">/api/docs</a>.</p>
 """
@@ -110,13 +122,19 @@ BOOT = f"{os.getpid()}-{int(time.time())}"
 # ---------------------------------------------------------------------------
 # BUILDING THE UI
 #
-# The frontend is a React app with a real toolchain, and its output is NOT in
-# git — a generated artifact committed beside its source is a second copy that
-# drifts from it silently. So the server builds it: on the first run, and again
-# whenever a source file is newer than the bundle.
+# The frontend is a React app with a real toolchain, and its output IS in git.
+# That is against the usual instinct, and it is the whole reason the portal
+# works for someone who installed the plugin and has no node: `serve.py` is the
+# promise, and a compiled SPA can only keep it if the compiled SPA ships.
 #
-# The cost of that choice is honest and stated here: `npm` has to exist on the
-# machine for the UI to work. The API does not care and never blocks on it.
+# The usual objection to a generated artifact in git is that it drifts from its
+# source. Two things answer that rather than hoping: CI rebuilds the bundle and
+# fails if the tree moves, and this function rebuilds it locally whenever it
+# finds a source file newer than it — so the person who changed the UI sees the
+# change, and the person who only reads it gets a bundle CI has vouched for.
+#
+# A machine with no npm never loses anything here: it serves the committed
+# bundle, and only says so when it could not refresh one it thought was stale.
 # ---------------------------------------------------------------------------
 def _ui_sources():
     """Every file whose change makes the current bundle stale."""
@@ -137,6 +155,10 @@ def ui_stale() -> str:
 
     mtime, not a content hash: this runs on every start, and hashing a few
     hundred files to save a one-second vite build would cost more than it saves.
+
+    The comparison carries STALE_GRACE_NS, so the equal-mtime files a checkout
+    produces read as current — the committed bundle is the one CI vouched for,
+    and cloning the repo is not an edit to the UI.
     """
     if not INDEX.exists():
         return "no bundle yet"
@@ -149,7 +171,7 @@ def ui_stale() -> str:
             continue
         if mtime > newest:
             newest, newest_path = mtime, path
-    if newest > built:
+    if newest > built + STALE_GRACE_NS:
         return f"{newest_path.name} changed since the last build"
     return ""
 
@@ -172,12 +194,13 @@ def _run(cmd, cwd, label) -> tuple[bool, str]:
     return True, ""
 
 
-def ensure_ui(auto: bool = True) -> str:
-    """Make sure a current bundle exists. Returns "" on success, else the reason.
+def ensure_ui(auto: bool = True, force: bool = False) -> str:
+    """Refresh the bundle if the source moved. Returns "" if fine, else why not.
 
-    Never raises and never exits: a machine with no node still gets the whole
-    API, and the page explains itself instead of 404ing. That split is the point
-    — the brain does not depend on a JavaScript toolchain, only its UI does.
+    Never raises and never exits. Nothing here is required to serve the UI: the
+    bundle is committed, so the failures below leave the shipped page in place
+    and are reported as "possibly stale", not as a missing UI. Only a checkout
+    with no `frontend/dist` at all loses the page, and then it says so.
     """
     global UI_PROBLEM
     UI_PROBLEM = ""
@@ -186,7 +209,7 @@ def ensure_ui(auto: bool = True) -> str:
         UI_PROBLEM = "the frontend/ directory is missing from this checkout"
         return UI_PROBLEM
 
-    reason = ui_stale()
+    reason = "--rebuild was passed" if force else ui_stale()
     if not reason:
         return ""
     if not auto:
@@ -196,11 +219,11 @@ def ensure_ui(auto: bool = True) -> str:
     npm = shutil.which("npm")
     if not npm:
         UI_PROBLEM = (f"{reason}, and npm is not on PATH. "
-                      "Install Node.js to let the server build the page.")
-        print(f"  UI not built: {UI_PROBLEM}", flush=True)
+                      "Install Node.js to rebuild the page from your changes.")
+        print(f"  UI not rebuilt: {UI_PROBLEM}", flush=True)
         return UI_PROBLEM
 
-    print(f"building the UI ({reason})", flush=True)
+    print(f"rebuilding the UI ({reason})", flush=True)
 
     if not (FRONTEND / "node_modules").is_dir():
         # `npm ci` is the reproducible install and needs the lockfile; without
@@ -681,7 +704,7 @@ class Handler(BaseHTTPRequestHandler):
         of a bare 404.
         """
         if not INDEX.exists():
-            reason = UI_PROBLEM or "it has not been built yet"
+            reason = UI_PROBLEM or "frontend/dist/index.html is not here"
             self._send(503, MISSING_UI.format(reason=reason),
                        "text/html; charset=utf-8")
             return
@@ -1392,8 +1415,8 @@ def main():
                          "unauthenticated and anyone on the network could edit "
                          "your brain.")
     ap.add_argument("--no-build", action="store_true",
-                    help="do not build the UI, even when it is missing or "
-                         "stale. The API is unaffected; the page says why.")
+                    help="never run npm. The committed bundle is served as it "
+                         "is, even if your own source is newer than it.")
     ap.add_argument("--rebuild", action="store_true",
                     help="rebuild the UI even when it looks current")
     args = ap.parse_args()
@@ -1409,12 +1432,11 @@ def main():
 
     graph.connect().close()  # ensure the brain exists
 
-    # Build BEFORE binding, so the browser is only opened once there is a page
-    # to open. It never aborts the start: a machine with no node still gets the
-    # whole API, and the page explains itself rather than 404ing.
-    if args.rebuild and INDEX.exists():
-        INDEX.unlink()
-    ensure_ui(auto=not args.no_build)
+    # Refresh BEFORE binding, so the browser opens on the page it will keep.
+    # It never aborts the start, and it never DELETES the bundle to force the
+    # issue: frontend/dist is committed, and on a machine that cannot rebuild,
+    # removing it would trade a possibly-stale page for no page at all.
+    ensure_ui(auto=not args.no_build, force=args.rebuild)
 
     url = f"http://{args.host}:{args.port}/"
     httpd = QuietServer((args.host, args.port), Handler)
@@ -1424,7 +1446,9 @@ def main():
         print(f"memory-ledger → {url}")
         print(f"  brain: {graph.db_path()}")
         print(f"  api:   {url}api/docs")
-        if UI_PROBLEM:
+        if UI_PROBLEM and INDEX.exists():
+            print(f"  note:  serving the committed UI; it may be stale ({UI_PROBLEM})")
+        elif UI_PROBLEM:
             print(f"  note:  the UI is unavailable ({UI_PROBLEM}); the API is not")
         print("  Ctrl-C to stop.")
     else:
