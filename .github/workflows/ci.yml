@@ -21,6 +21,16 @@ jobs:
         with:
           python-version: "3.12"
 
+      # The suite parses viz/index.html's inline script with `node --check`, and
+      # SKIPS ITSELF when node is absent. ubuntu-latest happens to ship node, so
+      # the guard would run today by accident -- and would start passing
+      # vacuously the day a runner image drops it, which is exactly the silent
+      # failure it exists to catch. Installing it makes that non-incidental.
+      - name: Set up Node (for the page-script syntax guard)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
       - name: Byte-compile scripts, hooks, viz
         run: python -m compileall -q scripts hooks viz
 
@@ -152,6 +162,16 @@ jobs:
           print(f"hook manifest OK ({checked} command paths verified)")
           PY
 
+      # CONVENTIONS §5/§5a, run on EVERY event. It used to reach CI only inside
+      # the pre-commit invocation below, which is gated to pull_request -- so a
+      # commit pushed straight to main never had its contracts checked by
+      # anything but the author's own local hook, and a push from a clone that
+      # never ran `git config core.hooksPath .githooks` had them checked by
+      # nothing at all. Unlike the §4 check under it, this one needs no base ref:
+      # it reads the working tree, so it works the same on a push and a PR.
+      - name: Skill contracts and the dependency tree (CONVENTIONS §5, §5a)
+        run: bash scripts/check-contracts.sh
+
       # Docs-ship-with-behavior is CONVENTIONS.md §4, enforced locally by the
       # .githooks/pre-commit hook. That hook reads `git diff --cached`, i.e.
       # index-vs-HEAD, which in a CI checkout is empty — the PR's changes are
@@ -160,6 +180,13 @@ jobs:
       # exactly base-vs-PR and the existing hook runs unmodified. (Staging the
       # files instead does nothing: `git add` on content already identical to
       # HEAD is a no-op, and the check would silently pass on every PR.)
+      #
+      # This one stays PR-only, deliberately. §4 has a documented escape hatch
+      # (`git commit --no-verify`) for a genuinely doc-neutral change -- a
+      # release commit that only bumps plugin.json is the standing example --
+      # and a push-triggered check has no way to honor a bypass the author
+      # already took at commit time. Enforcing it on push would turn every such
+      # release into a red build.
       - name: Docs ship with behavior (CONVENTIONS §4)
         if: github.event_name == 'pull_request'
         env:

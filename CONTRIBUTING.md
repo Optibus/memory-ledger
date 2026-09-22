@@ -104,8 +104,26 @@ python3 scripts/graph.py ingest-skills
 
 ## Testing
 
-There is no test suite yet, which is the biggest gap in the project. Until there
-is, verify by hand against a scratch brain:
+Two stdlib-only suites, no install step and no runner to learn:
+
+```bash
+python3 tests/test_contracts.py       # contract shapes, bundles, the web routes
+python3 tests/test_traceability.py    # the tree, and hooks that must not block
+```
+
+Both build THROWAWAY brains in temp dirs, so a run can never touch the one in
+your home. `test_contracts.py` also starts the real `viz/serve.py` and drives it
+over HTTP, and parses `viz/index.html`'s inline script with `node --check` when
+node is present — a duplicate `const` there kills every handler on the page at
+once, silently, and nothing else would catch it.
+
+**CI** (`.github/workflows/ci.yml`) runs both on every pull request and every
+push to `main`, alongside byte-compilation, the plugin and hook manifests, and
+`scripts/check-contracts.sh`. The §4 docs-ship-with-behavior check runs on pull
+requests only, because a direct push may legitimately have taken the
+`--no-verify` bypass that check documents.
+
+Beyond the suites, verify by hand against a scratch brain:
 
 ```bash
 export SECOND_BRAIN_HOME=/tmp/brain-test
@@ -127,9 +145,10 @@ echo '{"session_id":"t","cwd":"'"$PWD"'","prompt":"probe"}' \
   | python3 hooks/capture_prompt.py | python3 -m json.tool
 ```
 
-**Contributions that add tests are especially welcome.** Start with the ranking
-maths in `_strength` / `_hebbian` and the timezone handling in `_parse_dt` — both
-are subtle and both have bitten us.
+**Contributions that add tests are especially welcome.** The thinnest coverage
+is the ranking maths in `_strength` / `_hebbian` and the timezone handling in
+`_parse_dt` — both are subtle and both have bitten us. Add a check beside the
+existing ones and `main()` will pick it up.
 
 ## Performance
 
