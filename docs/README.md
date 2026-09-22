@@ -8,7 +8,9 @@ These pages are the reference: how it works and how to change it.
 | [algorithm.md](algorithm.md) | capture, memory strength, spreading activation, Hebbian wiring, consolidation, the genome |
 | [queries.md](queries.md) | every read path, its flags, and which one to reach for |
 | [search.md](search.md) | the FTS5 index, cue construction, budgets, sharp edges |
-| [api.md](api.md) | the local HTTP server — GET/POST surface and how to extend it |
+| [api.md](api.md) | the local HTTP server — GET/POST surface and how to extend it. Its interactive reference is `/api/docs` on a running server |
+| [frontend.md](frontend.md) | the React single-page app — layout, why its build is committed, how to work on it, and what the two test suites cover |
+| [openapi.json](openapi.json) | the generated OpenAPI 3.1 document, for reading without a server running |
 | [performance.md](performance.md) | measured latency, storage, growth projections, scaling, known limits |
 | [neo4j.md](neo4j.md) | running a real graph database instead of the SQLite mirror — `neo4j_local.py up` (Docker, one command), the `backend` setting, and whether it is worth it |
 | [comparison.md](comparison.md) | how this compares to MemPalace and other second brains, and measured SQLite vs neo4j vs ChromaDB |

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Where the ledger lives, and whether it is on.
 
-This is the smallest module in the tree on purpose. It holds the three answers
-a caller needs *before* it can decide to do nothing — which config prefix wins,
-where home is, and whether the user turned the ledger off — and it imports
-nothing but `os` and `pathlib` to give them.
+This is the smallest module in the tree on purpose. It holds the answers a
+caller needs *before* it can decide to do nothing — which config prefix wins,
+where home is, whether the user turned the ledger off, and how the other
+boolean switches (autosync, consolidate) resolve — and it imports nothing but
+`json`, `os` and `pathlib` to give them.
 
 The reason is the SessionStart path. `hooks/open_loops_brief.py` runs on every
 session and its first act is to ask "am I even enabled?". Reaching that answer
@@ -20,6 +21,7 @@ still resolve to it, so nothing that already reads it through the engine has to
 change. Never re-implement these; import them.
 """
 
+import json
 import os
 from pathlib import Path
 
@@ -194,3 +196,76 @@ def disabled() -> bool:
 
 def enabled() -> bool:
     return not disabled()
+
+
+# ---------------------------------------------------------------------------
+# the other switches
+#
+# `disabled()` is not the only thing a hook has to know before deciding to do
+# nothing: the SessionStart path also asks "should I consolidate?", and the
+# capture path asks "should I push to the mirror?". Those live here for the same
+# reason — they are read on the cheap path, by callers that must not pay for the
+# full engine to be told to stand down.
+#
+# graph.py imports these back up, so `graph.flag()` and this are one
+# implementation. Never re-implement them; import them.
+# ---------------------------------------------------------------------------
+
+#: Boolean settings and what each is when nobody has said. Spelled POSITIVELY
+#: ("autosync: on") while the matching env var keeps the negative the engine has
+#: always used ($MEMORY_LEDGER_NO_AUTOSYNC): a file you edit should say what you
+#: want, an escape hatch you export for one shell should say what you suppress.
+BOOL_SETTINGS = {"autosync": True, "consolidate": True, "ui_sync": False}
+
+_BOOL_TRUE = {"1", "true", "yes", "on"}
+_BOOL_FALSE = {"0", "false", "no", "off"}
+
+
+def settings() -> dict:
+    """Read <home>/settings.json. Missing or corrupt reads as empty — a bad
+    settings file must never stop the brain from answering."""
+    try:
+        val = json.loads((home_dir() / "settings.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return val if isinstance(val, dict) else {}
+
+
+def _env_says_off(name: str) -> bool:
+    """True when $MEMORY_LEDGER_NO_<NAME> is set to something that means yes.
+    Explicitly setting it to a falsey value means "do not suppress", so it
+    reads as unset rather than as a second way to say off."""
+    return _env("NO_" + name.upper()).strip().lower() not in _BOOL_FALSE | {""}
+
+
+def flag(name: str) -> bool:
+    """One boolean setting, resolved the way the engine resolves everything.
+
+    Order is flag > env > file > default, with one wrinkle: the env var is the
+    NEGATIVE, because that is the spelling every existing rc file, cron and CI
+    job already uses and those must not stop working. So a truthy `NO_<NAME>`
+    forces the switch OFF and outranks the file, exactly as $MEMORY_LEDGER_OFF
+    outranks the .disabled marker.
+    """
+    if _env_says_off(name):
+        return False
+    raw = settings().get(name)
+    if raw is None:
+        return BOOL_SETTINGS.get(name, False)
+    if isinstance(raw, bool):
+        return raw
+    low = str(raw).strip().lower()
+    if low in _BOOL_TRUE:
+        return True
+    if low in _BOOL_FALSE:
+        return False
+    return BOOL_SETTINGS.get(name, False)   # hand-edited nonsense reads as unset
+
+
+def flag_source(name: str) -> str:
+    """Where flag() got its answer — "env", "settings" or "default". The
+    Settings page shows this, because a switch that says "off" without saying
+    WHY is the same lie as a timezone field that hides an env override."""
+    if _env_says_off(name):
+        return "env"
+    return "settings" if settings().get(name) is not None else "default"

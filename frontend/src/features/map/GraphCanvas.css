@@ -1,0 +1,23 @@
+/*
+ * The two dimensions MUST be stated here.
+ *
+ * A canvas's `width`/`height` content attributes (which the render loop sets to
+ * the backing-store size, in device pixels) map to CSS presentational hints. A
+ * hint loses to an author rule but beats `auto` — so with only `inset: 0`, the
+ * used width came from the attribute rather than from the viewport, and each
+ * measurement multiplied the canvas by the device pixel ratio. On a 2x display
+ * it reached 38400px wide and the graph drew into the top-left quadrant of a
+ * canvas nobody could see the rest of. Stating width and height outranks the
+ * hint and pins the element to the viewport, which is what `inset: 0` was
+ * already trying to say.
+ */
+.ml-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: grab;
+  z-index: var(--z-canvas);
+}
+.ml-canvas.is-grabbing { cursor: grabbing; }

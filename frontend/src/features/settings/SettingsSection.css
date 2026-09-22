@@ -1,0 +1,47 @@
+.ml-settings__h { margin: 0 0 var(--space-2); font-size: 14px; }
+.ml-settings__h3 {
+  margin: var(--space-6) 0 var(--space-2); font-size: 12.5px;
+  display: flex; align-items: center; gap: var(--space-2);
+}
+.ml-settings__hint { color: var(--muted); font-size: 11.5px; line-height: 1.5; margin: 0 0 var(--space-4); }
+.ml-settings__hint code { color: var(--fg); }
+.ml-settings__grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--space-3);
+}
+.ml-settings__foot { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; }
+.ml-settings__note { color: var(--muted); font-size: 11.5px; }
+
+/* One boolean setting: the box, then why it reads the way it does. */
+.ml-settings__switch { margin: 0 0 var(--space-4); }
+.ml-settings__hint--switch {
+  margin: var(--space-1) 0 0 22px;   /* clears the checkbox, aligns with its label */
+}
+.ml-settings__hint--switch strong { color: var(--warn); font-weight: 600; }
+
+/* Key/value rows that read as a definition list rather than a table. */
+.ml-settings__kv {
+  display: grid; grid-template-columns: minmax(90px, auto) 1fr;
+  gap: var(--space-1) var(--space-4); margin: 0 0 var(--space-4); font-size: 11.5px;
+}
+.ml-settings__kv dt { color: var(--muted); }
+.ml-settings__kv dd { margin: 0; overflow-wrap: anywhere; }
+
+.ml-settings__list { margin: 0 0 var(--space-4); padding-left: var(--space-5); font-size: 11.5px; line-height: 1.6; }
+.ml-settings__list code { color: var(--fg); }
+
+/* The consolidation plan, and doctor's longer sections. Capped so a brain with
+   a year of captures does not turn the card into the page. */
+.ml-settings__scroll { max-height: 320px; overflow: auto; margin-bottom: var(--space-4); }
+.ml-settings__preview {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: var(--space-4); margin: var(--space-4) 0;
+}
+.ml-settings__preview .ml-settings__h3 { margin-top: 0; }
+.ml-settings__table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.ml-settings__table th, .ml-settings__table td {
+  text-align: left; padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+.ml-settings__table th { color: var(--muted); font-weight: 500; position: sticky; top: 0; background: var(--panel-solid); }
+.ml-settings__doctor { margin-bottom: var(--space-5); }
+.ml-settings__doctor .ml-settings__h3 { margin-top: 0; text-transform: capitalize; }

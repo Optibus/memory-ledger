@@ -1,12 +1,22 @@
 #!/usr/bin/env python3
-"""memory-ledger graph visualizer — a tiny, dependency-free local web server.
+"""memory-ledger backend — a tiny, dependency-free local web server.
 
 Reads the same brain the CLI uses (~/.second_brain/graph.db, or $SECOND_BRAIN_DB /
-$SECOND_BRAIN_HOME) and serves an interactive force-directed graph you can zoom,
-pan, filter, search, and click through. The page polls the API so edits made by
-any skill show up live.
+$SECOND_BRAIN_HOME) and serves two things over one port:
 
-    python3 viz/serve.py [--port 8770] [--no-open] [--no-reload]
+  * the JSON API (`/api/*`), described by `scripts/openapi.py` and browsable at
+    **/api/docs**;
+  * the React single-page app built from `frontend/`, served from the COMMITTED
+    `frontend/dist`.
+
+    python3 scripts/serve.py [--port 8770] [--no-open] [--no-reload]
+
+**No npm at runtime.** The build output is committed precisely so that a person
+who installs the plugin runs this file and gets the UI, with no node toolchain
+and no install step. The server rebuilds the bundle when it finds the source
+NEWER than it (see `ensure_ui`), which is a convenience for whoever is changing
+the UI — never something a user has to have. `npm run dev` in `frontend/` is the
+real loop for that work, and it proxies /api straight back here.
 
 It restarts itself when its own code changes, so a long-running server never
 serves a page newer than the API behind it. See RELOAD below.
@@ -18,20 +28,83 @@ import argparse
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import threading
 import time
 import webbrowser
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent / "scripts"))
+ROOT = HERE.parent
+sys.path.insert(0, str(HERE))
 import graph  # noqa: E402  (the engine — single source of truth for the DB)
-import brain_query  # noqa: E402  (the off-token query layer — powers the dashboard tab)
+import brain_query  # noqa: E402  (the off-token query layer — powers the dashboard views)
+import openapi  # noqa: E402  (the API description, and the Swagger UI over it)
 
-INDEX = HERE / "index.html"
+# The SPA, and where it is built from. `dist/` is a build artifact that IS
+# committed, so this file works on a machine with no node; `ensure_ui` refreshes
+# it when the source has moved ahead of it.
+FRONTEND = ROOT / "frontend"
+DIST = FRONTEND / "dist"
+INDEX = DIST / "index.html"
+
+# Changing any of these means the bundle on disk no longer describes the source,
+# so it is rebuilt. Config counts: a vite.config.ts edit changes the output
+# without touching a single component.
+UI_CONFIG_FILES = ("package.json", "package-lock.json", "vite.config.ts",
+                   "tsconfig.json", "index.html")
+
+# How much newer a source file has to be before it means someone edited it.
+# A checkout writes every file at effectively the same instant, in index order,
+# which puts frontend/src/ AFTER frontend/dist/ — with no margin, every fresh
+# clone would decide its own committed bundle was stale and compile it before
+# serving. A real edit lands minutes after a build, never microseconds.
+STALE_GRACE_NS = 2_000_000_000
+
+# What to say when the page could not be built. It names the reason and the one
+# command that fixes it, because "the server is broken" is what a bare 404 says
+# and it is never what happened here.
+MISSING_UI = """<!doctype html>
+<meta charset="utf-8">
+<title>memory-ledger — the UI is not built</title>
+<style>body{{font:15px/1.6 ui-sans-serif,system-ui,sans-serif;max-width:42rem;
+margin:12vh auto;padding:0 1.5rem;background:#0d1117;color:#e6edf3}}
+code{{background:#161b22;padding:2px 6px;border-radius:5px;color:#58a6ff}}
+pre{{background:#161b22;padding:12px 14px;border-radius:8px;overflow:auto}}
+a{{color:#58a6ff}} .why{{color:#8b949e}}</style>
+<h1>The UI is not built</h1>
+<p class="why">{reason}</p>
+<p>The compiled app ships with the plugin, so this page normally cannot happen —
+<code>frontend/dist</code> is in git. It means the bundle was deleted, or this is
+a partial checkout. Restore it:</p>
+<pre>git checkout -- frontend/dist</pre>
+<p>Or build it yourself, if you have node:</p>
+<pre>cd frontend &amp;&amp; npm install &amp;&amp; npm run build</pre>
+<p><b>The API is running and fully usable meanwhile:</b>
+<a href="/api/docs">/api/docs</a>.</p>
+"""
+
+# Set by ensure_ui() when the build could not run, so the page can say WHY
+# rather than only that something is missing.
+UI_PROBLEM = ""
+
+# The only file types the SPA build emits. An explicit map beats mimetypes.guess,
+# which is configured per machine and has been known to answer text/plain for .js.
+CONTENT_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".json": "application/json",
+    ".svg": "image/svg+xml",
+    ".ico": "image/x-icon",
+    ".png": "image/png",
+    ".woff2": "font/woff2",
+    ".map": "application/json",
+}
 
 # Writes (POST /api/*) are enabled unless started with --no-write. The write API
 # is unauthenticated, so bind to 127.0.0.1 or pass --no-write when exposing it.
@@ -45,6 +118,138 @@ MAX_BUNDLE_BYTES = 32 * 1024 * 1024
 # Identifies THIS process. The page polls it and reloads itself when it changes,
 # so a restart carries the new page to an already-open tab.
 BOOT = f"{os.getpid()}-{int(time.time())}"
+
+# ---------------------------------------------------------------------------
+# BUILDING THE UI
+#
+# The frontend is a React app with a real toolchain, and its output IS in git.
+# That is against the usual instinct, and it is the whole reason the portal
+# works for someone who installed the plugin and has no node: `serve.py` is the
+# promise, and a compiled SPA can only keep it if the compiled SPA ships.
+#
+# The usual objection to a generated artifact in git is that it drifts from its
+# source. Two things answer that rather than hoping: CI rebuilds the bundle and
+# fails if the tree moves, and this function rebuilds it locally whenever it
+# finds a source file newer than it — so the person who changed the UI sees the
+# change, and the person who only reads it gets a bundle CI has vouched for.
+#
+# A machine with no npm never loses anything here: it serves the committed
+# bundle, and only says so when it could not refresh one it thought was stale.
+# ---------------------------------------------------------------------------
+def _ui_sources():
+    """Every file whose change makes the current bundle stale."""
+    for name in UI_CONFIG_FILES:
+        path = FRONTEND / name
+        if path.exists():
+            yield path
+    src = FRONTEND / "src"
+    if src.is_dir():
+        for path in src.rglob("*"):
+            # Tests never reach the bundle, so a test edit is not a rebuild.
+            if path.is_file() and ".test." not in path.name:
+                yield path
+
+
+def ui_stale() -> str:
+    """Why the bundle needs rebuilding, or "" when it is current.
+
+    mtime, not a content hash: this runs on every start, and hashing a few
+    hundred files to save a one-second vite build would cost more than it saves.
+
+    The comparison carries STALE_GRACE_NS, so the equal-mtime files a checkout
+    produces read as current — the committed bundle is the one CI vouched for,
+    and cloning the repo is not an edit to the UI.
+    """
+    if not INDEX.exists():
+        return "no bundle yet"
+    built = INDEX.stat().st_mtime_ns
+    newest, newest_path = 0, None
+    for path in _ui_sources():
+        try:
+            mtime = path.stat().st_mtime_ns
+        except OSError:
+            continue
+        if mtime > newest:
+            newest, newest_path = mtime, path
+    if newest > built + STALE_GRACE_NS:
+        return f"{newest_path.name} changed since the last build"
+    return ""
+
+
+def _run(cmd, cwd, label) -> tuple[bool, str]:
+    """Run one toolchain command, showing its output as it goes.
+
+    Streamed rather than captured because `npm install` can take half a minute
+    and a silent terminal during it reads as a hang.
+    """
+    print(f"  {label}…", flush=True)
+    try:
+        proc = subprocess.run(cmd, cwd=str(cwd))
+    except FileNotFoundError:
+        return False, f"{cmd[0]} is not installed"
+    except Exception as e:                       # pragma: no cover - defensive
+        return False, f"{label} could not start: {e}"
+    if proc.returncode != 0:
+        return False, f"{label} failed (exit {proc.returncode})"
+    return True, ""
+
+
+def ensure_ui(auto: bool = True, force: bool = False) -> str:
+    """Refresh the bundle if the source moved. Returns "" if fine, else why not.
+
+    Never raises and never exits. Nothing here is required to serve the UI: the
+    bundle is committed, so the failures below leave the shipped page in place
+    and are reported as "possibly stale", not as a missing UI. Only a checkout
+    with no `frontend/dist` at all loses the page, and then it says so.
+    """
+    global UI_PROBLEM
+    UI_PROBLEM = ""
+
+    if not FRONTEND.is_dir():
+        UI_PROBLEM = "the frontend/ directory is missing from this checkout"
+        return UI_PROBLEM
+
+    reason = "--rebuild was passed" if force else ui_stale()
+    if not reason:
+        return ""
+    if not auto:
+        UI_PROBLEM = f"{reason}, and --no-build was passed"
+        return UI_PROBLEM
+
+    npm = shutil.which("npm")
+    if not npm:
+        UI_PROBLEM = (f"{reason}, and npm is not on PATH. "
+                      "Install Node.js to rebuild the page from your changes.")
+        print(f"  UI not rebuilt: {UI_PROBLEM}", flush=True)
+        return UI_PROBLEM
+
+    print(f"rebuilding the UI ({reason})", flush=True)
+
+    if not (FRONTEND / "node_modules").is_dir():
+        # `npm ci` is the reproducible install and needs the lockfile; without
+        # one it refuses outright, so fall back rather than fail the whole start.
+        if (FRONTEND / "package-lock.json").exists():
+            ok, err = _run([npm, "ci", "--no-audit", "--no-fund"],
+                           FRONTEND, "installing dependencies (npm ci)")
+        else:
+            ok, err = _run([npm, "install", "--no-audit", "--no-fund"],
+                           FRONTEND, "installing dependencies (npm install)")
+        if not ok:
+            UI_PROBLEM = err
+            return UI_PROBLEM
+
+    ok, err = _run([npm, "run", "build"], FRONTEND, "compiling")
+    if not ok:
+        UI_PROBLEM = err
+        return UI_PROBLEM
+
+    if not INDEX.exists():
+        UI_PROBLEM = "the build reported success but wrote no index.html"
+        return UI_PROBLEM
+
+    print("  UI ready", flush=True)
+    return ""
+
 
 # ---------------------------------------------------------------------------
 # RELOAD
@@ -61,9 +266,9 @@ _RESTART = threading.Event()
 
 
 def _watched() -> list[Path]:
-    """This module, the engine modules it serves, and the page."""
+    """This module, the engine modules it serves, and the built page."""
     out = [Path(__file__).resolve(), INDEX]
-    for mod in (graph, brain_query):
+    for mod in (graph, brain_query, openapi):
         f = getattr(mod, "__file__", None)
         if f:
             out.append(Path(f).resolve())
@@ -280,14 +485,99 @@ def settings_payload() -> dict:
             "now": datetime.now(brain_query._local_tz(None)).isoformat(
                 timespec="seconds"),
             "realm": graph.DEFAULT_REALM,
+            # Who "me" is: what --mine filters on and what an unassigned task
+            # falls back to. Hardcoded until this page could set it.
+            "owner": graph.owner(),
+            "owner_source": ("env" if "owner" in env else
+                             "settings" if stored.get("owner") else "default"),
             # what a CLI read (`brain_query.py`) uses when given no --backend.
             # This page and the map always ask for "auto", so they are unaffected.
             "backend": brain_query.default_backend(),
             "backends": list(graph.BACKENDS),
+            # The switches. Each reports its source too, because the env var is
+            # the NEGATIVE ($MEMORY_LEDGER_NO_AUTOSYNC) and a page that shows
+            # only "off" leaves the user editing a file that cannot win.
+            "autosync": graph.flag("autosync"),
+            "autosync_source": graph.flag_source("autosync"),
+            "consolidate": graph.flag("consolidate"),
+            "consolidate_source": graph.flag_source("consolidate"),
+            "ui_sync": graph.flag("ui_sync"),
+            "ui_sync_source": graph.flag_source("ui_sync"),
             "map_poll_seconds": _int_setting("map_poll_seconds", 2),
             "dash_refresh_seconds": _int_setting("dash_refresh_seconds", 120),
         },
+        # Capture's own switch is not a setting — it is a marker file plus an env
+        # var (§2d), and disable/enable write it. Reported here so one page can
+        # answer "is it capturing?" without a second round trip.
+        "capture": capture_payload(),
     }
+
+
+def capture_payload() -> dict:
+    """Whether the ledger is recording, and which switch decided that.
+
+    Two switches, and they are not equal: $MEMORY_LEDGER_OFF is per-process and
+    OUTRANKS the marker, so a UI that offers to "turn it back on" while the
+    server's own shell exports that var would be promising something it cannot
+    deliver. Hence `env_off` — the page greys the toggle out and says why."""
+    marker = graph.home_dir() / graph.DISABLE_MARKER
+    env_off = graph._env("OFF").strip().lower() in graph._OFF_TRUTHY
+    return {
+        "enabled": graph.enabled(),
+        "marker": str(marker),
+        "marker_present": marker.exists(),
+        "env_off": env_off,
+        "source": "env" if env_off else "marker" if marker.exists() else "on",
+    }
+
+
+def doctor_payload() -> dict:
+    """The health check, as JSON, for the Settings page.
+
+    Imported and called rather than shelled out: `doctor` is written to never
+    traceback and to report each section's own failure, so there is nothing a
+    subprocess boundary would protect the server from — and in-process it cannot
+    pick up a different $MEMORY_LEDGER_HOME than the one this server is serving.
+    """
+    try:
+        import doctor
+        report = doctor.run()
+    except Exception as e:                  # a health check that 500s is useless
+        return {"ok": False,
+                "error": f"doctor failed: {type(e).__name__}: {e}"}
+    # doctor's own `ok` means HEALTHY; the envelope's means the call worked.
+    # Collapsing them would make an unhealthy brain look like a failed request,
+    # and the page would show a fetch error instead of the diagnosis.
+    return {**report, "ok": True, "healthy": bool(report.get("ok"))}
+
+
+def consolidate_preview(keep_days: str = "") -> dict:
+    """What `maintain` would do, without doing any of it.
+
+    The page shows this BEFORE offering the button, because consolidation
+    rewrites props on every capture it touches and "non-destructive" is not the
+    same promise as "you will like the result"."""
+    try:
+        keep = max(0, min(365, int(keep_days))) if str(keep_days).strip() else 2
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "keep_days must be a whole number"}
+    con = graph.connect()
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=keep)).date().isoformat()
+        days = [r["d"] for r in con.execute(
+            "SELECT DISTINCT substr(created,1,10) d FROM nodes WHERE type='capture'"
+            " AND substr(created,1,10)<=? ORDER BY d", (cutoff,)).fetchall()]
+        plan = graph.consolidation_plan(con, days)
+        loose = con.execute(
+            "SELECT COUNT(*) n FROM nodes WHERE type='capture'"
+            " AND substr(created,1,10)<=?"
+            " AND json_extract(props,'$.consolidated_into') IS NULL",
+            (cutoff,)).fetchone()["n"]
+        return {"ok": True, "dry_run": True, "keep_days": keep, "cutoff": cutoff,
+                "still_loose": loose, "backup_keep_days": graph.BACKUP_KEEP_DAYS,
+                **plan}
+    finally:
+        con.close()
 
 
 def status_payload() -> dict:
@@ -366,9 +656,12 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         try:
-            if path in ("/", "/index.html"):
-                self._send(200, INDEX.read_text(encoding="utf-8"),
-                           "text/html; charset=utf-8")
+            if path == "/api/openapi.json":
+                # Built by the running process, so what a reader browses is what
+                # this server actually answers — not a file that went stale.
+                self._send(200, json.dumps(openapi.build()), "application/json")
+            elif path == "/api/docs":
+                self._send(200, openapi.SWAGGER_HTML, "text/html; charset=utf-8")
             elif path == "/api/graph":
                 self._send(200, json.dumps(graph_payload()),
                            "application/json")
@@ -394,6 +687,26 @@ class Handler(BaseHTTPRequestHandler):
                      "aliases": graph.person_aliases(d)[1:],
                      "realm": d.get("realm", "")}
                     for d in sorted(people, key=lambda x: x["title"].lower())]}),
+                    "application/json")
+            elif path == "/api/capture":  # is the ledger recording? (§2d)
+                self._send(200, json.dumps(capture_payload()), "application/json")
+            elif path == "/api/ui-prefs":  # the browser's own state, if synced
+                self._send(200, json.dumps({
+                    "ok": True, "synced": graph.flag("ui_sync"),
+                    "path": str(graph.ui_prefs_path()),
+                    "prefs": graph.ui_prefs()}), "application/json")
+            elif path == "/api/backups":  # the snapshots consolidation leaves
+                self._send(200, json.dumps({
+                    "ok": True, "dir": str(graph.backups_dir()),
+                    "keep_days": graph.BACKUP_KEEP_DAYS,
+                    "backups": graph.list_backups()}), "application/json")
+            elif path == "/api/doctor":   # the health check, in the browser
+                self._send(200, json.dumps(doctor_payload()), "application/json")
+            elif path == "/api/consolidate-preview":
+                # A GET because it is a read: it reports what a run WOULD do and
+                # writes nothing, so it is safe to reload, link and cache-bust.
+                self._send(200, json.dumps(consolidate_preview(
+                    (parse_qs(parsed.query).get("keep_days") or [""])[0])),
                     "application/json")
             elif path == "/api/person-duplicates":   # the review list, read-only
                 self._send(200, json.dumps(
@@ -481,10 +794,41 @@ class Handler(BaseHTTPRequestHandler):
             elif path.startswith("/api/"):   # dashboard views: /api/<view>?params
                 self._dashboard(path[len("/api/"):], parse_qs(parsed.query))
             else:
-                self._send(404, json.dumps({"error": "not found"}),
-                           "application/json")
+                # Everything that is not /api/ is the single-page app. An unknown
+                # path under /api/ is still a 404 — a client asking for an
+                # endpoint that does not exist must hear so, not be handed HTML.
+                self._static(path)
         except Exception as e:  # keep the server alive, report to client
             self._fail(e)
+
+    def _static(self, path):
+        """Serve the built SPA, falling back to its index for any unknown path.
+
+        The app routes on the hash, so this fallback is belt and braces rather
+        than load-bearing: it means a stray path still lands on the app instead
+        of a bare 404.
+        """
+        if not INDEX.exists():
+            reason = UI_PROBLEM or "frontend/dist/index.html is not here"
+            self._send(503, MISSING_UI.format(reason=reason),
+                       "text/html; charset=utf-8")
+            return
+
+        rel = path.lstrip("/")
+        target = INDEX
+        if rel:
+            # resolve() then containment-check, so `../../etc/passwd` and any
+            # symlink pointing out of the build cannot be read through this.
+            candidate = (DIST / rel).resolve()
+            try:
+                inside = candidate.is_relative_to(DIST.resolve())
+            except AttributeError:      # Python < 3.9
+                inside = str(candidate).startswith(str(DIST.resolve()))
+            if inside and candidate.is_file():
+                target = candidate
+
+        ctype = CONTENT_TYPES.get(target.suffix, "application/octet-stream")
+        self._send(200, target.read_bytes(), ctype)
 
     # the off-token dashboard views, reusing the exact CLI query layer
     def _dashboard(self, view, qs):
@@ -570,6 +914,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/set-assignee": self._set_assignee,
             "/api/assign": self._assign,
             "/api/merge-person": self._merge_person,
+            "/api/add-alias": self._add_alias,
             "/api/update-node": self._update_node,
             "/api/link": self._link,
             "/api/unlink": self._unlink,
@@ -578,6 +923,10 @@ class Handler(BaseHTTPRequestHandler):
             "/api/neo4j-test": self._test_neo4j,
             "/api/flush": self._flush,
             "/api/prune": self._prune,
+            "/api/capture": self._set_capture,
+            "/api/consolidate": self._consolidate,
+            "/api/ui-prefs": self._save_ui_prefs,
+            "/api/backup": self._backup,
             "/api/create-rule": self._create_rule,
             "/api/create-skill": self._create_skill,
             "/api/export-skills": self._export_skills,
@@ -766,6 +1115,18 @@ class Handler(BaseHTTPRequestHandler):
         # dashboard's chips and the "mine" filter keep working unchanged
         return graph.api_update_node(con, nid,
                                      props_patch={"assignee": person["title"]})
+
+    def _add_alias(self, data):
+        """Pin another spelling onto a person.
+
+        The engine's own helper, so the dedupe rules are the ones that already
+        decide whether two names are one human — this does not get to have its
+        own opinion about what counts as a duplicate spelling."""
+        pid = self._str(data, "id", 200)
+        alias = self._str(data, "alias", 120)
+        if not pid or not alias:
+            return {"ok": False, "error": "id and alias are both required"}
+        return graph.api_add_alias(graph.connect(), pid, alias)
 
     def _merge_person(self, data):
         return graph.api_merge_person(graph.connect(),
@@ -1047,6 +1408,22 @@ class Handler(BaseHTTPRequestHandler):
                 return {"ok": False,
                         "error": "realm must be lowercase letters, digits and dashes"}
             patch["realm"] = realm
+        if "owner" in data:
+            # Deliberately permissive: a person's name is a person's name, and
+            # the only thing the engine does with it is compare it to whatever
+            # is written in an assignee field. Validating the SHAPE of a human
+            # name is how you refuse to store someone's actual name.
+            patch["owner"] = self._str(data, "owner", 80)
+        for key in graph.BOOL_SETTINGS:
+            if key not in data:
+                continue
+            raw = data.get(key)
+            if raw in (None, ""):
+                patch[key] = None          # back to the default
+            elif isinstance(raw, bool):
+                patch[key] = raw
+            else:
+                return {"ok": False, "error": f"{key} must be true or false"}
         if "backend" in data:
             be = self._str(data, "backend", 10).lower()
             if be and be not in graph.BACKENDS:
@@ -1131,15 +1508,88 @@ class Handler(BaseHTTPRequestHandler):
         res["was_pending"] = pending
         return res
 
+    def _set_capture(self, data):
+        """Turn capture on or off machine-wide, by writing the same `.disabled`
+        marker `graph.py disable` writes (§2d). One switch, two front doors.
+
+        Refused while $MEMORY_LEDGER_OFF is set: that env var OUTRANKS the
+        marker, so removing the file would leave the page claiming capture is
+        back on while every hook in that shell still stands down."""
+        want = data.get("enabled")
+        if not isinstance(want, bool):
+            return {"ok": False, "error": "enabled must be true or false"}
+        state = capture_payload()
+        if state["env_off"] and want:
+            return {"ok": False,
+                    "error": "$MEMORY_LEDGER_OFF is set in the server's "
+                             "environment and outranks this switch — unset it "
+                             "there (rc file, cron, launchd) and restart"}
+        marker = graph.home_dir() / graph.DISABLE_MARKER
+        try:
+            if want:
+                if marker.exists():
+                    marker.unlink()
+            else:
+                marker.parent.mkdir(parents=True, exist_ok=True)
+                marker.touch(exist_ok=True)
+        except OSError as e:
+            return {"ok": False, "error": f"could not write {marker}: {e}"}
+        return {"ok": True, "capture": capture_payload()}
+
+    def _save_ui_prefs(self, data):
+        """Store the browser's own view state in the brain (opt-in, `ui_sync`).
+
+        Accepted even when ui_sync is off, because the toggle that turns syncing
+        ON is itself a preference: refusing the write until the setting is saved
+        would make enabling it a two-step dance with a lost first step."""
+        prefs = data.get("prefs")
+        res = graph.save_ui_prefs(prefs if isinstance(prefs, dict) else None)
+        if not res.get("ok"):
+            return res
+        return {**res, "synced": graph.flag("ui_sync")}
+
+    def _backup(self, data):
+        """Take a snapshot now, and expire the ones past their window."""
+        res = graph.backup_db(self._str(data, "label", 40) or "manual")
+        if not res.get("ok"):
+            return res
+        return {"ok": True, "created": res, "removed": graph.prune_backups(),
+                "backups": graph.list_backups()}
+
+    def _consolidate(self, data):
+        """Fold closed days' captures into per-day digests.
+
+        This is `prune`'s engine, reached directly so the page can run it on the
+        keep_days the user previewed. `confirm: true` is required for the same
+        reason it is on prune — see there."""
+        return self._maintain(data, label="consolidate")
+
     def _prune(self, data):
         """Run `graph.py maintain` — consolidate old captures into per-day
         digests so reads stay small. NON-DESTRUCTIVE: nothing is deleted, the
         digest just stands in for the raw turns (CONVENTIONS §2a).
 
+        Never runs on its own and never on a bare POST: it rewrites props on
+        every capture it touches, and "non-destructive" is a promise about the
+        data, not about whether you wanted it. The page previews first
+        (`GET /api/consolidate-preview`) and sends `confirm: true` only after a
+        human has read what it would do."""
+        return self._maintain(data, label="maintain")
+
+    def _maintain(self, data, label="maintain"):
+        """The shared body of prune and consolidate.
+
         Shelled out rather than called in-process because cmd_maintain reports
         by printing JSON, and this way a long run can't wedge the server's own
         connection."""
         import subprocess
+        if data.get("confirm") is not True:
+            return {"ok": False,
+                    "error": "refused: this rewrites every capture it "
+                             "consolidates. Preview it first "
+                             "(GET /api/consolidate-preview), then send "
+                             "confirm: true.",
+                    "needs_confirmation": True}
         keep = data.get("keep_days", 2)
         try:
             keep = max(0, min(365, int(keep)))
@@ -1175,6 +1625,11 @@ def main():
                          "binding --host 0.0.0.0, since the write API is "
                          "unauthenticated and anyone on the network could edit "
                          "your brain.")
+    ap.add_argument("--no-build", action="store_true",
+                    help="never run npm. The committed bundle is served as it "
+                         "is, even if your own source is newer than it.")
+    ap.add_argument("--rebuild", action="store_true",
+                    help="rebuild the UI even when it looks current")
     args = ap.parse_args()
 
     global WRITABLE
@@ -1187,13 +1642,25 @@ def main():
             pass
 
     graph.connect().close()  # ensure the brain exists
+
+    # Refresh BEFORE binding, so the browser opens on the page it will keep.
+    # It never aborts the start, and it never DELETES the bundle to force the
+    # issue: frontend/dist is committed, and on a machine that cannot rebuild,
+    # removing it would trade a possibly-stale page for no page at all.
+    ensure_ui(auto=not args.no_build, force=args.rebuild)
+
     url = f"http://{args.host}:{args.port}/"
     httpd = QuietServer((args.host, args.port), Handler)
     # a restart re-execs with the same argv; don't open a new tab each time
     respawned = os.environ.pop("SECOND_BRAIN_VIZ_RESPAWN", "") == "1"
     if not respawned:
-        print(f"memory-ledger map → {url}")
+        print(f"memory-ledger → {url}")
         print(f"  brain: {graph.db_path()}")
+        print(f"  api:   {url}api/docs")
+        if UI_PROBLEM and INDEX.exists():
+            print(f"  note:  serving the committed UI; it may be stale ({UI_PROBLEM})")
+        elif UI_PROBLEM:
+            print(f"  note:  the UI is unavailable ({UI_PROBLEM}); the API is not")
         print("  Ctrl-C to stop.")
     else:
         print(f"  reloaded → {url}")

@@ -258,15 +258,24 @@ python3 scripts/graph.py tree --session <sid>  # the agent tree, with its ideas
 python3 scripts/graph.py recheck               # what became possible again (§2k)
 ```
 
-### Map + dashboard (optional UI)
+### The brain UI (optional)
 
 ```
-python3 viz/serve.py                 # http://127.0.0.1:8770
-python3 viz/serve.py --no-write      # read-only
+python3 scripts/serve.py                 # http://127.0.0.1:8770
+python3 scripts/serve.py --no-write      # read-only
 ```
-One page, three sections behind the hamburger menu (`m`): **Map** (live graph),
-**Dashboard** (the query views), and **Settings** (timezone, default realm,
-database connection, prune). The dashboard also **edits** the brain — create tasks
+**No install step.** It is a React app, but the compiled bundle ships with the
+plugin, so this works on a machine with no node and nothing to `npm install`.
+(Change the UI's source with node installed and the server rebuilds the bundle
+on the next start, so you never serve a page older than your edit.)
+
+Five sections behind the hamburger menu (`m`), each with its own URL: **Map**
+(live graph), **Dashboard** (the query views), **People** (person nodes, what each
+connects to, and merging the ones that are the same human), **Skills** (the two
+contract trees and the rule catalogue), and **Settings** (your name, timezone,
+default realm, the capture switch, database connection, consolidation and the
+health check). The API documents itself at
+[`/api/docs`](http://127.0.0.1:8770/api/docs). The dashboard also **edits** the brain — create tasks
 with auto-recognised links, complete them, change status/assignee/due, rename, and
 add/remove relations — all token-free (no model). Set the timezone once in
 Settings rather than per command. Add `--host 0.0.0.0` to reach it from your phone
@@ -286,8 +295,9 @@ It reports, in plain language:
 - **Status** — enabled or disabled, and if disabled, which switch did it (the
   `.disabled` marker or the `MEMORY_LEDGER_OFF`/`SECOND_BRAIN_OFF` env var).
 - **Paths** — the resolved home dir and DB file, and whether each exists.
-- **Config** — the effective timezone and realm, and where each came from
-  (env var, `settings.json`, or a built-in default).
+- **Config** — the effective timezone, realm and owner, plus the `autosync` and
+  `consolidate` switches, and where each came from (env var, `settings.json`, or
+  a built-in default).
 - **Content** — total node count, a breakdown by type, open-loop count, and
   how stale the newest capture is (a warning if nothing's landed in the last
   2 days, or ever).

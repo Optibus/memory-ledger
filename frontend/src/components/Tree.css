@@ -1,0 +1,7 @@
+.ml-tree { list-style: none; margin: 0; padding: 0; }
+.ml-tree .ml-tree {
+  margin-left: var(--space-5);
+  padding-left: var(--space-4);
+  border-left: 1px solid var(--border);
+}
+.ml-tree__item { margin: 0; }

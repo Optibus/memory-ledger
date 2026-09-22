@@ -1,0 +1,17 @@
+.ml-rulerow { border-top: 1px solid var(--border); }
+.ml-rulerow:first-child { border-top: 0; }
+.ml-rulerow__head { display: flex; align-items: center; gap: var(--space-2); }
+.ml-rulerow__btn {
+  display: flex; align-items: center; gap: var(--space-2); flex: 1; text-align: left;
+  background: none; border: 0; color: var(--fg); font: inherit;
+  padding: var(--space-2) 0; cursor: pointer;
+}
+.ml-rulerow__btn:hover .ml-rulerow__title { color: var(--accent); }
+.ml-rulerow__title { font-size: 12.5px; display: flex; flex-direction: column; gap: 1px; }
+.ml-rulerow__id { color: var(--muted); font-size: 10.5px; font-family: var(--font-mono); }
+.ml-rulerow__body {
+  margin: 0 0 var(--space-3); padding: var(--space-3); background: var(--bg-sunken);
+  border-radius: var(--radius); white-space: pre-wrap; color: var(--fg-dim);
+  font-size: 12px; max-height: 340px; overflow: auto; font-family: inherit;
+}
+.ml-hl { background: #58a6ff40; color: var(--fg); border-radius: 2px; }

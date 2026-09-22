@@ -105,6 +105,17 @@ def check_config():
     return {"ok": True,
             "tz": tz, "tz_source": _source_of("TZ", s),
             "realm": realm, "realm_source": _source_of("REALM", s),
+            # Who "me" is. A brain answering --mine with someone else's name is
+            # not broken in any way a path check would notice, which is exactly
+            # why it belongs in the report.
+            "owner": G.owner(), "owner_source": _source_of("OWNER", s),
+            # The switches. `autosync` off means writes queue for the mirror and
+            # never push — silent, correct, and the first thing to check when the
+            # master looks stale.
+            "autosync": G.flag("autosync"),
+            "autosync_source": G.flag_source("autosync"),
+            "consolidate": G.flag("consolidate"),
+            "consolidate_source": G.flag_source("consolidate"),
             "settings_path": str(G.settings_path()),
             "settings_readable": G.settings_path().exists() and bool(s) or not G.settings_path().exists()}
 
@@ -284,6 +295,10 @@ def render_human(report: dict) -> str:
     else:
         lines.append(f"  tz:    {c.get('tz')}  (from {c.get('tz_source')})")
         lines.append(f"  realm: {c.get('realm')}  (from {c.get('realm_source')})")
+        lines.append(f"  owner: {c.get('owner')}  (from {c.get('owner_source')})")
+        for key in ("autosync", "consolidate"):
+            state = "on" if c.get(key) else "off"
+            lines.append(f"  {key + ':':13}{state}  (from {c.get(key + '_source')})")
 
     ct = report["content"]
     lines.append("")

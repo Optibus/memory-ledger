@@ -1,6 +1,6 @@
 ---
 name: visualize
-description: Open the live brain UI in the browser — one local server, four sections behind a hamburger menu: a force-directed Map of every node/edge/relation (zoom/pan, search, multi-select filter dropdowns, click-to-inspect), a token-free Dashboard of the date views (agenda/open/today/tomorrow/week/closed/range) that also EDITS the brain (create tasks with auto-recognised links, complete, status/assignee/due, rename, manage relations), Skills (the two contract trees and the rule catalogue, where new skills and rules are AUTHORED and where markdown export/ingest moves a brain between machines), and Settings (timezone, default realm, database connection, prune). Use for "show me the graph", "visualize my brain/memory", "open the map/dashboard", "see the connections", "what's due", "add a task in the UI", "create a skill/rule in the UI", "sync my skills to another machine", "let me edit it myself", "change the timezone", "run prune". Auto-refreshes as the graph changes.
+description: Open the live brain UI in the browser — one local server, five sections behind a hamburger menu: a force-directed Map of every node/edge/relation (zoom/pan, search, multi-select filter dropdowns, click-to-inspect), a token-free Dashboard of the date views (agenda/open/today/tomorrow/week/closed/range) that also EDITS the brain (create tasks with auto-recognised links, complete, status/assignee/due, rename, manage relations), People (every person node, what each connects to, and merging the ones that are the same human — no model call), Skills (the two contract trees and the rule catalogue, where new skills and rules are AUTHORED and where markdown export/ingest moves a brain between machines), and Settings (your name, timezone, default realm, capture on/off, the mirror and consolidation switches, database connection, doctor, and consolidation with a preview and a backup). Use for "show me the graph", "visualize my brain/memory", "open the map/dashboard", "see the connections", "what's due", "add a task in the UI", "create a skill/rule in the UI", "sync my skills to another machine", "let me edit it myself", "change the timezone", "set my name", "merge duplicate people", "is it capturing", "run doctor", "run prune". Auto-refreshes as the graph changes.
 ---
 
 # visualize
@@ -20,14 +20,18 @@ skills to my other machine", "change the timezone", "run prune".
 - **The server**, which is dependency-free and local:
 
   ```
-  python3 "$CLAUDE_PLUGIN_ROOT/viz/serve.py" [--port 8770] [--no-open]
+  python3 "$CLAUDE_PLUGIN_ROOT/scripts/serve.py" [--port 8770] [--no-open]
   ```
 
   It prints a URL, defaulting to `http://127.0.0.1:8770/`, and runs until Ctrl-C.
+  **Nothing needs installing.** The UI is a React app whose build ships with the
+  plugin, so this runs on a machine with no node.
   Because it is long-running, start it in the background and give the person the
   URL. It binds to 127.0.0.1 only unless `--host 0.0.0.0` is passed.
-- **Four sections behind the hamburger menu** (`m` toggles it), reading the same
-  brain file and a configured graph mirror when one is reachable:
+- **Five sections behind the hamburger menu** (`m` toggles it), each with its own
+  URL (`/map`, `/dashboard`, `/people`, `/skills`, `/settings`) so a section can be linked
+  to directly, reading the same brain file and a configured graph mirror when one
+  is reachable:
   - **Map.** Zoom, pan, pin a node by dragging, reset with a double-click. Search
     highlights matches and dims the rest. Four multi-select filters with live
     counts: node types, realms, kinds from `props.kind`, and display toggles.
@@ -49,9 +53,20 @@ skills to my other machine", "change the timezone", "run prune".
     check lives, in `SKILL.md` or with `add-skill`. Two buttons export the
     learned tree to markdown and read a folder back, which is how a brain moves
     between machines with no master to mirror through.
-  - **Settings.** Timezone, default realm, map and dashboard refresh intervals,
-    the database connection including the neo4j master with Test and Flush
-    queued, and Prune.
+  - **People.** Every person node as a card that expands to everything one hop
+    away, grouped by relation and fetched only when opened. Above them, the
+    groups that look like one human, matched by name across every alias with no
+    model call. Merging moves the edges onto the node you keep, pins the other
+    spelling as an alias, and leaves the duplicate pointing at its replacement,
+    so an old capture that said "Isa" still resolves. The engine picks the most
+    connected node as canonical; a radio overrules it.
+  - **Settings.** Your name (who `--mine` means), timezone, default realm, read
+    backend, map and dashboard refresh intervals, and three switches: mirror
+    autosync, daily consolidation, and whether this browser's view preferences
+    are kept in the brain. Plus the capture on/off switch, the database
+    connection including the neo4j master with Test and Flush queued, `doctor` on
+    demand, and consolidation: preview what it would change, confirm, and it
+    snapshots the graph first (kept 5 days).
 - **The write path.** New task with title, due, assignee, priority, type and
   notes, where the server proposes relations from the wording as they type
   (`blocked by PR #7366` becomes `blocked-by`, `part of ...` becomes `part-of`,
@@ -77,7 +92,7 @@ Accountable for: `rule_s2g_the-web-ui-is-a-full-write-surface-the-b`,
 See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTIONS §5a).
 
 - **Requires:** none.
-- **Reads:** every node type in the graph, through `viz/serve.py`.
+- **Reads:** every node type in the graph, through `scripts/serve.py`.
 - **Writes:** none by this skill. The person writes, through the UI.
 
 ## Deliverables
@@ -94,6 +109,13 @@ See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTION
 - **A read-only server is diagnosed, not worked around.** If it was started with
   `--no-write`, the editing controls are hidden and writes return 403. Say so and
   say to restart without the flag.
+- **A blank page is diagnosed as a missing bundle, not a broken server.**
+  `frontend/dist` ships in git, so a 503 on the page while `/api/docs` answers
+  means the bundle was deleted from the checkout: `git checkout -- frontend/dist`
+  restores it, and `npm run build` in `frontend/` rebuilds it.
+- **A request about the API itself is answered with `/api/docs`**, the Swagger UI
+  the server builds from its own routes. Describing the endpoints from memory is
+  how a stale answer gets into someone's client.
 
 ## Judged against
 

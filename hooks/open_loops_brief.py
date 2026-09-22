@@ -78,13 +78,15 @@ def consolidate_daily():
     captures stay intact while the day is still being lived. Detached and
     fire-and-forget: consolidation must never delay a session start, and it is
     non-destructive (originals are kept and linked), so a missed or interrupted
-    run costs nothing — the next session picks it up. Opt out with
-    $MEMORY_LEDGER_NO_CONSOLIDATE (legacy $SECOND_BRAIN_NO_CONSOLIDATE also works).
+    run costs nothing — the next session picks it up. Opt out in the Settings
+    page, or with $MEMORY_LEDGER_NO_CONSOLIDATE (legacy
+    $SECOND_BRAIN_NO_CONSOLIDATE also works).
     """
-    # Via the engine's _env() rather than os.environ, so this honours BOTH
-    # prefixes like every other config lookup. Reading os.environ directly here
-    # is how an opt-out silently stops working for anyone using the new name.
-    if _switch._env("NO_CONSOLIDATE"):
+    # Via _switch.flag() rather than os.environ, so this honours both env
+    # prefixes AND the `consolidate` setting the web UI writes. Reading the
+    # environment directly here is how an opt-out silently stops working for
+    # anyone who set it somewhere other than their own shell.
+    if not _switch.flag("consolidate"):
         return
     stamp = os.path.join(home, ".last_consolidate")
     today = datetime.date.today().isoformat()
@@ -98,7 +100,11 @@ def consolidate_daily():
         with open(stamp, "w") as f:
             f.write(today)                  # write first: never loop on failure
         subprocess.Popen(
-            [sys.executable, graph, "consolidate", "--older-than", "1"],
+            # --no-backup: this fires unattended every morning, and a snapshot
+            # per session start would fill the disk with copies of a run nobody
+            # asked for. The snapshot is for the runs a person triggers.
+            [sys.executable, graph, "consolidate", "--older-than", "1",
+             "--no-backup"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL, start_new_session=True)
     except Exception:

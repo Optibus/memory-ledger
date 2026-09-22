@@ -1,0 +1,8 @@
+.ml-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  backdrop-filter: blur(8px);
+  box-shadow: var(--shadow-panel);
+}
+.ml-panel--flat { backdrop-filter: none; box-shadow: none; background: var(--panel-solid); }

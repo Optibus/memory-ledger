@@ -1,0 +1,8 @@
+.ml-section { margin: 0 auto; padding: 64px var(--space-5) 60px; }
+.ml-section__bar { display: flex; align-items: center; gap: var(--space-3); }
+.ml-section__title { margin: 0 0 4px; font-size: 18px; }
+.ml-section__actions { margin-left: auto; }
+.ml-section__lead {
+  color: var(--muted); margin: 0 0 18px; font-size: 12.5px; line-height: 1.5;
+}
+.ml-section__lead code { color: var(--fg); }

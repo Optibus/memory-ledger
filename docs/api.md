@@ -1,14 +1,48 @@
 # HTTP API
 
-`viz/serve.py` is a dependency-free stdlib HTTP server that serves the map +
-dashboard UI and a small JSON API over the same graph. It calls **no model** — it
-is the graph engine behind a socket, so everything it does is token-free.
+`scripts/serve.py` is a dependency-free stdlib HTTP server. It serves two things
+over one port: this JSON API, and the React single-page app built from
+`frontend/`. It calls **no model** — it is the graph engine behind a socket, so
+everything it does is token-free.
+
+Neither half needs a toolchain to run: `frontend/dist` is committed, so a machine
+with no `npm` serves the same page as any other. When the source IS newer than
+the bundle and npm is there, the server rebuilds it before binding the port;
+`--no-build` skips that and `--rebuild` forces it.
 
 ```bash
-python3 viz/serve.py                    # http://127.0.0.1:8770
-python3 viz/serve.py --port 9000 --host 127.0.0.1
-python3 viz/serve.py --no-write         # read-only
-python3 viz/serve.py --no-open          # don't open a browser
+python3 scripts/serve.py                    # http://127.0.0.1:8770
+python3 scripts/serve.py --port 9000 --host 127.0.0.1
+python3 scripts/serve.py --no-write         # read-only
+python3 scripts/serve.py --no-open          # don't open a browser
+```
+
+## The interactive reference
+
+**This file is the prose; [`/api/docs`](http://127.0.0.1:8770/api/docs) is the
+reference.** Start the server and open it: Swagger UI over an OpenAPI 3.1
+document with every endpoint, every parameter, every response shape, and a
+Try-it-out button that hits your own brain.
+
+| Where | What |
+|---|---|
+| `GET /api/docs` | Swagger UI. The viewer loads from a CDN; the document does not. |
+| `GET /api/openapi.json` | The document itself, built by the running process. |
+| `docs/openapi.json` | The same document on disk, for reading without a server. |
+| `scripts/openapi.py` | Where it is written. Run it with `--out` to regenerate the file. |
+
+The document is **built by the process that answers the requests**, so what you
+browse always describes the server you are talking to. And it cannot drift from
+the router: `tests/test_openapi.py` reads serve.py's actual `do_GET` chain and
+`do_POST` dispatch table out of the source and fails if either side holds an
+endpoint the other has never heard of. Documentation nobody checks is a rumour.
+
+Adding an endpoint therefore means adding it in two places, and CI tells you
+when you have done one of them:
+
+```bash
+python3 tests/test_openapi.py                      # the drift guard
+python3 scripts/openapi.py --out docs/openapi.json # refresh the checked-in copy
 ```
 
 ## Security — read this before changing `--host`
@@ -58,6 +92,13 @@ disabled"}`.
 | `/api/settings` | stored preferences, plus what is actually `effective` and which keys the environment has overridden |
 | `/api/timezones` | every IANA zone name, for the timezone picker |
 | `/api/status` | where the data lives: db path, home, node/edge counts, queued writes, loose captures, and the neo4j master's reachability |
+| `/api/people` | every person node with the spellings it answers to, for the People section and the assignee picker |
+| `/api/person-duplicates` | groups of person nodes that look like one human, with the canonical pick. Name matching over every alias — **no model call** |
+| `/api/capture` | whether the ledger is recording, and which switch decided it (`env_off` matters: `$MEMORY_LEDGER_OFF` outranks the marker) |
+| `/api/doctor` | the health check as JSON — the same report `scripts/doctor.py` prints |
+| `/api/consolidate-preview?keep_days=N` | what a consolidation run **would** change. A read: it writes nothing |
+| `/api/backups` | the snapshots consolidation leaves behind, each with when it expires |
+| `/api/ui-prefs` | the browser's stored view state, and whether syncing it is on |
 | `/api/<view>?<params>` | any `brain_query.py` view: `agenda`, `open`, `today`, `tomorrow`, `week`, `closed`, `range` |
 
 `/api/meta` exists so the UI never hardcodes vocabulary. Two of those sets are
@@ -114,11 +155,16 @@ since the dashboard lists tasks and a kind with none would be dead UI.
 | `/api/update-node` | `{id, title?, body?, props?}` | empty `title` is rejected |
 | `/api/link` | `{src, dst, rel}` | |
 | `/api/unlink` | `{src, dst, rel}` | |
-| `/api/settings` | `{tz?, realm?, map_poll_seconds?, dash_refresh_seconds?}` | writes `<home>/settings.json`; only these keys, each validated. `""` **removes** a key (back to env/system default) |
+| `/api/settings` | `{tz?, realm?, owner?, backend?, autosync?, consolidate?, ui_sync?, map_poll_seconds?, dash_refresh_seconds?}` | writes `<home>/settings.json`; only these keys, each validated. `""` **removes** a key (back to env/system default). A boolean key takes `true`/`false`; `false` is a value, not an absence |
+| `/api/capture` | `{enabled}` | writes (or removes) `<home>/.disabled` — the same switch `graph.py disable` throws. **Refused** while `$MEMORY_LEDGER_OFF` is set in the server's environment, because that outranks the marker |
+| `/api/add-alias` | `{id, alias}` | pins another spelling onto a person, through the engine's `api_add_alias`. A spelling they already answer to is a no-op |
+| `/api/ui-prefs` | `{prefs}` | **replaces** `<home>/ui_prefs.json` (≤64KB). The browser holds the whole blob; merging would resurrect a preference just cleared |
+| `/api/backup` | `{label?}` | snapshots the graph now and expires the ones past their window |
 | `/api/neo4j-config` | `{url, db?, user?, password?}` | writes `<home>/neo4j.json` (mode 600) and reports whether the master answered. Blank `password` keeps the stored one; empty `url` deletes the file (sqlite-only) |
 | `/api/neo4j-test` | `{}` | runs `RETURN 1` against the configured master |
 | `/api/flush` | `{}` | drains the outbox to the master |
-| `/api/prune` | `{keep_days?}` | runs `graph.py maintain` (default `2`). Non-destructive — consolidates, never deletes |
+| `/api/prune` | `{confirm, keep_days?}` | runs `graph.py maintain` (default `2`). Non-destructive — consolidates, never deletes. **Refused without `confirm: true`**: preview with `GET /api/consolidate-preview` first. Takes a snapshot before the first write |
+| `/api/consolidate` | `{confirm, keep_days?}` | the same operation under the name the CLI uses, so a client can run the plan it previewed without renaming it |
 | `/api/create-rule` | `{title, scenario, source?, section?, realm?, non_negotiable?, overrides?, sections{}}` | authors a rule (§5b). **Refused** unless `sections.the_rule` and `sections.judged_against` are filled |
 | `/api/create-skill` | `{name, title, description?, realm?, sections{}, requires?, waits_for?, enriched_by?, reads?, writes?, rules[], new_rules[]}` | authors a skill (§5). **Refused** unless the six typed sections of §5.1 are filled. `rules[]` are existing rule ids, `new_rules[]` are whole rule bodies created first in the same call |
 | `/api/export-skills` | `{kind?, dir?}` | `graph.py export-skills` — a `SKILL.md` per skill plus every rule they honor |
@@ -186,12 +232,17 @@ reason, and the server stays up either way.
 
 Preferences live in **`<home>/settings.json`**, not in the browser. A timezone is
 only useful if the CLI, the hooks and any cron reading the same brain agree with
-the page that set it, and `localStorage` cannot do that. Four keys, all optional:
+the page that set it, and `localStorage` cannot do that. Nine keys, all optional:
 
 | Key | Effect |
 |---|---|
 | `tz` | IANA name deciding which calendar day a due date falls on (`today`, `week`, overdue) |
 | `realm` | default realm for new nodes when nothing else says |
+| `owner` | who "me" is — what `--mine` filters on, and what an unassigned task falls back to |
+| `backend` | which store a CLI read uses when given no `--backend` (`sqlite`, `neo4j`, `auto`) |
+| `autosync` | push each write to the neo4j mirror, instead of only queueing it (default on) |
+| `consolidate` | let the daily hook fold closed days into digests (default on) |
+| `ui_sync` | keep the browser's view preferences in the brain as well (default off) |
 | `map_poll_seconds` | how often the map re-reads `/api/graph` (default 2) |
 | `dash_refresh_seconds` | how often the dashboard re-runs its view (default 120) |
 
@@ -201,8 +252,50 @@ file > built-in default**. `GET /api/settings` returns the stored values, the
 over — the Settings page shows that as a warning rather than pretending the save
 took effect.
 
-`realm` is re-resolved in-process on save, so it applies to the next write instead
-of after a restart.
+**The three switches are overridden by a NEGATIVE env var** —
+`$MEMORY_LEDGER_NO_AUTOSYNC`, `$MEMORY_LEDGER_NO_CONSOLIDATE`,
+`$MEMORY_LEDGER_NO_UI_SYNC` — because that is the spelling every existing rc
+file, cron and CI job already uses. A truthy one forces the switch off and
+outranks the file, exactly as `$MEMORY_LEDGER_OFF` outranks the `.disabled`
+marker. `effective.<key>_source` says which of `env`, `settings` or `default`
+answered, so the page can grey out a box it cannot change and say why.
+
+`realm` and `owner` are re-resolved in-process on save, so they apply to the next
+write and the next view instead of after a restart.
+
+### What is NOT a setting
+
+Which dashboard view you had open, how far back *closed* looks, what the map has
+filtered out. These change nothing the engine computes, so forcing them through
+the same file would make every idle click a disk write on a value no other reader
+cares about. The browser owns them in `localStorage`, and mirroring them into
+`<home>/ui_prefs.json` is opt-in (`ui_sync`) for the one case `localStorage`
+cannot serve: the same person on a second machine. The blob is opaque to the
+server on purpose — its shape belongs to the frontend, so a new toggle needs no
+server change.
+
+Capture's own switch is not a setting either: it is the `<home>/.disabled` marker
+plus `$MEMORY_LEDGER_OFF` (§2d), read by `GET /api/capture` and written by
+`POST /api/capture`.
+
+### Upkeep, and undoing it
+
+Consolidation is non-destructive — every capture is kept and linked to the digest
+that stands in for it (§2a) — which makes it safe, not reversible. So:
+
+* `GET /api/consolidate-preview?keep_days=N` reports what a run **would** do and
+  writes nothing. The plan comes from `graph.consolidation_plan`, the same
+  function the run itself consolidates from, so the two cannot drift.
+* `POST /api/prune` (or `/api/consolidate`) is **refused without `confirm: true`**.
+* A run snapshots the whole graph to `<home>/backups/` first, kept
+  `graph.BACKUP_KEEP_DAYS` (5) days. Restore by copying one back over `graph.db`
+  with the server stopped. `GET /api/backups` lists them; `POST /api/backup`
+  takes one on demand. The daily session-start hook passes `--no-backup`, since a
+  snapshot every morning for a run nobody asked for is just disk.
+
+`GET /api/doctor` returns the same report `scripts/doctor.py` prints. Its `ok`
+means the call succeeded; `healthy` is the verdict — an unhealthy brain is a
+successful request, not a failed one.
 
 **The neo4j password is never sent to the browser.** `/api/status` reports
 `password_set` only, and an empty `password` on `POST /api/neo4j-config` means
@@ -215,21 +308,21 @@ of after a restart.
 The server restarts itself when its own code changes:
 
 ```bash
-python3 viz/serve.py                 # reload on, the default
-python3 viz/serve.py --no-reload     # off
+python3 scripts/serve.py                 # reload on, the default
+python3 scripts/serve.py --no-reload     # off
 ```
 
 This exists because of a failure that is genuinely hard to diagnose from the
-browser. `index.html` is read from disk on **every request**, but `serve.py`,
-`graph.py` and `brain_query.py` are imported **once at startup**. A server left
-running for hours therefore serves a CURRENT page against a STALE API: the page
-asks for a facet the process has never heard of, gets nothing back, and renders an
-empty filter that looks broken rather than out of date.
+browser. The built page is read from disk on **every request**, but `serve.py`,
+`graph.py`, `brain_query.py` and `openapi.py` are imported **once at startup**. A
+server left running for hours therefore serves a CURRENT page against a STALE
+API: the page asks for a facet the process has never heard of, gets nothing back,
+and renders an empty filter that looks broken rather than out of date.
 
 How it behaves:
 
-- Polls the mtimes of those four files once a second. No watch dependency for four
-  files.
+- Polls the mtimes of those five files once a second. No watch dependency for
+  five files.
 - On change it re-execs with the same argv, so the pid is unchanged and the port is
   rebound after the listening socket closes. It does not reopen the browser.
 - **It refuses to restart into code that does not compile.** A typo mid-edit prints
@@ -268,11 +361,19 @@ read in context instead of floating alone.
 
 One predicate feeds both, which is what keeps them honest:
 
-```js
-function filteredOut(n){ return directHidden(n) || cascadeOff.has(n.id); }
-function hidden(n){ return !shade && filteredOut(n); }
-function shaded(n){ return  shade && filteredOut(n); }
+```ts
+// frontend/src/lib/graphFilter.ts
+export function filteredOut(node, f, cascadeOff) {
+  return directHidden(node, f) || cascadeOff.has(node.id);
+}
+export function isHidden(node, f, off) { return !f.shade && filteredOut(node, f, off); }
+export function isShaded(node, f, off) { return  f.shade && filteredOut(node, f, off); }
 ```
+
+It is a pure module with no React and no canvas in it, which is what makes the
+property above testable rather than merely asserted:
+`frontend/src/lib/graphFilter.test.ts` renders neither and checks that the two
+modes reach exactly the same set.
 
 Every filter — the three facet dropdowns, hide-done, and the cascade below —
 computes `filteredOut` and nothing else, so none of them knows the mode exists and
@@ -331,6 +432,15 @@ The handler is a single `BaseHTTPRequestHandler` with a `GET` branch and a
 3. Validate and length-cap inputs with `self._str(data, key, max_len)`.
 4. Go through a `graph.api_*` helper rather than raw SQL, so the neo4j outbox and
    FTS triggers stay correct.
+5. **Describe it in `scripts/openapi.py`.** `tests/test_openapi.py` fails until
+   you do, which is the point: the spec is generated from a table beside the
+   router precisely so the two cannot be edited apart.
+
+On the client side, add it to the named surface in
+`frontend/src/api/client.ts` rather than calling `fetch` from a component. Every
+call in the app goes through one `get`/`post` pair, so retry, error shaping, the
+`--no-write` 403 and abort-on-unmount are decided once instead of at each of the
+fifty call sites the old single-file page had.
 
 That last point matters: writing straight to SQLite bypasses `_after_write()`,
 which is what enqueues the neo4j sync. See [the neo4j backend](neo4j.md).

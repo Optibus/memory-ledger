@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="second-brain">
+  <!--
+    The brain as what it actually is: a graph. A hub with three satellites,
+    which is the one shape from the map that survives being drawn at 16px — a
+    brain outline at that size is a grey smudge.
+
+    Colours are the app's own tokens (bg, accent, muted, success), spelled here
+    as literals because an SVG loaded as a favicon gets no stylesheet. The
+    ground is painted in rather than left transparent, so the mark holds up on
+    a light tab strip as well as a dark one.
+  -->
+  <rect width="32" height="32" rx="7" fill="#0d1117"/>
+  <g stroke="#58a6ff" stroke-width="2" stroke-linecap="round" opacity=".7" fill="none">
+    <path d="M16 16 8 9"/>
+    <path d="M16 16 24 10"/>
+    <path d="M16 16 13 25"/>
+    <path d="M8 9 24 10"/>
+  </g>
+  <circle cx="8" cy="9" r="3" fill="#8b949e"/>
+  <circle cx="24" cy="10" r="3" fill="#8b949e"/>
+  <circle cx="13" cy="25" r="3" fill="#3fb950"/>
+  <circle cx="16" cy="16" r="4.5" fill="#58a6ff"/>
+</svg>

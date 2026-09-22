@@ -1,0 +1,21 @@
+.ml-modal__scrim {
+  position: fixed; inset: 0; background: #000a; display: flex;
+  align-items: flex-start; justify-content: center; padding: 6vh 16px 24px; overflow: auto;
+}
+.ml-modal {
+  background: var(--panel-solid); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-pop);
+  display: flex; flex-direction: column; max-height: 88vh;
+}
+.ml-modal__head {
+  display: flex; align-items: flex-start; gap: var(--space-3);
+  padding: var(--space-4) var(--space-5); border-bottom: 1px solid var(--border);
+}
+.ml-modal__title { margin: 0; font-size: 15px; }
+.ml-modal__sub { margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.ml-modal__head > :last-child { margin-left: auto; }
+.ml-modal__body { padding: var(--space-5); overflow: auto; }
+.ml-modal__foot {
+  display: flex; align-items: center; gap: var(--space-3);
+  padding: var(--space-4) var(--space-5); border-top: 1px solid var(--border);
+}

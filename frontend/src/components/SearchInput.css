@@ -1,0 +1,13 @@
+.ml-search { position: relative; flex: 1; min-width: 160px; display: flex; }
+.ml-search__input {
+  flex: 1; min-width: 80px; background: var(--bg-sunken); border: 1px solid var(--border);
+  color: var(--fg); border-radius: var(--radius); padding: 6px 26px 6px 10px;
+  outline: none; font-family: inherit; font-size: 13px;
+}
+.ml-search__input:focus { border-color: var(--accent); }
+.ml-search__input::-webkit-search-cancel-button { display: none; }
+.ml-search__clear {
+  position: absolute; right: 2px; top: 0; bottom: 0; width: 24px; border: 0;
+  background: none; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1;
+}
+.ml-search__clear:hover { color: var(--fg); }

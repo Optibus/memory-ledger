@@ -1,0 +1,4 @@
+.ml-nodeedit { margin-top: var(--space-3); }
+.ml-nodeedit__grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
+.ml-nodeedit__grid .ml-field { margin-bottom: var(--space-3); }
+.ml-nodeedit__foot { display: flex; gap: var(--space-2); align-items: center; }
