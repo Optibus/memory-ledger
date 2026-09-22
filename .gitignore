@@ -15,17 +15,14 @@ presentation/
 # (a stale bundle in git is worse than no bundle).
 /dist/
 
-# The frontend toolchain is a DEV dependency, not a runtime one.
+# The frontend is built, never committed. `scripts/serve.py` builds it on first
+# run (and rebuilds it when the source is newer), so a checkout has no bundle in
+# it and a commit never carries one — a generated artifact in git is a second
+# copy of the source that drifts from it silently.
 frontend/node_modules/
+frontend/dist/
 frontend/coverage/
 frontend/.vite/
-
-# frontend/dist IS committed, deliberately and against the usual instinct.
-# `python3 scripts/serve.py` has to work for someone who installed the plugin and
-# has no node on the machine, which is only possible if the compiled app ships
-# with it. tests/test_contracts.py checks it is present and intact on every run,
-# so a stale or half-written build cannot go unnoticed.
-!frontend/dist/
 
 # Cue-matching eval cases (scripts/eval_cues.py). They name a person's own rules
 # and skills, so they are personal data. The real file lives at

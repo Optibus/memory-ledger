@@ -24,8 +24,9 @@ skills to my other machine", "change the timezone", "run prune".
   ```
 
   It prints a URL, defaulting to `http://127.0.0.1:8770/`, and runs until Ctrl-C.
-  **Nothing needs installing.** The UI is a React app whose build ships with the
-  plugin, so this runs on a machine with no node.
+  **Nothing to install by hand.** The UI is a React app and the server builds it
+  on the first run, which needs `npm` on the machine. Without it the API still
+  answers in full and only the page is missing, saying why.
   Because it is long-running, start it in the background and give the person the
   URL. It binds to 127.0.0.1 only unless `--host 0.0.0.0` is passed.
 - **Four sections behind the hamburger menu** (`m` toggles it), each with its own
@@ -98,6 +99,10 @@ See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTION
 - **A read-only server is diagnosed, not worked around.** If it was started with
   `--no-write`, the editing controls are hidden and writes return 403. Say so and
   say to restart without the flag.
+- **A missing page is diagnosed as a missing toolchain, not a broken server.**
+  The first start compiles the UI. If `npm` is absent the page returns 503 while
+  every endpoint keeps answering, so the fix is to install Node.js, never to
+  restart.
 - **A request about the API itself is answered with `/api/docs`**, the Swagger UI
   the server builds from its own routes. Describing the endpoints from memory is
   how a stale answer gets into someone's client.

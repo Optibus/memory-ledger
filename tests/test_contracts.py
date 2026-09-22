@@ -793,51 +793,80 @@ def test_home_adoption_keeps_the_data():
 # skill before the rule it honors, or before the skill it requires, produces a
 # zip that imports without complaint and arrives wired to nothing — the same
 # silent-lie failure §5 exists to prevent, one layer out.
-def test_built_ui_is_shipped():
-    """The committed build exists, is coherent, and parses.
+def test_ui_build_is_decided_correctly():
+    """The server decides when to build the UI, and the decision is the test.
 
-    The UI is a React app now, which means it has a BUILD — and the plugin
-    promises `python3 scripts/serve.py` works with no npm and no install step.
-    The only way to keep both is to commit `frontend/dist`, and the only way to
-    keep THAT honest is to check it is there and intact on every run. A missing
-    or half-written bundle is the worst kind of failure here: the API answers,
-    the server starts, and the person gets a blank page.
+    `frontend/dist` is a build artifact and is NOT in git, so a fresh checkout
+    has no bundle and `scripts/serve.py` produces one. What can go wrong is the
+    DECISION: never rebuilding leaves a page that predates its source (the
+    failure the whole reload mechanism exists to prevent), and always rebuilding
+    puts an npm run in front of every start.
 
-    The syntax check is skipped when node is not installed; it is a guard, not a
-    dependency (CI installs node so the guard cannot pass vacuously)."""
-    print("\n== the built UI ships with the plugin ==")
-    dist = ROOT / "frontend" / "dist"
+    So this exercises `ui_stale()` against a real directory rather than running
+    npm, which would make the suite need a toolchain it otherwise does not."""
+    print("\n== the server knows when the UI needs building ==")
+    import serve
+
+    work = Path(tempfile.mkdtemp(prefix="second-brain-ui-"))
+    src = work / "src"
+    src.mkdir()
+    dist = work / "dist"
+    dist.mkdir()
+    (work / "package.json").write_text("{}", encoding="utf-8")
+    (src / "App.tsx").write_text("x", encoding="utf-8")
+
     index = dist / "index.html"
-    ck("frontend/dist/index.html is committed", index.is_file(), str(index))
-    if not index.is_file():
-        return
+    orig_front, orig_dist, orig_index = serve.FRONTEND, serve.DIST, serve.INDEX
+    serve.FRONTEND, serve.DIST, serve.INDEX = work, dist, index
+    try:
+        ck("no bundle at all is stale", serve.ui_stale() == "no bundle yet",
+           serve.ui_stale())
 
-    html = index.read_text(encoding="utf-8")
-    import re
-    refs = re.findall(r'(?:src|href)="\.?/?(assets/[^"]+)"', html)
-    ck("its entry point references built assets", bool(refs), str(refs))
-    missing = [r for r in refs if not (dist / r).is_file()]
-    ck("and every one of them is on disk — a half-committed build is a blank page",
-       not missing, ", ".join(missing))
+        # Build it "after" the sources.
+        index.write_text("<html>", encoding="utf-8")
+        newer = time.time() + 10
+        os.utime(index, (newer, newer))
+        ck("a fresh bundle is not rebuilt", serve.ui_stale() == "", serve.ui_stale())
 
-    ck("the app mounts on the root the bundle expects", 'id="root"' in html, "")
+        # A source edit after the build IS a rebuild.
+        later = newer + 10
+        os.utime(src / "App.tsx", (later, later))
+        ck("a source change is a rebuild",
+           serve.ui_stale().startswith("App.tsx"), serve.ui_stale())
 
-    node = shutil.which("node")
-    if not node:
-        print("  SKIP  node not installed")
-        return
-    scripts = [r for r in refs if r.endswith(".js")]
-    ck("the bundle is a single script, so one syntax error is visible at once",
-       len(scripts) == 1, str(scripts))
-    for rel in scripts:
-        # .mjs so `node --check` parses it as the ES module the build emits.
-        src = Path(tempfile.mkdtemp(prefix="second-brain-js-")) / "bundle.mjs"
-        src.write_text((dist / rel).read_text(encoding="utf-8"), encoding="utf-8")
-        pr = subprocess.run([node, "--check", str(src)], capture_output=True, text=True)
-        why = next((l for l in (pr.stderr or "").splitlines() if "Error" in l), "")
-        ck(f"{rel} parses — a dead bundle takes the whole page with it",
-           pr.returncode == 0, why.strip())
-        shutil.rmtree(src.parent, ignore_errors=True)
+        # ...and so is a config edit, which changes the output without touching
+        # a single component.
+        os.utime(src / "App.tsx", (newer - 5, newer - 5))
+        cfg = work / "vite.config.ts"
+        cfg.write_text("export default {}", encoding="utf-8")
+        os.utime(cfg, (later, later))
+        ck("a config change is a rebuild too",
+           serve.ui_stale().startswith("vite.config.ts"), serve.ui_stale())
+
+        # A test file never reaches the bundle, so editing one must not trigger
+        # a build on every start while someone is writing tests.
+        os.utime(cfg, (newer - 5, newer - 5))
+        spec = src / "App.test.tsx"
+        spec.write_text("test", encoding="utf-8")
+        os.utime(spec, (later, later))
+        ck("a test edit is NOT a rebuild", serve.ui_stale() == "", serve.ui_stale())
+
+        # --no-build never runs npm, and says so rather than silently serving
+        # a stale page.
+        index.unlink()
+        why = serve.ensure_ui(auto=False)
+        ck("--no-build refuses to build and explains itself",
+           "no-build" in why, why)
+    finally:
+        serve.FRONTEND, serve.DIST, serve.INDEX = orig_front, orig_dist, orig_index
+        shutil.rmtree(work, ignore_errors=True)
+
+    # A machine with no toolchain still gets the whole API; only the page is
+    # missing, and the page says why rather than 404ing.
+    ck("the fallback page names the reason it was given",
+       "{reason}" in serve.MISSING_UI, "")
+    ck("and points at the API, which is unaffected",
+       "/api/docs" in serve.MISSING_UI, "")
 
 
 def test_api_docs_are_served():
@@ -857,8 +886,10 @@ def test_api_docs_are_served():
     home = tempfile.mkdtemp(prefix="second-brain-contracts-d-")
     port = 8798
     proc = subprocess.Popen(
+        # --no-build: this test is about the API, and making it wait on an npm
+        # run would make a stdlib-only suite depend on a JavaScript toolchain.
         [sys.executable, str(ROOT / "scripts" / "serve.py"), "--port", str(port),
-         "--no-open", "--no-reload"],
+         "--no-open", "--no-reload", "--no-build"],
         env=env_for(home), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         for _ in range(60):
@@ -885,10 +916,16 @@ def test_api_docs_are_served():
         except urllib.error.HTTPError as e:
             ck("an unknown /api/ route is a 404, not the app", e.code == 404, str(e.code))
 
-        # ...while any non-API path is the app, so a deep link works.
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/dashboard") as r:
-            ck("a deep link into the app is served the app",
-               r.headers.get_content_type() == "text/html", r.headers.get_content_type())
+        # ...while any non-API path is HTML, so a deep link reaches the app —
+        # or, when it has not been built, the page that says why. Never a 404,
+        # which would read as "that section does not exist".
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/dashboard") as r:
+                ctype, code = r.headers.get_content_type(), r.status
+        except urllib.error.HTTPError as e:      # 503: no bundle on this machine
+            ctype, code = e.headers.get_content_type(), e.code
+        ck("a deep link is served HTML, never a 404",
+           ctype == "text/html" and code != 404, f"{code} {ctype}")
     finally:
         proc.send_signal(signal.SIGINT)
         try:
@@ -1156,7 +1193,7 @@ def main():
     test_server_error_paths()
     test_web()
     test_web_odd_shapes()
-    test_built_ui_is_shipped()
+    test_ui_build_is_decided_correctly()
     test_api_docs_are_served()
     test_bundle_round_trip()
     test_bundle_refusals()

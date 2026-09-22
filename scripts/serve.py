@@ -26,6 +26,8 @@ import argparse
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -41,27 +43,42 @@ import graph  # noqa: E402  (the engine — single source of truth for the DB)
 import brain_query  # noqa: E402  (the off-token query layer — powers the dashboard views)
 import openapi  # noqa: E402  (the API description, and the Swagger UI over it)
 
-# The built SPA. `index.html` is its entry point and `assets/` everything it
-# loads; both are committed, so this server has no build step of its own.
-DIST = ROOT / "frontend" / "dist"
+# The SPA, and where it is built from. `dist/` is a BUILD ARTIFACT and is not in
+# git — this server produces it (see `ensure_ui`) rather than shipping it.
+FRONTEND = ROOT / "frontend"
+DIST = FRONTEND / "dist"
 INDEX = DIST / "index.html"
 
-# What to say when the app was never built. Naming the one command that fixes it
-# beats a 404, which reads as "the server is broken" rather than "run the build".
+# Changing any of these means the bundle on disk no longer describes the source,
+# so it is rebuilt. Config counts: a vite.config.ts edit changes the output
+# without touching a single component.
+UI_CONFIG_FILES = ("package.json", "package-lock.json", "vite.config.ts",
+                   "tsconfig.json", "index.html")
+
+# What to say when the page could not be built. It names the reason and the one
+# command that fixes it, because "the server is broken" is what a bare 404 says
+# and it is never what happened here.
 MISSING_UI = """<!doctype html>
 <meta charset="utf-8">
 <title>memory-ledger — the UI is not built</title>
-<style>body{font:15px/1.6 ui-sans-serif,system-ui,sans-serif;max-width:40rem;
-margin:12vh auto;padding:0 1.5rem;background:#0d1117;color:#e6edf3}
-code{background:#161b22;padding:2px 6px;border-radius:5px;color:#58a6ff}
-a{color:#58a6ff}</style>
+<style>body{{font:15px/1.6 ui-sans-serif,system-ui,sans-serif;max-width:42rem;
+margin:12vh auto;padding:0 1.5rem;background:#0d1117;color:#e6edf3}}
+code{{background:#161b22;padding:2px 6px;border-radius:5px;color:#58a6ff}}
+pre{{background:#161b22;padding:12px 14px;border-radius:8px;overflow:auto}}
+a{{color:#58a6ff}} .why{{color:#8b949e}}</style>
 <h1>The UI is not built</h1>
-<p>The API is running and healthy &mdash; only the page is missing. Build it once:</p>
-<p><code>cd frontend &amp;&amp; npm install &amp;&amp; npm run build</code></p>
-<p>The output lands in <code>frontend/dist</code>, which is committed, so this is
-only ever needed in a working copy where it was deleted.</p>
-<p>Meanwhile the API is fully usable: <a href="/api/docs">/api/docs</a>.</p>
+<p class="why">{reason}</p>
+<p>Build it by hand:</p>
+<pre>cd frontend &amp;&amp; npm install &amp;&amp; npm run build</pre>
+<p>Then reload this page. The server rebuilds it automatically on the next start
+once <code>npm</code> is available.</p>
+<p><b>The API is running and fully usable meanwhile:</b>
+<a href="/api/docs">/api/docs</a>.</p>
 """
+
+# Set by ensure_ui() when the build could not run, so the page can say WHY
+# rather than only that something is missing.
+UI_PROBLEM = ""
 
 # The only file types the SPA build emits. An explicit map beats mimetypes.guess,
 # which is configured per machine and has been known to answer text/plain for .js.
@@ -89,6 +106,127 @@ MAX_BUNDLE_BYTES = 32 * 1024 * 1024
 # Identifies THIS process. The page polls it and reloads itself when it changes,
 # so a restart carries the new page to an already-open tab.
 BOOT = f"{os.getpid()}-{int(time.time())}"
+
+# ---------------------------------------------------------------------------
+# BUILDING THE UI
+#
+# The frontend is a React app with a real toolchain, and its output is NOT in
+# git — a generated artifact committed beside its source is a second copy that
+# drifts from it silently. So the server builds it: on the first run, and again
+# whenever a source file is newer than the bundle.
+#
+# The cost of that choice is honest and stated here: `npm` has to exist on the
+# machine for the UI to work. The API does not care and never blocks on it.
+# ---------------------------------------------------------------------------
+def _ui_sources():
+    """Every file whose change makes the current bundle stale."""
+    for name in UI_CONFIG_FILES:
+        path = FRONTEND / name
+        if path.exists():
+            yield path
+    src = FRONTEND / "src"
+    if src.is_dir():
+        for path in src.rglob("*"):
+            # Tests never reach the bundle, so a test edit is not a rebuild.
+            if path.is_file() and ".test." not in path.name:
+                yield path
+
+
+def ui_stale() -> str:
+    """Why the bundle needs rebuilding, or "" when it is current.
+
+    mtime, not a content hash: this runs on every start, and hashing a few
+    hundred files to save a one-second vite build would cost more than it saves.
+    """
+    if not INDEX.exists():
+        return "no bundle yet"
+    built = INDEX.stat().st_mtime_ns
+    newest, newest_path = 0, None
+    for path in _ui_sources():
+        try:
+            mtime = path.stat().st_mtime_ns
+        except OSError:
+            continue
+        if mtime > newest:
+            newest, newest_path = mtime, path
+    if newest > built:
+        return f"{newest_path.name} changed since the last build"
+    return ""
+
+
+def _run(cmd, cwd, label) -> tuple[bool, str]:
+    """Run one toolchain command, showing its output as it goes.
+
+    Streamed rather than captured because `npm install` can take half a minute
+    and a silent terminal during it reads as a hang.
+    """
+    print(f"  {label}…", flush=True)
+    try:
+        proc = subprocess.run(cmd, cwd=str(cwd))
+    except FileNotFoundError:
+        return False, f"{cmd[0]} is not installed"
+    except Exception as e:                       # pragma: no cover - defensive
+        return False, f"{label} could not start: {e}"
+    if proc.returncode != 0:
+        return False, f"{label} failed (exit {proc.returncode})"
+    return True, ""
+
+
+def ensure_ui(auto: bool = True) -> str:
+    """Make sure a current bundle exists. Returns "" on success, else the reason.
+
+    Never raises and never exits: a machine with no node still gets the whole
+    API, and the page explains itself instead of 404ing. That split is the point
+    — the brain does not depend on a JavaScript toolchain, only its UI does.
+    """
+    global UI_PROBLEM
+    UI_PROBLEM = ""
+
+    if not FRONTEND.is_dir():
+        UI_PROBLEM = "the frontend/ directory is missing from this checkout"
+        return UI_PROBLEM
+
+    reason = ui_stale()
+    if not reason:
+        return ""
+    if not auto:
+        UI_PROBLEM = f"{reason}, and --no-build was passed"
+        return UI_PROBLEM
+
+    npm = shutil.which("npm")
+    if not npm:
+        UI_PROBLEM = (f"{reason}, and npm is not on PATH. "
+                      "Install Node.js to let the server build the page.")
+        print(f"  UI not built: {UI_PROBLEM}", flush=True)
+        return UI_PROBLEM
+
+    print(f"building the UI ({reason})", flush=True)
+
+    if not (FRONTEND / "node_modules").is_dir():
+        # `npm ci` is the reproducible install and needs the lockfile; without
+        # one it refuses outright, so fall back rather than fail the whole start.
+        if (FRONTEND / "package-lock.json").exists():
+            ok, err = _run([npm, "ci", "--no-audit", "--no-fund"],
+                           FRONTEND, "installing dependencies (npm ci)")
+        else:
+            ok, err = _run([npm, "install", "--no-audit", "--no-fund"],
+                           FRONTEND, "installing dependencies (npm install)")
+        if not ok:
+            UI_PROBLEM = err
+            return UI_PROBLEM
+
+    ok, err = _run([npm, "run", "build"], FRONTEND, "compiling")
+    if not ok:
+        UI_PROBLEM = err
+        return UI_PROBLEM
+
+    if not INDEX.exists():
+        UI_PROBLEM = "the build reported success but wrote no index.html"
+        return UI_PROBLEM
+
+    print("  UI ready", flush=True)
+    return ""
+
 
 # ---------------------------------------------------------------------------
 # RELOAD
@@ -543,7 +681,9 @@ class Handler(BaseHTTPRequestHandler):
         of a bare 404.
         """
         if not INDEX.exists():
-            self._send(503, MISSING_UI, "text/html; charset=utf-8")
+            reason = UI_PROBLEM or "it has not been built yet"
+            self._send(503, MISSING_UI.format(reason=reason),
+                       "text/html; charset=utf-8")
             return
 
         rel = path.lstrip("/")
@@ -1251,6 +1391,11 @@ def main():
                          "binding --host 0.0.0.0, since the write API is "
                          "unauthenticated and anyone on the network could edit "
                          "your brain.")
+    ap.add_argument("--no-build", action="store_true",
+                    help="do not build the UI, even when it is missing or "
+                         "stale. The API is unaffected; the page says why.")
+    ap.add_argument("--rebuild", action="store_true",
+                    help="rebuild the UI even when it looks current")
     args = ap.parse_args()
 
     global WRITABLE
@@ -1263,13 +1408,24 @@ def main():
             pass
 
     graph.connect().close()  # ensure the brain exists
+
+    # Build BEFORE binding, so the browser is only opened once there is a page
+    # to open. It never aborts the start: a machine with no node still gets the
+    # whole API, and the page explains itself rather than 404ing.
+    if args.rebuild and INDEX.exists():
+        INDEX.unlink()
+    ensure_ui(auto=not args.no_build)
+
     url = f"http://{args.host}:{args.port}/"
     httpd = QuietServer((args.host, args.port), Handler)
     # a restart re-execs with the same argv; don't open a new tab each time
     respawned = os.environ.pop("SECOND_BRAIN_VIZ_RESPAWN", "") == "1"
     if not respawned:
-        print(f"memory-ledger map → {url}")
+        print(f"memory-ledger → {url}")
         print(f"  brain: {graph.db_path()}")
+        print(f"  api:   {url}api/docs")
+        if UI_PROBLEM:
+            print(f"  note:  the UI is unavailable ({UI_PROBLEM}); the API is not")
         print("  Ctrl-C to stop.")
     else:
         print(f"  reloaded → {url}")

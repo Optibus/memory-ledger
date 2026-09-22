@@ -570,9 +570,11 @@ python3 scripts/serve.py            # opens http://127.0.0.1:8770/ in your brows
 python3 scripts/serve.py --no-open --host 0.0.0.0 --port 8770 &   # reachable on LAN / phone
 ```
 
-The UI is a React single-page app (`frontend/`). Its build is **committed**, so
-the command above needs no node and nothing installed — see
-[the frontend](docs/frontend.md) to work on it. The API describes itself at
+The UI is a React single-page app (`frontend/`). The server **builds it for you**
+on the first run and rebuilds it when the source changes, so there is no install
+step to perform by hand — it does need `npm` on the machine for the page, though
+never for the API. See [the frontend](docs/frontend.md) to work on it. The API
+describes itself at
 **`/api/docs`**: Swagger UI over an OpenAPI 3.1 document the running process
 builds, so it can never describe a server other than the one answering you.
 

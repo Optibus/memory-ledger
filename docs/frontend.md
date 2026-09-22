@@ -1,7 +1,8 @@
 # The frontend
 
 The brain UI is a **React single-page app** in `frontend/`, built with Vite and
-TypeScript, served by `scripts/serve.py` from the committed `frontend/dist`.
+TypeScript. `scripts/serve.py` builds it on first run and serves it from
+`frontend/dist`.
 
 ```
 frontend/
@@ -13,32 +14,44 @@ frontend/
     lib/          pure logic with no React in it — filters, physics, colours, formatting
     styles/       the design tokens everything paints with
     test/         fixtures, the mock server, and the render helpers
-  dist/           the BUILT app. Committed. See below.
+  dist/           the built app. NOT in git — the server produces it. See below.
 ```
 
-## Why the build output is committed
+## The server builds it
 
-The plugin's promise is that `python3 scripts/serve.py` gives you the UI. Someone
-who installs memory-ledger has Python — they may well not have node, and asking
-them to run `npm install` before they can see their own notes would be a worse
-product.
+`frontend/dist` is a build artifact and is not committed: a generated artifact
+in git is a second copy of the source that drifts from it silently.
 
-A compiled SPA and that promise can only both hold if the compiled artifact
-ships. So `frontend/dist` is in git, `.gitignore` carries an explicit exception
-saying why, and two checks keep it honest:
+So `scripts/serve.py` builds it. On startup, before it binds the port, it checks
+whether the bundle is current and produces one when it is not:
 
-- `tests/test_contracts.py` asserts the bundle is present, that its entry point
-  references assets that exist, and that it parses. A half-committed build is the
-  worst failure mode here: the server starts, the API answers, and the person
-  gets a blank page.
-- CI rebuilds it and fails if the working tree moved, so a source change that was
-  never rebuilt cannot merge.
+1. no `frontend/dist/index.html` → build;
+2. any file in `frontend/src/`, or `package.json` / `package-lock.json` /
+   `vite.config.ts` / `tsconfig.json` / `index.html`, newer than the bundle →
+   rebuild;
+3. `frontend/node_modules` missing → `npm ci` first (`npm install` when there is
+   no lockfile).
 
-**Rebuild it in the same commit as the source change that caused it:**
+A `*.test.tsx` edit is deliberately **not** a rebuild: tests never reach the
+bundle, and rebuilding on every one would put a compile in front of every start
+while someone is writing them.
 
 ```bash
-cd frontend && npm run build
+python3 scripts/serve.py              # builds if needed, then serves
+python3 scripts/serve.py --rebuild    # build even when it looks current
+python3 scripts/serve.py --no-build   # never build; the page says why
 ```
+
+**This means npm is required for the UI.** It is not required for the API, and
+that split is deliberate: with no node on the machine the server still starts,
+every endpoint answers, `/api/docs` works, and the page returns a 503 that names
+the reason and the command that fixes it. The brain does not depend on a
+JavaScript toolchain — only its UI does.
+
+`tests/test_contracts.py` tests the *decision* rather than running npm, so the
+Python suite stays stdlib-only: never rebuilding would serve a page that
+predates its source, and always rebuilding would put a compile in front of every
+start.
 
 ## Working on it
 
