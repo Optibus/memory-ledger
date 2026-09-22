@@ -173,7 +173,9 @@ export function SkillsSection() {
 
   // ---- the actions behind the Options menu --------------------------------
   const exportSelected = async () => {
-    const { skills: s, rules: r, processes: p } = sel.split();
+    const { skills: s, rules: r, processes: p } = sel.split(
+      new Set(allProcesses.map((x) => x.id)),
+    );
     say("Building the bundle…");
     try {
       const d = await api.exportBundle(s, r, p);

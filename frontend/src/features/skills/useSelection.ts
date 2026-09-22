@@ -1,9 +1,16 @@
 import { useCallback, useMemo, useState } from "react";
 
-/** Which corpus an id belongs to, from the id alone. */
-export function kindOf(id: string): "skills" | "rules" | "processes" {
+/**
+ * Which corpus an id belongs to. Skills are always `skill_*`, but a process is
+ * any node of type `process` — many were retyped from decisions and notes and
+ * kept their ids — so the caller passes the process ids it actually loaded.
+ */
+export function kindOf(
+  id: string,
+  processIds?: ReadonlySet<string>,
+): "skills" | "rules" | "processes" {
   if (id.startsWith("skill_")) return "skills";
-  if (id.startsWith("process_")) return "processes";
+  if (processIds?.has(id) || id.startsWith("process_")) return "processes";
   return "rules";
 }
 
@@ -15,7 +22,11 @@ export interface Selection {
   selectAll: (ids: string[]) => void;
   clear: () => void;
   /** The two lists the bundle endpoints want. */
-  split: () => { skills: string[]; rules: string[]; processes: string[] };
+  split: (processIds?: ReadonlySet<string>) => {
+    skills: string[];
+    rules: string[];
+    processes: string[];
+  };
 }
 
 /** Selection mode: checkboxes on every card, then export or delete what you ticked. */
@@ -43,9 +54,9 @@ export function useSelection(): Selection {
   const selectAll = useCallback((ids: string[]) => setPicked(new Set(ids)), []);
   const clear = useCallback(() => setPicked(new Set()), []);
 
-  const split = useCallback(() => {
+  const split = useCallback((processIds?: ReadonlySet<string>) => {
     const out = { skills: [] as string[], rules: [] as string[], processes: [] as string[] };
-    for (const id of picked) out[kindOf(id)].push(id);
+    for (const id of picked) out[kindOf(id, processIds)].push(id);
     return out;
   }, [picked]);
 

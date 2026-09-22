@@ -1823,6 +1823,54 @@ def cmd_add_process(args):
                         node_id=args.id or ""))
 
 
+def api_retype(con, ids, new_type: str, dry_run=False) -> dict:
+    """Change the type of existing nodes, keeping id, edges and everything else.
+
+    The id is kept on purpose: edges, `[[links]]` in other bodies and the mirror
+    all address a node by id, so a new id would orphan every reference. What the
+    node used to be is written into `props.migrated_from` (with the date), which
+    makes the change reversible by running it again with the old type."""
+    new_type = (new_type or "").strip()
+    if not new_type:
+        return {"ok": False, "error": "missing type"}
+    changed, same, absent = [], [], []
+    for nid in dict.fromkeys(str(i).strip() for i in ids if str(i).strip()):
+        row = con.execute("SELECT id,type,title,props FROM nodes WHERE id=?",
+                          (nid,)).fetchone()
+        if not row:
+            absent.append(nid)
+            continue
+        if row["type"] == new_type:
+            same.append(nid)
+            continue
+        changed.append({"id": nid, "from": row["type"], "title": row["title"]})
+        if dry_run:
+            continue
+        props = json.loads(row["props"] or "{}")
+        props["migrated_from"] = row["type"]
+        props["migrated_at"] = now()
+        if new_type == PROCESS_TYPE:
+            props.setdefault("category", "process")
+        con.execute("UPDATE nodes SET type=?, props=?, updated=? WHERE id=?",
+                    (new_type, json.dumps(props), now(), nid))
+    con.commit()
+    sync = None
+    if changed and not dry_run:
+        sync = _after_write(con, nodes=[c["id"] for c in changed])
+    return {"ok": True, "dry_run": dry_run, "type": new_type,
+            "count": len(changed), "changed": changed,
+            "already": same, "not_found": absent, "sync": sync}
+
+
+def cmd_retype(args):
+    ids = list(args.id or [])
+    if args.ids_file:
+        ids += [l.strip() for l in Path(args.ids_file).expanduser()
+                .read_text(encoding="utf-8").splitlines()
+                if l.strip() and not l.lstrip().startswith("#")]
+    out(api_retype(connect(), ids, args.type, args.dry_run))
+
+
 def process_markdown(con, process_id: str) -> str:
     """One process as a portable .md: frontmatter plus the body, verbatim."""
     row = con.execute("SELECT * FROM nodes WHERE id=? AND type=?",
@@ -6028,6 +6076,18 @@ def build_parser():
     a.add_argument("--trigger", default="", help="when this process applies")
     a.add_argument("--realm", default="", help="default: the configured realm")
     a.add_argument("--id", default="")
+
+    a = sub.add_parser("retype", description=(
+        "Change the type of existing nodes, keeping their id and edges. The old "
+        "type is kept in props.migrated_from, so running it again with that type "
+        "reverses it."))
+    a.set_defaults(func=cmd_retype)
+    a.add_argument("--type", required=True, help="the new type, e.g. process")
+    a.add_argument("--id", action="append", help="node id (repeatable)")
+    a.add_argument("--ids-file", dest="ids_file",
+                   help="file with one id per line (# comments allowed)")
+    a.add_argument("--dry-run", dest="dry_run", action="store_true",
+                   help="report what would change, write nothing")
 
     a = sub.add_parser("processes", description=(
         "Every process in every realm (the UI's Processes list)."))

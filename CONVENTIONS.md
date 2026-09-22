@@ -177,6 +177,7 @@ Commands:
 | `sync-skill-tree [--realm R] [--no-node-types]` | Project the skill contracts into the graph as **two trees** (§5a): built-in skills under `hub_skills_builtin`, user skills under `hub_skills_user`. Built-in skills declare in their `SKILL.md` `## Depends on` block, user skills in props (`add-skill --requires/--reads/--writes`). Idempotent, and a **true sync**: generated edges that stopped being declared are pruned. Hand-made edges carry no marker and are never touched. |
 | `ingest-skills [--dir D]... [--realm R] [--no-rules]` | Pull existing markdown skills (plugin `skills/` + `learned_skills/`) into the DB as `skill` nodes (idempotent; re-run to refresh). A `rules/` folder beside them is read **first**, so the skills landing next to it can link to the rules that travelled with them, and a rule this brain already holds is **kept**, never overwritten. Re-projects the tree when anything changed. |
 | `export-skills [--dir D] [--kind learned\|plugin\|all] [--no-rules]` | The other direction (§5a): write skill nodes back out as `D/<name>/SKILL.md` plus `D/rules/<rule id>.md` for every rule they honor, so a brain can move between machines by file when there is no master to mirror through. A round trip is lossless — contract, declarations and `honors` edges all survive. |
+| `retype --type T (--id ID... \| --ids-file F) [--dry-run]` | Change existing nodes' type, keeping id and edges; the old type goes to `props.migrated_from`, so running it again with that type reverses it. How decisions and notes that describe a standing way of working became `process` nodes. |
 | `add-process --title T [--body B] [--trigger W] [--realm R] [--id ID]` | Record a way of working as a `process` node part-of `hub_process`, in the configured realm unless `--realm` says otherwise. `processes` lists every realm's. |
 | `export-bundle [--skill ID]... [--rule ID]... [--process ID]... [--spec F] [--out Z]` | A **selection** as one zip (§5a): a directory per kind plus an `import-plan.json` naming the order it can be read back in. Rules a selected skill honors travel with it; a skill it *requires* that was not selected is **named in the report**, never pulled in silently. |
 | `inspect-bundle --zip Z` | What is inside a bundle and which of it this brain already holds. Read-only, so it is safe to run on a zip you were sent. |
@@ -366,7 +367,7 @@ the known areas rather than leaving a node outside every domain.
 
 | Area | Domain | Realm | Holds |
 |---|---|---|---|
-| `hub_process` | process | optibus | Gabriel's ways of working — his `decision`s and discretionary methods |
+| `hub_process` | process | optibus | Gabriel's ways of working — `process` nodes for standing methods and norms, `decision`s for one-off calls |
 | `hub_quote` | quote | shared | Quotes he keeps, with `attributed_to` / `source_work` in props |
 | `hub_health` | health | personal | Symptoms, episodes, energy, appointments — anything affecting capacity |
 
