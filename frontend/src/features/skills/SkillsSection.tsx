@@ -116,7 +116,7 @@ export function SkillsSection() {
   const show = (t: ItemType) => filter.types.has(t);
   const currentRealm = data?.realm ?? "";
   const shownRealms = effectiveRealms(filter, currentRealm);
-  const allProcesses = data?.processes ?? [];
+  const allProcesses = useMemo(() => data?.processes ?? [], [data?.processes]);
   const keptProcesses = useMemo(() => {
     const realms = effectiveRealms(filter, currentRealm);
     return allProcesses.filter((p) => keepProcess(p, filter, realms));

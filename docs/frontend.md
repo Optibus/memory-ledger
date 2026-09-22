@@ -87,6 +87,7 @@ npm test             # every suite
 npm run test:unit    # components, hooks, pure logic
 npm run test:integration   # whole sections against a mock server
 npm run typecheck
+npm run lint         # .eslintrc.cjs: typescript-eslint + react-hooks, zero warnings
 npm run build        # typecheck + build; this is what CI runs
 ```
 

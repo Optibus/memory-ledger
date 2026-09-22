@@ -40,7 +40,8 @@ export function NodeEditor({ node, onDone, onCancel }: NodeEditorProps) {
     async (signal) => (await api.people(signal)).people,
     [],
   );
-  const roster = people.data ?? [];
+  // A bare `?? []` is a new array each render, which would defeat the memo below.
+  const roster = useMemo(() => people.data ?? [], [people.data]);
 
   const currentAssignee = (props.assignee || "").trim().toLowerCase();
   const matchedPerson = useMemo(
