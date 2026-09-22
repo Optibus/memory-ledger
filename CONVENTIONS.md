@@ -1269,7 +1269,8 @@ and keeps the realm it came from as `props.origin_realm` — so a teammate's way
 of working arrives in *your* work realm and still says whose it was. The Skills
 page lists processes beside skills and rules, filters by type (multi-select:
 process, skill, rule), by source (multi-select: built-in, user, learned; every
-process counts as user) and by realm, defaulting to the current realm.
+process counts as user) and by realm, defaulting to the current realm. A new
+process is written from the page's floating **+** button, beside skills and rules.
 
 Selection is respected in both directions. Exporting a skill carries the rules
 it honors, for the reason above — but a skill it *requires* and you did not pick

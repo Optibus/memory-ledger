@@ -81,17 +81,17 @@ describe("the app shell", () => {
   it("puts the create button only where contracts are authored", async () => {
     const { user } = renderApp(<App />, { route: "/dashboard", withMeta: false });
     await screen.findByRole("heading", { name: "Dashboard" });
-    expect(screen.queryByRole("button", { name: /create a skill or a rule/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /create a process, a skill or a rule/ })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "sections" }));
     await user.click(screen.getByRole("link", { name: /Skills/ }));
-    expect(await screen.findByRole("button", { name: /create a skill or a rule/ })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /create a process, a skill or a rule/ })).toBeInTheDocument();
   });
 
   it("hides the create button on a read-only server", async () => {
     server.use(http.get("/api/meta", () => HttpResponse.json({ ...metaFixture, writable: false })));
     renderApp(<App />, { route: "/skills", withMeta: false });
     await screen.findByRole("heading", { name: "Skills" });
-    expect(screen.queryByRole("button", { name: /create a skill or a rule/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /create a process, a skill or a rule/ })).not.toBeInTheDocument();
   });
 });

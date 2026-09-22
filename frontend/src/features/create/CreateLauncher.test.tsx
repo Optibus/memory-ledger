@@ -10,7 +10,7 @@ beforeEach(resetWrites);
 
 const open = async (which: "skill" | "rule") => {
   const { user } = renderApp(<CreateLauncher onCreated={() => {}} />, { route: "/skills" });
-  await user.click(await screen.findByRole("button", { name: /create a skill or a rule/ }));
+  await user.click(await screen.findByRole("button", { name: /create a process, a skill or a rule/ }));
   await user.click(await screen.findByRole("button", { name: which === "skill" ? /A skill/ : /A rule/ }));
   return user;
 };
@@ -145,7 +145,27 @@ describe("the create button on a read-only server", () => {
     server.use(http.get("/api/meta", () => HttpResponse.json({ ...metaFixture, writable: false })));
     renderApp(<CreateLauncher onCreated={() => {}} />, { route: "/skills" });
     await waitFor(() =>
-      expect(screen.queryByRole("button", { name: /create a skill or a rule/ })).not.toBeInTheDocument(),
+      expect(screen.queryByRole("button", { name: /create a process, a skill or a rule/ })).not.toBeInTheDocument(),
     );
+  });
+});
+
+describe("recording a process from the + button", () => {
+  it("stores it in the realm the brain reports, and says what it wrote", async () => {
+    const seen: unknown[] = [];
+    const { user } = renderApp(<CreateLauncher onCreated={(c) => seen.push(c)} />, { route: "/" });
+    await user.click(await screen.findByRole("button", { name: /create a process, a skill or a rule/ }));
+    await user.click(await screen.findByRole("button", { name: /A process/ }));
+    const realm = await screen.findByRole("textbox", { name: /Realm/ });
+    await waitFor(() => expect(realm).toHaveValue("optibus"));
+    await user.type(screen.getByRole("textbox", { name: /Title/ }), "Ship a hotfix");
+    await user.click(screen.getByRole("button", { name: "Save process" }));
+    await waitFor(() =>
+      expect(writes.find((w) => w.path === "/api/create-process")?.body).toMatchObject({
+        title: "Ship a hotfix",
+        realm: "optibus",
+      }),
+    );
+    expect(seen).toEqual([{ kind: "process", id: "process_new_0001", realm: "optibus" }]);
   });
 });

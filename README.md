@@ -578,11 +578,17 @@ requires — so the dependency tree survives the trip. Rules a selected skill
 honors travel with it; a skill it *requires* that you did not pick is named in
 the report rather than added behind your back.
 
-In the browser this is the **Options** menu on the Skills section: *Select skills
-and rules* puts a checkbox on every card, and the bar that appears exports or
-deletes what you ticked. *Import from a bundle* opens a zip, lists what is in it,
-and for anything this brain already holds asks whether to **update**, **replace**
-or **ignore** it — nothing is written until you confirm.
+In the browser this is the **Options** menu on the Skills section: *Select
+processes, skills and rules* puts a checkbox on every card, and the bar that
+appears exports or deletes what you ticked. *Import from a bundle* opens a zip,
+lists what is in it, and for anything this brain already holds asks whether to
+**update**, **replace** or **ignore** it — nothing is written until you confirm.
+Processes in a bundle land in your current realm unless you pick another.
+
+New things are written from the floating **+** button (or `n`) on the Skills
+section: *a process* (title, when it applies, steps, realm — prefilled with the
+current one), *a skill* or *a rule*. What it writes appears on the page at once,
+and a process saved in a realm the filter is not showing adds that realm to it.
 
 Writes are unauthenticated and bound to localhost; serve with `--no-write` if you
 expose the UI on your network.

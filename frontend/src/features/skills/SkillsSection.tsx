@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/api/client";
 import { useMeta } from "@/api/MetaContext";
 import { useAsync } from "@/hooks/useAsync";
@@ -36,6 +36,7 @@ import {
 import type { ItemType, KeptSkill, SkillFilter, Source } from "./filter";
 import { useSelection } from "./useSelection";
 import type { ImportChoice, SkillsPayload, UploadBundleResult } from "@/api/types";
+import type { Created } from "@/features/create/CreateLauncher";
 import "./SkillsSection.css";
 
 const TREE_SUB: Record<string, JSX.Element> = {
@@ -331,6 +332,27 @@ export function SkillsSection() {
     }
   };
 
+  /** Show a process saved somewhere else on the page, even in a realm not on screen. */
+  const reveal = (realm?: string) => {
+    if (realm && !shownRealms.has(realm))
+      setFilter((f) => ({ ...f, realms: new Set([...shownRealms, realm]) }));
+  };
+
+  // The + button lives outside this page and announces what it wrote.
+  const onCorpus = useRef<(c?: Created) => void>(() => {});
+  onCorpus.current = (c) => {
+    if (c?.kind === "process") {
+      say(`Saved ${c.id} in the ${c.realm} realm.`, "success");
+      reveal(c.realm);
+    }
+    skills.reload();
+  };
+  useEffect(() => {
+    const h = (e: Event) => onCorpus.current((e as CustomEvent<Created | undefined>).detail);
+    window.addEventListener("ml:corpus", h);
+    return () => window.removeEventListener("ml:corpus", h);
+  }, []);
+
   const saveProcess = async (draft: ProcessDraft) => {
     setBusy(true);
     setProcessError(null);
@@ -339,8 +361,7 @@ export function SkillsSection() {
       setNewProcess(false);
       say(`Saved "${draft.title}" in the ${d.node.realm} realm as ${d.node.id}.`, "success");
       // A process saved outside the realms on screen would otherwise vanish on save.
-      if (!shownRealms.has(d.node.realm))
-        setFilter((f) => ({ ...f, realms: new Set([...shownRealms, d.node.realm]) }));
+      reveal(d.node.realm);
       skills.reload();
     } catch (err) {
       setProcessError(err instanceof Error ? err.message : String(err));
@@ -353,16 +374,6 @@ export function SkillsSection() {
     {
       heading: "This brain",
       items: [
-        ...(writable
-          ? [
-              {
-                id: "new-process",
-                label: "New process…",
-                description: `Record a way of working, in the ${currentRealm || "current"} realm unless you pick another.`,
-                onSelect: () => setNewProcess(true),
-              },
-            ]
-          : []),
         {
           id: "select",
           label: "Select processes, skills and rules",

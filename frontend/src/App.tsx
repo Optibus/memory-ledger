@@ -36,7 +36,11 @@ export function App() {
               element={
                 <>
                   <SkillsSection />
-                  <CreateLauncher onCreated={() => window.dispatchEvent(new Event("ml:corpus"))} />
+                  <CreateLauncher
+                    onCreated={(created) =>
+                      window.dispatchEvent(new CustomEvent("ml:corpus", { detail: created }))
+                    }
+                  />
                 </>
               }
             />

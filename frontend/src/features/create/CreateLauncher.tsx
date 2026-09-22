@@ -9,14 +9,23 @@ import type { RuleDraft } from "./RuleForm";
 import { SkillForm, emptySkillDraft, skillDraftError, slugify } from "./SkillForm";
 import type { SkillDraft } from "./SkillForm";
 import type { SkillsPayload } from "@/api/types";
+import { ProcessDialog } from "@/features/skills/ProcessDialog";
+import type { ProcessDraft } from "@/features/skills/ProcessDialog";
 import "./CreateLauncher.css";
+
+/** What was just written, so a page can show it (a process may be in a realm not on screen). */
+export interface Created {
+  kind: "skill" | "rule" | "process";
+  id?: string;
+  realm?: string;
+}
 
 export interface CreateLauncherProps {
   /** Re-reads the corpus, so a new contract is on the page without a reload. */
-  onCreated: () => void;
+  onCreated: (created?: Created) => void;
 }
 
-type Stage = null | "choose" | "skill" | "rule" | "rule-on-skill";
+type Stage = null | "choose" | "skill" | "rule" | "rule-on-skill" | "process";
 
 /**
  * The floating + button and the modal stack behind it.
@@ -74,7 +83,7 @@ export function CreateLauncher({ onCreated }: CreateLauncherProps) {
       } else {
         close();
         setRuleDraft(emptyRuleDraft(meta));
-        onCreated();
+        onCreated({ kind: "rule" });
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -105,7 +114,21 @@ export function CreateLauncher({ onCreated }: CreateLauncherProps) {
       });
       close();
       setSkillDraft(emptySkillDraft());
-      onCreated();
+      onCreated({ kind: "skill" });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitProcess = async (draft: ProcessDraft) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const d = await api.createProcess(draft);
+      close();
+      onCreated({ kind: "process", id: d.node.id, realm: d.node.realm });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -118,8 +141,8 @@ export function CreateLauncher({ onCreated }: CreateLauncherProps) {
       <button
         type="button"
         className="ml-fab"
-        title="create a skill or a rule (N)"
-        aria-label="create a skill or a rule"
+        title="create a process, a skill or a rule (N)"
+        aria-label="create a process, a skill or a rule"
         onClick={() => setStage("choose")}
       >
         +
@@ -128,11 +151,18 @@ export function CreateLauncher({ onCreated }: CreateLauncherProps) {
       {stage === "choose" ? (
         <Modal
           title="What are you writing?"
-          subtitle="A skill is a thing the brain can DO. A rule is something it must hold to whenever it acts."
+          subtitle="A process is how you work. A skill is a thing the brain can DO. A rule is something it must hold to whenever it acts."
           onClose={close}
           width={520}
         >
           <div className="ml-create__choices">
+            <button type="button" className="ml-create__choice" onClick={() => setStage("process")}>
+              <b>A process</b>
+              <span>
+                A way of working, in one realm: when it applies and the steps. Only the title is
+                required.
+              </span>
+            </button>
             <button type="button" className="ml-create__choice" onClick={() => setStage("skill")}>
               <b>A skill</b>
               <span>
@@ -149,6 +179,18 @@ export function CreateLauncher({ onCreated }: CreateLauncherProps) {
             </button>
           </div>
         </Modal>
+      ) : null}
+
+      {stage === "process" ? (
+        <ProcessDialog
+          // the catalog is already being read for the pickers; it names the realm too
+          realm={catalog.data?.realm || meta?.default_realm || ""}
+          key={catalog.data?.realm ?? "loading"}
+          busy={busy}
+          error={error}
+          onCancel={close}
+          onSubmit={(d) => void submitProcess(d)}
+        />
       ) : null}
 
       {stage === "skill" && meta ? (
