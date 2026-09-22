@@ -46,6 +46,8 @@ export interface GraphMeta {
   by_kind?: Record<string, number>;
   boot?: string;
   backend?: string;
+  /** The person node the owner setting resolves to — the map's centre. */
+  ego?: string;
   error?: string;
 }
 

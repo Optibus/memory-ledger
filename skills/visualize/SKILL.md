@@ -32,7 +32,9 @@ skills to my other machine", "change the timezone", "run prune".
   URL (`/map`, `/dashboard`, `/people`, `/skills`, `/settings`) so a section can be linked
   to directly, reading the same brain file and a configured graph mirror when one
   is reachable:
-  - **Map.** Zoom, pan, pin a node by dragging, reset with a double-click. Search
+  - **Map.** Centred on the owner's person node, with everything else in rings by
+    hop distance; it settles and holds still (and freezes while hovering a node).
+    Zoom, pan, pin a node by dragging, reset to the rings with a double-click. Search
     highlights matches and dims the rest. Four multi-select filters with live
     counts: node types, realms, kinds from `props.kind`, and display toggles.
     Clicking a node shows its fields and every connection with direction, and

@@ -69,11 +69,37 @@ describe("step", () => {
   });
 });
 
+describe("step, around an ego", () => {
+  it("never moves a body further than the step cap in one frame", () => {
+    const bodies = [body("a", 0.5, 0), body("b", -0.5, 0)];
+    step({ bodies, edges: [], alpha: 1 });
+    expect(Math.abs(bodies[0]!.x - 0.5)).toBeLessThanOrEqual(FORCES.MAX_STEP + 1e-9);
+  });
+
+  it("pulls a body back toward its ring", () => {
+    const b: Body = { ...body("a", 400, 0), ring: 200 };
+    step({ bodies: [b], edges: [], alpha: 1 });
+    expect(b.x).toBeLessThan(400);
+    expect(b.x).toBeGreaterThan(200);
+  });
+
+  it("lets two distant bodies ignore each other", () => {
+    const a = { ...body("a", 0, 0), ring: 0 };
+    const b = { ...body("b", FORCES.CUTOFF * 3, 0), ring: 0 };
+    step({ bodies: [a, b], edges: [], alpha: 1 });
+    expect(a.x).toBe(0);
+  });
+});
+
 describe("radiusOf", () => {
   it("grows with degree and never collapses to nothing", () => {
     expect(radiusOf(0)).toBe(4);
     expect(radiusOf(9)).toBeCloseTo(4 + 3 * 2.2);
     expect(radiusOf()).toBe(4);
+  });
+
+  it("stops growing at the cap, so a hub never swallows its neighbours", () => {
+    expect(radiusOf(400)).toBe(radiusOf(49));
   });
 });
 

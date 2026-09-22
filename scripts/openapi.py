@@ -311,6 +311,10 @@ GET_ROUTES: dict[str, dict] = {
                     "by_realm": {"type": "object", "additionalProperties": {"type": "integer"}},
                     "by_kind": {"type": "object", "additionalProperties": {"type": "integer"}},
                     "backend": {"type": "string"},
+                    "ego": {"type": "string",
+                            "description": "The person node the owner setting resolves "
+                                           "to; the map lays itself out around it. "
+                                           "Empty when the owner names nobody."},
                     "boot": {"type": "string",
                              "description": "Identifies THIS process. The page reloads "
                                             "itself when it changes, so an open tab never "

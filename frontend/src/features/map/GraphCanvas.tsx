@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { GraphEdge, GraphNode } from "@/api/types";
 import { colorForType } from "@/lib/colors";
+import { applyLayout, egoLayout } from "@/lib/egoLayout";
 import { neighborsOf, radiusOf, step, toScreen, toWorld } from "@/lib/physics";
 import type { Body, Viewport } from "@/lib/physics";
 import { isHidden, isShaded, matchesQuery } from "@/lib/graphFilter";
@@ -20,9 +21,18 @@ export interface GraphCanvasProps {
   version: number;
   /** Set by the parent to recentre on a node the card linked to. */
   focusId?: string | null;
+  /** The node the layout is centred on; drawn with a halo, reset returns to it. */
+  ego?: string | null;
 }
 
-const LABEL_SCALE = 0.75;
+/**
+ * Labels appear only once zoomed in past this. The map opens below it, so the
+ * first thing you see is the shape, not four thousand overlapping titles; the
+ * ego, the hovered and the selected node are always named.
+ */
+const LABEL_SCALE = 1.4;
+/** How much of the shorter screen side the ego's first ring fills on open. */
+const FIT = 0.42;
 
 /**
  * The force-directed map.
@@ -43,6 +53,7 @@ export function GraphCanvas({
   onSelect,
   version,
   focusId,
+  ego = null,
 }: GraphCanvasProps) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const view = useRef<Viewport>({ scale: 1, tx: 0, ty: 0 });
@@ -51,6 +62,9 @@ export function GraphCanvas({
   // loading), and centring on a width of zero leaves the whole graph pinned to
   // the top-left corner with nothing to suggest why.
   const centred = useRef(false);
+  // Whether the view has been zoomed to the ego's neighbourhood yet. It waits
+  // for both a measured canvas and the first bodies.
+  const fitted = useRef(false);
   const alpha = useRef(1);
   const hover = useRef<string | null>(null);
   const drag = useRef<{ id: string | null; panning: boolean; x: number; y: number; moved: boolean }>({
@@ -63,16 +77,39 @@ export function GraphCanvas({
 
   // Live mirrors of the props the render loop reads, so the loop is started once
   // and never torn down and rebuilt on a filter change.
-  const state = useRef({ nodes, edges, filter, cascadeOff, query, selected });
-  state.current = { nodes, edges, filter, cascadeOff, query, selected };
+  const state = useRef({ nodes, edges, filter, cascadeOff, query, selected, ego });
+  state.current = { nodes, edges, filter, cascadeOff, query, selected, ego };
 
+  // A shape change is already laid out by the time it lands here (new nodes
+  // placed on their ring), so it needs only a gentle settle, not a shake-up.
   useEffect(() => {
-    alpha.current = Math.max(alpha.current, 0.6);
+    alpha.current = Math.max(alpha.current, version <= 1 ? 0.5 : 0.2);
   }, [version]);
 
+  // Keyed on what the cascade CONTAINS: every poll hands down a fresh Set, and
+  // reheating on identity is what kept the map twitching every few seconds.
+  const cascadeKey = useMemo(() => [...cascadeOff].sort().join("\n"), [cascadeOff]);
   useEffect(() => {
-    alpha.current = Math.max(alpha.current, 0.3);
-  }, [filter, cascadeOff]);
+    alpha.current = Math.max(alpha.current, 0.15);
+  }, [filter, cascadeKey]);
+
+  /** Zooms so the ego's first ring fills the view, centred on the ego. */
+  const fitToEgo = useCallback(() => {
+    const cv = canvas.current;
+    if (!cv || !cv.clientWidth || !cv.clientHeight || !bodies.size) return false;
+    let reach = 0;
+    for (const b of bodies.values()) if (b.hop === 1 && b.ring) reach = Math.max(reach, b.ring);
+    const side = Math.min(cv.clientWidth, cv.clientHeight);
+    const scale = reach ? Math.max(0.15, Math.min(1.5, (side * FIT) / reach)) : 1;
+    const origin = (ego && bodies.get(ego)) || { x: 0, y: 0 };
+    view.current = {
+      scale,
+      tx: cv.clientWidth / 2 - origin.x * scale,
+      ty: cv.clientHeight / 2 - origin.y * scale,
+    };
+    centred.current = true;
+    return true;
+  }, [bodies, ego]);
 
   // Centre on a node the detail card asked for, without disturbing the zoom.
   useEffect(() => {
@@ -154,13 +191,19 @@ export function GraphCanvas({
       const hiddenSet = new Set<string>();
       for (const n of ns) if (isHidden(n, f, off)) hiddenSet.add(n.id);
 
-      alpha.current = step({
-        bodies: [...bodies.values()],
-        edges: es,
-        alpha: alpha.current,
-        hidden: hiddenSet,
-        pinned: drag.current.id,
-      });
+      if (!fitted.current) fitted.current = fitToEgo();
+
+      // Hold still while the pointer is over a node: nothing should slide out
+      // from under a click.
+      if (!hover.current || drag.current.id) {
+        alpha.current = step({
+          bodies: [...bodies.values()],
+          edges: es,
+          alpha: alpha.current,
+          hidden: hiddenSet,
+          pinned: drag.current.id,
+        });
+      }
 
       ctx.clearRect(0, 0, cv.clientWidth, cv.clientHeight);
       const nodeById = new Map(ns.map((n) => [n.id, n]));
@@ -212,6 +255,15 @@ export function GraphCanvas({
         ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
         ctx.fillStyle = colorForType(n.type);
         ctx.fill();
+        if (n.id === state.current.ego) {
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = palette.hi;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, r + 4, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        }
         if (n.id === sel) {
           ctx.lineWidth = 3;
           ctx.strokeStyle = "#fff";
@@ -224,7 +276,8 @@ export function GraphCanvas({
         // A shaded node keeps its dot and its edges — the shape it was kept for —
         // but not its label: a few thousand dimmed labels over the handful you
         // isolated is noise. Selected, hovered and search hits keep theirs.
-        const named = n.id === sel || n.id === hover.current || (!!q && m && !dim);
+        const named =
+          n.id === sel || n.id === hover.current || n.id === state.current.ego || (!!q && m && !dim);
         if (named || (showLabels && !isShaded(n, f, off))) {
           ctx.globalAlpha = dim ? 0.3 : 1;
           ctx.fillStyle = palette.fg;
@@ -242,7 +295,7 @@ export function GraphCanvas({
       window.removeEventListener("resize", resize);
       ro?.disconnect();
     };
-  }, [bodies]);
+  }, [bodies, fitToEgo]);
 
   // ---- interaction ---------------------------------------------------------
   const onMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -305,12 +358,12 @@ export function GraphCanvas({
   };
 
   const onDoubleClick = () => {
-    const cv = canvas.current;
-    if (!cv) return;
-    view.current = { scale: 1, tx: cv.clientWidth / 2, ty: cv.clientHeight / 2 };
-    centred.current = true;
-    for (const b of bodies.values()) b.fixed = false;
-    alpha.current = 1;
+    // Reset = back to the ego layout: pins released, every node on its ring,
+    // the view on the ego. Not a reheat to full heat, which scrambles the map.
+    const { nodes: ns, edges: es, ego: centre } = state.current;
+    applyLayout(bodies, egoLayout(ns, es, centre), true);
+    fitted.current = fitToEgo();
+    alpha.current = 0.3;
     onSelect(null);
   };
 

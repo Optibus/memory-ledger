@@ -102,6 +102,7 @@ export function MapSection() {
         onSelect={setSelected}
         version={graph.version}
         focusId={focusId}
+        ego={graph.ego}
       />
       <MapToolbar
         query={query}
@@ -129,7 +130,7 @@ export function MapSection() {
         />
       ) : null}
       <Panel className="ml-map__hint">
-        scroll = zoom · drag bg = pan · drag node = pin · click = inspect · dbl-click bg = reset
+        scroll = zoom · drag bg = pan · drag node = pin · click = inspect · dbl-click bg = reset around you
       </Panel>
       {graph.error ? (
         <div className="ml-map__err">

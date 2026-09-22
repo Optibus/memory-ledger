@@ -120,6 +120,13 @@ paint on one `requestAnimationFrame` loop against refs; React re-renders it only
 when the data or the filters change. Pushing 800 nodes through the virtual DOM
 sixty times a second is the one thing a canvas exists to avoid.
 
+**The layout is placed, not discovered.** `lib/egoLayout.ts` puts the owner's
+node (`meta.ego`) at the origin and every other node on a ring by hop distance,
+before any force runs; `lib/physics.ts` then only corrects. Random seeding plus
+all-pairs repulsion turned a few thousand nodes into a hairball that never stopped
+moving. Reheats are keyed on what changed, never on identity: every poll hands down
+fresh arrays and Sets, and reheating on those kept the map twitching.
+
 **The section is in the URL.** `/map`, `/dashboard`, `/people`, `/skills`, `/settings`, on a
 hash router. A reload lands where you were and a link to the dashboard is a link
 to the dashboard — neither was true of the old page, which kept the section in a

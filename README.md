@@ -452,7 +452,9 @@ done
 A dependency-free local server serves one page with **five sections**, behind a
 hamburger menu on the left (`m` toggles it):
 
-- **Map** — the live force-directed graph: zoom/pan, a search you can clear, and
+- **Map** — the live graph, centred on you: your person node in the middle and
+  everything else in rings by how many hops away it is, settling once and then
+  holding still so a node can be clicked. Zoom/pan, a search you can clear, and
   one multi-select dropdown per facet (node types / realms / kinds / display),
   each with its own **all** and **none**. Under Display, **shade instead of hide**
   changes what filtering *looks like*: filtered-out nodes stay on the map, dimmed

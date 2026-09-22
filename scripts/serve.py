@@ -435,7 +435,21 @@ def _neo4j_payload():
 def graph_payload() -> dict:
     """Prefer the neo4j master; fall back to the local SQLite mirror if neo4j is
     unreachable so the map still works offline."""
-    return _neo4j_payload() or _sqlite_payload()
+    payload = _neo4j_payload() or _sqlite_payload()
+    payload["meta"]["ego"] = _ego_id({n["id"] for n in payload["nodes"]})
+    return payload
+
+
+def _ego_id(ids: set) -> str:
+    """The person node the owner setting names — the map centres its layout on it.
+
+    Empty when the owner resolves to nobody (or to several people): the map then
+    falls back to its best-connected node rather than guessing between names."""
+    try:
+        hit = graph.resolve_person(graph.connect(), graph.owner())
+    except Exception:
+        return ""
+    return hit["id"] if hit.get("ok") and hit["id"] in ids else ""
 
 
 # ---------------------------------------------------------------------------

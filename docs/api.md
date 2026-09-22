@@ -115,7 +115,8 @@ dashboard filters over. A realm with 40 nodes and 0 open tasks is real, and the
 chip says so rather than showing a number that filters down to nothing.
 
 Nodes in `/api/graph` each carry a `realm`, and `meta.by_realm` gives the totals —
-that is what drives the map's realm legend.
+that is what drives the map's realm legend. `meta.ego` is the id of the owner's
+person node, the centre the map lays itself out around.
 
 The dashboard views accept the same parameters as the CLI, as query string:
 
@@ -339,8 +340,14 @@ If a facet ever renders "not sent by this server", that is this problem with
 
 Two tabs over one dataset:
 
-- **Map** — a hand-written force simulation (`alpha *= 0.985` per frame, so it
-  needs a moment to settle). Legend chips filter by **node type** and by
+- **Map** — laid out around **you**: `meta.ego` names the person node the
+  `owner` setting resolves to (empty if it names nobody, and the map falls back to
+  the best-connected node). That node is pinned at the centre and every other node
+  starts on a ring by its hop distance from it, so a hand-written force simulation
+  only has small corrections to make — local repulsion, a pull back to each ring,
+  degree-weakened springs, a per-frame step cap. It settles in a moment and then
+  holds still; a poll places only nodes that are new, hovering a node freezes it,
+  and a double-click on the background resets to the ring layout. Legend chips filter by **node type** and by
   **realm** and **kind**, independently, each with its own `all` reset; clicking a node shows
   its neighbourhood. High-volume types (`channel`, `capture`) are worth hiding to
   make the rest legible.
