@@ -2142,6 +2142,413 @@ def cmd_export_skills(args):
          "hint": "copy this directory to the other machine and run ingest-skills"})
 
 
+# ---------------------------------------------------------------------------
+# bundles: a selection of skills and rules, as one zip you can hand to someone
+#
+# `export-skills` moves a WHOLE tree to a directory, which is the right shape
+# for mirroring two machines and the wrong one for "send me your three review
+# skills". A bundle is the selective route: pick the items, get one file.
+#
+# The zip holds a directory per kind (`skills/`, `rules/`) and an IMPORT PLAN.
+# The plan is the reason this is not just a zip of the export directory: the
+# order files land in decides whether the dependency tree survives. A skill
+# read before the rule it honors links to nothing, and a skill read before the
+# skill it requires lands with a dangling `requires`. The plan states the one
+# order in which every link can be made, so the importer never has to guess and
+# two importers cannot guess differently.
+# ---------------------------------------------------------------------------
+
+BUNDLE_FORMAT = "memory-ledger-bundle"
+BUNDLE_VERSION = 1
+BUNDLE_PLAN = "import-plan.json"
+# one directory per kind, named for the kind — the whole layout of a bundle
+BUNDLE_DIRS = {"skill": "skills", "rule": "rules"}
+
+
+def bundles_dir() -> Path:
+    """Where exported bundles land, and where an uploaded one is staged. Inside
+    the brain's home rather than a system temp dir: an export is a file the
+    person is meant to find again after the browser has forgotten it."""
+    return home_dir() / "bundles"
+
+
+def _bundle_deps(decl: dict) -> dict:
+    """The skill ids one skill declares, per relation, normalised to node ids."""
+    out_deps = {}
+    for rel, key in (("requires", "requires"), ("waits-for", "waits_for"),
+                     ("enriched-by", "enriched_by")):
+        ids = []
+        for token in decl_tokens(decl.get(rel) or decl.get(key)):
+            ids.append(token if token.startswith("skill_") else f"skill_{slugify(token)}")
+        out_deps[key] = ids
+    return out_deps
+
+
+def _bundle_order(items: dict) -> tuple:
+    """Every path in the order it can be imported, and the cycles that forced a
+    guess.
+
+    Rules first, unconditionally: a rule depends on nothing and a skill that
+    lands before the rule it honors links to nothing. Then the skills, each
+    after the skills it declares. A cycle cannot be ordered — it is reported
+    rather than hidden, because an import that silently picked one arbitrary
+    entry point is an import nobody can reproduce."""
+    rules = sorted(p for p, it in items.items() if it["kind"] == "rule")
+    skills = {it["id"]: p for p, it in items.items() if it["kind"] == "skill"}
+    order, state, cycles = list(rules), {}, []
+
+    def visit(sid, trail):
+        if state.get(sid) == "done":
+            return
+        if state.get(sid) == "open":                 # back edge: a real cycle
+            cycles.append(trail[trail.index(sid):] + [sid])
+            return
+        state[sid] = "open"
+        for dep in items[skills[sid]]["depends_on"]:
+            if dep in skills:
+                visit(dep, trail + [sid])
+            # a dependency outside the bundle is the exporter's finding, not the
+            # importer's — it is already reported as `missing_skills`
+        state[sid] = "done"
+        order.append(skills[sid])
+
+    for sid in sorted(skills):
+        visit(sid, [])
+    return order, cycles
+
+
+def build_bundle(con, skill_ids=(), rule_ids=(), dest: Path = None) -> dict:
+    """Write the selected skills and rules to one zip and return the report.
+
+    Rules a selected skill honors travel with it even when they were not
+    picked, for the reason §5a gives the directory export: a skill that arrives
+    without its rules is accountable to nothing, which is the failure the whole
+    shape exists to prevent. A skill it REQUIRES is not pulled in the same way —
+    that would quietly export something the person did not choose — but every
+    one that did not travel is named in the report, so the gap is visible before
+    the zip is sent rather than after it is imported."""
+    import zipfile
+
+    picked_skills = [s for s in dict.fromkeys(skill_ids) if s]
+    picked_rules = [r for r in dict.fromkeys(rule_ids) if r]
+    items, files, missing_rules = {}, {}, []
+
+    in_bundle_rules = set()
+    for sid in picked_skills:
+        row = con.execute("SELECT * FROM nodes WHERE id=? AND type='skill'",
+                          (sid,)).fetchone()
+        if not row:
+            return {"ok": False, "error": f"no skill {sid}"}
+        props = json.loads(row["props"] or "{}")
+        md, rules = skill_markdown(con, sid)
+        _kind, decl = _skill_declarations(con, row)
+        name = slugify(props.get("name") or sid[len("skill_"):] or row["title"])
+        path = f"{BUNDLE_DIRS['skill']}/{name}/SKILL.md"
+        deps = _bundle_deps(decl)
+        files[path] = md
+        items[path] = {
+            "kind": "skill", "id": sid, "name": name, "title": row["title"],
+            "description": props.get("description") or props.get("triggers", ""),
+            "skill_kind": props.get("kind", "learned"),
+            "picked": True, "rules": rules,
+            "depends_on": deps["requires"],
+            "waits_for": deps["waits_for"], "enriched_by": deps["enriched_by"]}
+        in_bundle_rules.update(rules)
+
+    for rid in dict.fromkeys(list(picked_rules) + sorted(in_bundle_rules)):
+        row = con.execute("SELECT * FROM nodes WHERE id=? AND type=?",
+                          (rid, RULE_TYPE)).fetchone()
+        if not row:
+            missing_rules.append(rid)
+            continue
+        props = json.loads(row["props"] or "{}")
+        path = f"{BUNDLE_DIRS['rule']}/{rid}.md"
+        files[path] = rule_markdown(con, rid)
+        items[path] = {
+            "kind": "rule", "id": rid, "title": row["title"],
+            "description": props.get("scenario", ""),
+            "source": props.get("source", "user"),
+            "non_negotiable": bool(props.get("non_negotiable")),
+            "picked": rid in picked_rules, "depends_on": []}
+
+    if not files:
+        return {"ok": False, "error": "nothing selected to export"}
+
+    have = {it["id"] for it in items.values() if it["kind"] == "skill"}
+    missing_skills = sorted({d for it in items.values() if it["kind"] == "skill"
+                             for d in it["depends_on"] if d not in have})
+    order, cycles = _bundle_order(items)
+
+    plan = {"format": BUNDLE_FORMAT, "version": BUNDLE_VERSION,
+            "created": now(), "realm": DEFAULT_REALM,
+            "counts": {"skills": sum(1 for i in items.values() if i["kind"] == "skill"),
+                       "rules": sum(1 for i in items.values() if i["kind"] == "rule")},
+            # THE point of the file: read these paths in this order and every
+            # link the bundle carries can be made as it lands
+            "order": order,
+            "items": items,
+            "missing_skills": missing_skills,
+            "missing_rules": sorted(missing_rules),
+            "cycles": cycles}
+
+    dest = Path(dest).expanduser() if dest else (
+        bundles_dir() / f"skills-{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip")
+    if dest.suffix != ".zip":
+        dest = dest.with_suffix(".zip")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr(BUNDLE_PLAN, json.dumps(plan, indent=2, sort_keys=True) + "\n")
+        for path in order:
+            z.writestr(path, files[path])
+
+    return {"ok": True, "path": str(dest), "name": dest.name,
+            "bytes": dest.stat().st_size, "plan": plan,
+            "skills": plan["counts"]["skills"], "rules": plan["counts"]["rules"],
+            "missing_skills": missing_skills, "missing_rules": sorted(missing_rules),
+            "cycles": cycles}
+
+
+def cmd_export_bundle(args):
+    con = connect()
+    skills, rules = list(args.skill or []), list(args.rule or [])
+    if args.spec:
+        spec = json.loads(Path(args.spec).expanduser().read_text(encoding="utf-8"))
+        skills += [str(s) for s in spec.get("skills", [])]
+        rules += [str(r) for r in spec.get("rules", [])]
+    out(build_bundle(con, skills, rules, Path(args.out).expanduser() if args.out else None))
+
+
+def _safe_member(name: str) -> bool:
+    """Is this a member name a bundle is allowed to contain?
+
+    A zip is an untrusted file and its PLAN is untrusted too — the plan names
+    the members to read, so a hand-made bundle can list anything it likes there.
+    A name is only accepted when it sits inside one of the bundle's own kind
+    directories and walks nowhere: no absolute path, no `..` segment, no drive
+    or home prefix. Everything else is dropped before it is read, so no later
+    step can be handed a name that points outside the archive."""
+    if not name or name.startswith(("/", "\\", "~")) or ":" in name:
+        return False
+    parts = name.replace("\\", "/").split("/")
+    if any(p in ("", ".", "..") for p in parts):
+        return False
+    return parts[0] in set(BUNDLE_DIRS.values())
+
+
+def _read_bundle(path: Path) -> tuple:
+    """(plan, {path: text}) out of a bundle zip, or (None, error).
+
+    Every member is checked against the plan before it is read. A zip is an
+    untrusted file: a member named `../../.ssh/authorized_keys` is a real attack
+    on any importer that joins member names onto a directory, and nothing here
+    ever touches the filesystem with a name that came out of the archive."""
+    import zipfile
+    try:
+        with zipfile.ZipFile(path) as z:
+            names = set(z.namelist())
+            if BUNDLE_PLAN not in names:
+                return None, f"not a bundle: no {BUNDLE_PLAN} inside"
+            plan = json.loads(z.read(BUNDLE_PLAN).decode("utf-8"))
+            if plan.get("format") != BUNDLE_FORMAT:
+                return None, f"unknown bundle format: {plan.get('format')!r}"
+            texts = {}
+            for member in plan.get("order", []):
+                if member not in plan.get("items", {}) or member not in names:
+                    continue
+                if not _safe_member(member):
+                    continue
+                texts[member] = z.read(member).decode("utf-8", errors="replace")
+    except (OSError, ValueError, zipfile.BadZipFile) as exc:
+        return None, f"could not read the bundle: {exc}"
+    return (plan, texts), None
+
+
+def inspect_bundle(con, path: Path) -> dict:
+    """What is in a bundle and what it would collide with, changing nothing.
+
+    The importer's dialog is built from this: the person chooses per item, and
+    cannot choose sensibly without being told which items this brain already
+    holds — an `update` and a `replace` differ only for those."""
+    got, err = _read_bundle(path)
+    if err:
+        return {"ok": False, "error": err}
+    plan, texts = got
+    rows = []
+    for member in plan.get("order", []):
+        it = dict(plan.get("items", {}).get(member) or {})
+        if not it.get("id"):
+            continue
+        it["path"] = member
+        it["readable"] = member in texts
+        row = con.execute("SELECT title, props FROM nodes WHERE id=?",
+                          (it["id"],)).fetchone()
+        it["exists"] = bool(row)
+        if row:
+            it["existing_title"] = row["title"]
+            props = json.loads(row["props"] or "{}")
+            it["existing_kind"] = props.get("kind") or props.get("source", "")
+        rows.append(it)
+    return {"ok": True, "path": str(path), "plan": plan, "items": rows,
+            "counts": plan.get("counts", {}),
+            "missing_skills": plan.get("missing_skills", []),
+            "cycles": plan.get("cycles", [])}
+
+
+def cmd_inspect_bundle(args):
+    out(inspect_bundle(connect(), Path(args.zip).expanduser()))
+
+
+def _import_rule_text(con, rid: str, text: str, mode: str) -> str:
+    """Land one rule from a bundle. Returns what was done, in one word."""
+    meta, body = _parse_frontmatter(text)
+    rid = meta.get("id") or rid
+    if not meta.get("title"):
+        return "skipped (no title)"
+    exists = bool(con.execute("SELECT 1 FROM nodes WHERE id=?", (rid,)).fetchone())
+    if exists and mode == "ignore":
+        return "kept"
+    if exists and mode == "replace":
+        con.execute("DELETE FROM nodes WHERE id=?", (rid,))
+        con.commit()
+    res = api_add_rule(
+        con, title=meta["title"], body=body,
+        scenario=meta.get("scenario", ""),
+        source=meta.get("source", "user") if meta.get("source") in RULE_PRECEDENCE else "user",
+        section=meta.get("section", ""),
+        non_negotiable=str(meta.get("non_negotiable", "")).lower() == "true",
+        overrides=meta.get("overrides", ""),
+        realm=meta.get("realm", ""), node_id=rid,
+        # the gap belongs to whoever authored it on the other machine, and
+        # dropping the rule here loses it (§5a)
+        require_contract=False)
+    if not res.get("ok"):
+        return f"failed: {res.get('error')}"
+    return "replaced" if (exists and mode == "replace") else (
+        "updated" if exists else "created")
+
+
+def import_bundle(con, path: Path, select=None, default_mode="update",
+                  realm="shared") -> dict:
+    """Apply a bundle, in the order its plan states.
+
+    `select` is {node id: mode}, where mode is update | replace | ignore. An id
+    the caller never mentioned is imported when it is NEW and left alone when it
+    already exists: a bundle names dependencies the person did not tick, and
+    creating those is what makes the tree link, while overwriting something they
+    did not ask about is not a decision an importer gets to make."""
+    got, err = _read_bundle(path)
+    if err:
+        return {"ok": False, "error": err}
+    plan, texts = got
+    select = {str(k): str(v) for k, v in (select or {}).items()}
+    applied, touched = [], []
+
+    for member in plan.get("order", []):
+        it = plan.get("items", {}).get(member) or {}
+        nid, text = it.get("id"), texts.get(member)
+        if not nid or text is None:
+            continue
+        exists = bool(con.execute("SELECT 1 FROM nodes WHERE id=?", (nid,)).fetchone())
+        mode = select.get(nid) or (default_mode if nid in select else
+                                   ("update" if not exists else "ignore"))
+        if mode == "ignore" and exists:
+            applied.append({"id": nid, "kind": it.get("kind"), "action": "ignored"})
+            continue
+        if it.get("kind") == "rule":
+            action = _import_rule_text(con, nid, text, mode)
+        else:
+            if exists and mode == "replace":
+                con.execute("DELETE FROM nodes WHERE id=?", (nid,))
+                con.commit()
+            # written to the learned tree, then read back by the same parser the
+            # directory ingest uses — one reader of a SKILL.md, not two
+            # slugified, never used raw: `name` is a value out of the bundle's
+            # plan, and a plan that says `../../..` would otherwise choose where
+            # this file lands
+            name = slugify(it.get("name") or nid[len("skill_"):])
+            dest = learned_skills_dir() / name / "SKILL.md"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(text, encoding="utf-8")
+            _nid, action, missing = _ingest_skill_file(
+                con, dest, it.get("skill_kind") or "learned", realm)
+            if exists and mode == "replace":
+                action = "replaced"
+            if missing:
+                applied.append({"id": nid, "kind": "skill", "action": action,
+                                "rules_not_found": missing})
+                touched.append(nid)
+                continue
+        applied.append({"id": nid, "kind": it.get("kind"), "action": action})
+        if not str(action).startswith(("failed", "skipped", "kept", "ignored")):
+            touched.append(nid)
+
+    con.commit()
+    sync = _after_write(con, nodes=touched) if touched else None
+    tree = sync_skill_tree(con, realm) if touched else None
+    return {"ok": True, "count": len(applied), "applied": applied,
+            "tree": tree, "sync": sync,
+            "missing_skills": plan.get("missing_skills", [])}
+
+
+def cmd_import_bundle(args):
+    select = {}
+    if args.spec:
+        spec = json.loads(Path(args.spec).expanduser().read_text(encoding="utf-8"))
+        select = spec.get("select") or spec
+    for pair in (args.select or []):
+        nid, _, mode = pair.partition(":")
+        select[nid.strip()] = (mode.strip() or "update")
+    out(import_bundle(connect(), Path(args.zip).expanduser(), select,
+                      args.mode, getattr(args, "realm", None) or "shared"))
+
+
+def delete_contracts(con, ids=(), force=False) -> dict:
+    """Delete skill and rule nodes outright.
+
+    §2a's "archive, never delete" is about WORK — a finished task is history
+    worth keeping. A contract is not history: a skill nobody should fire again
+    has to actually stop firing, and a rule left in the corpus keeps binding
+    every request. So this deletes, and the edges go with it (ON DELETE CASCADE).
+
+    A built-in is refused without `force`, because deleting one only empties the
+    DB row: the file it was ingested from is still on disk and the next
+    `ingest-skills` brings it straight back. That is a delete that looks like it
+    worked and did not, which is worse than a refusal."""
+    deleted, refused, absent = [], [], []
+    for nid in dict.fromkeys(str(i) for i in ids if i):
+        row = con.execute("SELECT id,type,title,props FROM nodes WHERE id=?",
+                          (nid,)).fetchone()
+        if not row or row["type"] not in ("skill", RULE_TYPE):
+            absent.append(nid)
+            continue
+        props = json.loads(row["props"] or "{}")
+        builtin = (props.get("kind") == "plugin" if row["type"] == "skill"
+                   else props.get("source") == "plugin")
+        if builtin and not force:
+            refused.append({"id": nid, "title": row["title"],
+                            "why": "built-in: it ships as a file and would come "
+                                   "back on the next ingest-skills"})
+            continue
+        con.execute("DELETE FROM nodes WHERE id=?", (nid,))
+        deleted.append({"id": nid, "type": row["type"], "title": row["title"],
+                        "builtin": builtin})
+    con.commit()
+    sync = _after_write(con, del_nodes=[d["id"] for d in deleted]) if deleted else None
+    tree = sync_skill_tree(con, "shared") if deleted else None
+    return {"ok": not refused or bool(deleted), "deleted": deleted,
+            "count": len(deleted), "refused": refused, "not_found": absent,
+            "tree": tree, "sync": sync}
+
+
+def cmd_del_contracts(args):
+    ids = list(args.id or [])
+    if args.spec:
+        spec = json.loads(Path(args.spec).expanduser().read_text(encoding="utf-8"))
+        ids += [str(x) for x in (spec.get("ids") or
+                                 spec.get("skills", []) + spec.get("rules", []))]
+    out(delete_contracts(connect(), ids, args.force))
+
+
 def _plugin_root() -> Path:
     """The plugin checkout that ships the base layer (engine lives in ./scripts)."""
     return Path(__file__).resolve().parent.parent
@@ -5101,6 +5508,47 @@ def build_parser():
                         "already ship as files)")
     a.add_argument("--no-rules", dest="no_rules", action="store_true",
                    help="skills only; leave the rules behind")
+
+    a = sub.add_parser("export-bundle", description=(
+        "Write SELECTED skills and rules to one zip: a directory per kind plus an "
+        "import-plan.json naming the order they can be read back in. export-skills "
+        "moves a whole tree to a folder; this is the route for handing a few "
+        "contracts to someone else."))
+    a.set_defaults(func=cmd_export_bundle)
+    a.add_argument("--skill", action="append", help="skill node id (repeatable)")
+    a.add_argument("--rule", action="append", help="rule node id (repeatable)")
+    a.add_argument("--spec", help="JSON file with {skills:[ids], rules:[ids]} — for "
+                                  "selections too long to pass as flags")
+    a.add_argument("--out", help="destination zip (default: <home>/bundles/skills-<stamp>.zip)")
+
+    a = sub.add_parser("inspect-bundle", description=(
+        "What is inside a bundle and which of it this brain already holds. Reads "
+        "only — nothing is written, so it is safe to run on a zip you were sent."))
+    a.set_defaults(func=cmd_inspect_bundle)
+    a.add_argument("--zip", required=True, help="the bundle to look at")
+
+    a = sub.add_parser("import-bundle", description=(
+        "Apply a bundle in its plan's order. An item already in this brain is "
+        "left alone unless you name it: update refreshes it, replace deletes it "
+        "first, ignore skips it."))
+    a.set_defaults(func=cmd_import_bundle)
+    a.add_argument("--zip", required=True)
+    a.add_argument("--select", action="append", metavar="ID[:MODE]",
+                   help="import this id, with mode update|replace|ignore (repeatable)")
+    a.add_argument("--spec", help="JSON file with {select:{id: mode}}")
+    a.add_argument("--mode", choices=["update", "replace", "ignore"], default="update",
+                   help="mode for selected ids that did not name one (default update)")
+    a.add_argument("--realm", default="shared")
+
+    a = sub.add_parser("del-contracts", description=(
+        "Delete skill and rule nodes. §2a's archive-never-delete is about work, "
+        "not contracts: a skill nobody should fire again has to stop firing. A "
+        "built-in needs --force, since its file would re-ingest it anyway."))
+    a.set_defaults(func=cmd_del_contracts)
+    a.add_argument("--id", action="append", help="node id (repeatable)")
+    a.add_argument("--spec", help="JSON file with {ids:[...]}")
+    a.add_argument("--force", action="store_true",
+                   help="also delete built-ins, knowing ingest-skills brings them back")
 
     a = sub.add_parser("match-skills"); a.set_defaults(func=cmd_match_skills)
     a.add_argument("query", nargs="?", default="")

@@ -37,6 +37,11 @@ INDEX = HERE / "index.html"
 # is unauthenticated, so bind to 127.0.0.1 or pass --no-write when exposing it.
 WRITABLE = True
 
+# An uploaded bundle is a zip of markdown, so a few MB is already generous. The
+# cap exists because the upload arrives base64-encoded in one JSON body, which is
+# read into memory whole: without a ceiling a single POST can exhaust the process.
+MAX_BUNDLE_BYTES = 32 * 1024 * 1024
+
 # Identifies THIS process. The page polls it and reloads itself when it changes,
 # so a restart carries the new page to an already-open tab.
 BOOT = f"{os.getpid()}-{int(time.time())}"
@@ -410,6 +415,8 @@ class Handler(BaseHTTPRequestHandler):
                     # bare token the person is expected to already recognise
                     "node_types": graph.node_type_catalog(con),
                     "areas": graph.area_titles(con)}), "application/json")
+            elif path == "/api/bundle":  # download an exported bundle
+                self._bundle(parse_qs(parsed.query))
             elif path == "/api/rule":    # one rule in full, for the skill drawer
                 rid = (parse_qs(parsed.query).get("id") or [""])[0]
                 con = graph.connect()
@@ -513,6 +520,27 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._send(200, payload, "application/json")
 
+    def _bundle(self, qs):
+        """Hand back an exported bundle as a download.
+
+        `name` is reduced to a BARE FILENAME before it is used. The query string
+        is client input, and `?name=../graph.db` on a route that joins it onto a
+        directory would serve the whole brain to anyone who can reach the port."""
+        name = Path((qs.get("name") or [""])[0]).name
+        path = graph.bundles_dir() / name
+        if not name.endswith(".zip") or not path.is_file():
+            self._send(404, json.dumps({"ok": False, "error": "no such bundle"}),
+                       "application/json")
+            return
+        data = path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/zip")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
+
     def _search(self, term, q):
         limit = 12
         raw = (q.get("limit") or [""])[0]
@@ -554,6 +582,10 @@ class Handler(BaseHTTPRequestHandler):
             "/api/create-skill": self._create_skill,
             "/api/export-skills": self._export_skills,
             "/api/ingest-skills": self._ingest_skills,
+            "/api/export-bundle": self._export_bundle,
+            "/api/upload-bundle": self._upload_bundle,
+            "/api/import-bundle": self._import_bundle,
+            "/api/delete-contracts": self._delete_contracts,
         }
         handler = routes.get(path)
         try:
@@ -860,6 +892,119 @@ class Handler(BaseHTTPRequestHandler):
         if d:
             cmd += ["--dir", d]
         return self._graph_cmd(cmd)
+
+    # ------------------------------------------------- bundles (§5a, selective)
+    # The directory export above moves a WHOLE tree between two machines you own.
+    # A bundle is the other half of the same idea: a selection, as one file, for
+    # handing to someone else. Everything here goes through graph.py out of
+    # process for the same reason export-skills does — a long zip or a big import
+    # must not be able to wedge the server's own connection.
+    #
+    # The selection travels as a JSON spec file rather than as argv: a person can
+    # tick a hundred rules, and a hundred --rule flags is an argv length limit
+    # waiting to be hit on the one export that mattered.
+
+    def _spec_file(self, payload):
+        import secrets
+        d = graph.bundles_dir() / "incoming"
+        d.mkdir(parents=True, exist_ok=True)
+        p = d / f"spec-{secrets.token_hex(8)}.json"
+        p.write_text(json.dumps(payload), encoding="utf-8")
+        return p
+
+    @staticmethod
+    def _ids(data, key, limit=2000):
+        return [str(x)[:200] for x in (data.get(key) or [])[:limit]
+                if isinstance(x, str) and x.strip()]
+
+    def _export_bundle(self, data):
+        spec = self._spec_file({"skills": self._ids(data, "skills"),
+                                "rules": self._ids(data, "rules")})
+        try:
+            res = self._graph_cmd(["export-bundle", "--spec", str(spec)])
+        finally:
+            spec.unlink(missing_ok=True)
+        if res.get("ok"):
+            from urllib.parse import quote
+            # the page offers a download; the path is kept too, because the
+            # point of a bundle is often to copy it, not to re-download it
+            res["download"] = "/api/bundle?name=" + quote(res["name"])
+        return res
+
+    def _staged(self, token):
+        """The staged upload a token names, or None.
+
+        The token is matched against a strict pattern and then used as a BARE
+        FILENAME inside one directory. A token is a value a client sends, and a
+        client that sends `../../graph.db` must not be able to name a file
+        outside the staging area."""
+        if not re.fullmatch(r"[0-9a-f]{8,64}", token or ""):
+            return None
+        p = graph.bundles_dir() / "incoming" / f"{token}.zip"
+        return p if p.is_file() else None
+
+    def _upload_bundle(self, data):
+        """Stage an uploaded zip and report what is in it. Writes nothing to the
+        graph: the person picks per item first, and cannot pick without being
+        told which items this brain already holds."""
+        import base64, binascii, secrets
+        raw = data.get("data")
+        if not isinstance(raw, str) or not raw:
+            return {"ok": False, "error": "no file was sent"}
+        try:
+            blob = base64.b64decode(raw.split(",")[-1], validate=True)
+        except (binascii.Error, ValueError):
+            return {"ok": False, "error": "the upload was not valid base64"}
+        if len(blob) > MAX_BUNDLE_BYTES:
+            return {"ok": False,
+                    "error": f"that bundle is larger than "
+                             f"{MAX_BUNDLE_BYTES // (1024 * 1024)}MB"}
+        token = secrets.token_hex(16)
+        d = graph.bundles_dir() / "incoming"
+        d.mkdir(parents=True, exist_ok=True)
+        path = d / f"{token}.zip"
+        path.write_bytes(blob)
+        res = self._graph_cmd(["inspect-bundle", "--zip", str(path)])
+        if not res.get("ok"):
+            path.unlink(missing_ok=True)
+            return res
+        res["token"] = token
+        res["filename"] = self._str(data, "filename", 200)
+        return res
+
+    def _import_bundle(self, data):
+        path = self._staged(self._str(data, "token", 64))
+        if not path:
+            return {"ok": False,
+                    "error": "that upload is no longer staged — choose the file again"}
+        select = {}
+        raw = data.get("select")
+        if isinstance(raw, dict):
+            for k, v in list(raw.items())[:2000]:
+                if isinstance(k, str) and v in ("update", "replace", "ignore"):
+                    select[k[:200]] = v
+        if not select:
+            return {"ok": False, "error": "nothing was selected to import"}
+        spec = self._spec_file({"select": select})
+        try:
+            res = self._graph_cmd(["import-bundle", "--zip", str(path),
+                                   "--spec", str(spec)])
+        finally:
+            spec.unlink(missing_ok=True)
+            # the staged zip has served its purpose; leaving it behind would
+            # accumulate every bundle anyone ever previewed
+            path.unlink(missing_ok=True)
+        return res
+
+    def _delete_contracts(self, data):
+        spec = self._spec_file({"ids": self._ids(data, "ids")})
+        try:
+            cmd = ["del-contracts", "--spec", str(spec)]
+            if data.get("force"):
+                cmd.append("--force")
+            return self._graph_cmd(cmd)
+        finally:
+            spec.unlink(missing_ok=True)
 
     @staticmethod
     def _graph_cmd(argv, timeout=300):

@@ -788,6 +788,283 @@ def test_home_adoption_keeps_the_data():
         shutil.rmtree(fake, ignore_errors=True)
 
 
+# ------------------------------------------------------- bundles and deletion
+# A bundle is a SELECTION moved as one file, and the whole thing turns on the
+# import plan: the order the items can be read back in. An export that writes a
+# skill before the rule it honors, or before the skill it requires, produces a
+# zip that imports without complaint and arrives wired to nothing — the same
+# silent-lie failure §5 exists to prevent, one layer out.
+def test_page_script_parses():
+    """The page's inline script, checked as a whole.
+
+    index.html has one script block and no build step, so a duplicate `const` or
+    a stray brace anywhere in it kills EVERY handler on the page at once — and it
+    does so silently: nothing throws where you are looking, the buttons simply
+    stop responding. A syntax check is the only cheap way to see that before a
+    person does. Skipped when node is not installed; it is a guard, not a
+    dependency."""
+    print("\n== the page's own script still parses ==")
+    node = shutil.which("node")
+    if not node:
+        print("  SKIP  node not installed")
+        return
+    import re
+    html = (ROOT / "viz" / "index.html").read_text(encoding="utf-8")
+    blocks = re.findall(r"<script>(.*?)</script>", html, re.S)
+    ck("index.html carries its script inline", bool(blocks), str(len(blocks)))
+    src = Path(tempfile.mkdtemp(prefix="second-brain-js-")) / "page.js"
+    src.write_text("\n".join(blocks), encoding="utf-8")
+    pr = subprocess.run([node, "--check", str(src)], capture_output=True, text=True)
+    # node prints the offending line, a caret, the SyntaxError, then a stack and
+    # its own version banner. The SyntaxError line is the only one worth showing.
+    why = next((l for l in (pr.stderr or "").splitlines() if "Error" in l), "")
+    ck("and it parses — a dead script takes every handler with it",
+       pr.returncode == 0, why.strip())
+    shutil.rmtree(src.parent, ignore_errors=True)
+
+
+def test_bundle_round_trip():
+    print("\n== a selection travels as one zip, and lands wired ==")
+    import zipfile
+    import graph
+    con = graph.connect()
+
+    # base <- mid <- top, so a correct plan has to order three levels, and the
+    # rule ahead of all of them
+    graph.api_add_rule(con, title="Bundle rule", scenario="bundling",
+                       sections=FULL_RULE, node_id="rule_user_bundle-rule")
+    for name, title, req in (("bun-base", "Bundle base", ""),
+                             ("bun-mid", "Bundle mid", "bun-base"),
+                             ("bun-top", "Bundle top", "bun-mid")):
+        graph.api_add_skill(con, name=name, title=title, sections=FULL_SKILL,
+                            decl={"requires": [req]} if req else {},
+                            rules=["rule_user_bundle-rule"] if name == "bun-top" else [])
+
+    zpath = Path(BRAIN) / "out" / "sel.zip"
+    res = graph.build_bundle(con, ["skill_bun-top", "skill_bun-mid", "skill_bun-base"],
+                             [], zpath)
+    ck("the export writes a zip", res["ok"] and zpath.exists(), str(res)[:120])
+
+    names = set(zipfile.ZipFile(zpath).namelist())
+    ck("one directory per kind, plus the plan",
+       graph.BUNDLE_PLAN in names and
+       any(n.startswith("skills/") for n in names) and
+       any(n.startswith("rules/") for n in names), str(sorted(names)))
+
+    order = res["plan"]["order"]
+    pos = {p: i for i, p in enumerate(order)}
+    rules_at = [i for p, i in pos.items() if p.startswith("rules/")]
+    skills_at = [i for p, i in pos.items() if p.startswith("skills/")]
+    ck("every rule is ordered before every skill",
+       max(rules_at) < min(skills_at), str(order))
+    ck("and a skill comes after the skill it requires",
+       pos["skills/bun-base/SKILL.md"] < pos["skills/bun-mid/SKILL.md"] <
+       pos["skills/bun-top/SKILL.md"], str(order))
+
+    ck("a rule a skill honors travels even though it was not picked",
+       "rules/rule_user_bundle-rule.md" in names)
+
+    # the gap an export must not hide: a required skill left behind
+    part = graph.build_bundle(con, ["skill_bun-top"], [],
+                              Path(BRAIN) / "out" / "part.zip")
+    ck("a required skill that did not travel is named, not silently dropped",
+       part["missing_skills"] == ["skill_bun-mid"], str(part["missing_skills"]))
+
+    # --- land it in a brain that has never seen any of it
+    other = tempfile.mkdtemp(prefix="second-brain-bundle-")
+    try:
+        imp = g("import-bundle", "--zip", str(zpath), home=other)
+        acts = {a["id"]: a["action"] for a in imp.get("applied", [])}
+        ck("an untouched brain creates everything in the bundle",
+           set(acts.values()) == {"created"} and len(acts) == 4, str(acts))
+        node = g("get-node", "--id", "skill_bun-top", home=other)
+        rels = {(e["rel"], e["dst"]) for e in node.get("edges", [])}
+        ck("the skill lands accountable to the rule that travelled with it",
+           ("honors", "rule_user_bundle-rule") in rels, str(sorted(rels)))
+        ck("and requiring the skill below it",
+           ("requires", "skill_bun-mid") in rels, str(sorted(rels)))
+
+        # --- the three answers to "this one is already here"
+        g("update-node", "--id", "skill_bun-mid", "--title", "Edited locally",
+          home=other)
+        again = g("import-bundle", "--zip", str(zpath),
+                  "--select", "skill_bun-mid:ignore",
+                  "--select", "skill_bun-top:replace", home=other)
+        acts = {a["id"]: a["action"] for a in again.get("applied", [])}
+        ck("ignore leaves this brain's copy alone", acts.get("skill_bun-mid") == "ignored")
+        ck("replace rebuilds it from the file", acts.get("skill_bun-top") == "replaced")
+        ck("and an item nobody mentioned is not touched either",
+           acts.get("skill_bun-base") == "ignored", str(acts))
+        title = g("get-node", "--id", "skill_bun-mid", home=other)["node"]["title"]
+        ck("so the local edit survived an import that did not ask about it",
+           title == "Edited locally", title)
+
+        upd = g("import-bundle", "--zip", str(zpath),
+                "--select", "skill_bun-mid:update", home=other)
+        acts = {a["id"]: a["action"] for a in upd.get("applied", [])}
+        ck("update refreshes it from the incoming file",
+           acts.get("skill_bun-mid") == "updated", str(acts))
+        ck("and the title it was exported with is back",
+           g("get-node", "--id", "skill_bun-mid",
+             home=other)["node"]["title"] == "Bundle mid")
+    finally:
+        shutil.rmtree(other, ignore_errors=True)
+
+
+def test_bundle_refusals():
+    print("\n== a bundle is an untrusted file, and a contract is not history ==")
+    import graph
+    con = graph.connect()
+
+    ck("nothing selected is refused rather than writing an empty zip",
+       not graph.build_bundle(con, [], [], Path(BRAIN) / "out" / "empty.zip")["ok"])
+    ck("a skill that is not in this brain is refused",
+       not graph.build_bundle(con, ["skill_never-existed"], [],
+                              Path(BRAIN) / "out" / "no.zip")["ok"])
+
+    junk = Path(BRAIN) / "out" / "junk.zip"
+    junk.parent.mkdir(parents=True, exist_ok=True)
+    junk.write_bytes(b"this is not a zip at all")
+    ck("a file that is not a zip is reported, not raised",
+       not graph.inspect_bundle(con, junk)["ok"])
+
+    import zipfile
+    plainzip = Path(BRAIN) / "out" / "plain.zip"
+    with zipfile.ZipFile(plainzip, "w") as z:
+        z.writestr("skills/x/SKILL.md", "---\nname: x\n---\n\n# X\n")
+    got = graph.inspect_bundle(con, plainzip)
+    ck("a zip with no import plan is not a bundle",
+       not got["ok"] and graph.BUNDLE_PLAN in got["error"], str(got)[:120])
+
+    # a member the plan does not list is never read, so a zip carrying
+    # ../../something cannot reach the filesystem through the importer
+    sneaky = Path(BRAIN) / "out" / "sneaky.zip"
+    with zipfile.ZipFile(sneaky, "w") as z:
+        z.writestr(graph.BUNDLE_PLAN, json.dumps({
+            "format": graph.BUNDLE_FORMAT, "version": 1,
+            "order": ["../../escaped.md"],
+            "items": {"../../escaped.md": {"kind": "rule", "id": "rule_user_escaped",
+                                           "title": "Escaped"}}}))
+        z.writestr("../../escaped.md", "---\ntitle: Escaped\n---\n\nTHE RULE\nno.\n")
+    other = tempfile.mkdtemp(prefix="second-brain-sneaky-")
+    try:
+        res = graph.import_bundle(graph.connect(), sneaky, {"rule_user_escaped": "update"})
+        ck("a member outside the bundle's own layout is not written anywhere",
+           res["ok"] and not res["applied"], str(res)[:160])
+        ck("and no file escaped the archive",
+           not Path(BRAIN).parent.joinpath("escaped.md").exists())
+    finally:
+        shutil.rmtree(other, ignore_errors=True)
+
+    # the OTHER name a bundle controls: a skill is written to disk before it is
+    # read back, and the plan says what to call the folder
+    walker = Path(BRAIN) / "out" / "walker.zip"
+    with zipfile.ZipFile(walker, "w") as z:
+        z.writestr(graph.BUNDLE_PLAN, json.dumps({
+            "format": graph.BUNDLE_FORMAT, "version": 1,
+            "order": ["skills/ok/SKILL.md"],
+            "items": {"skills/ok/SKILL.md": {
+                "kind": "skill", "id": "skill_walker", "title": "Walker",
+                "name": "../../../../../../tmp/walked"}}}))
+        z.writestr("skills/ok/SKILL.md",
+                   "---\nname: walker\ntitle: Walker\n---\n\n# Walker\n\n## When to use\nnever\n")
+    graph.import_bundle(graph.connect(), walker, {"skill_walker": "update"})
+    ck("a folder name out of the plan cannot choose where the file lands",
+       not Path("/tmp/walked/SKILL.md").exists() and
+       (graph.learned_skills_dir() / "tmp-walked" / "SKILL.md").exists(),
+       str(sorted(p.name for p in graph.learned_skills_dir().iterdir())))
+
+    # deletion: a contract is not work, so it really goes — but never silently
+    graph.api_add_rule(con, title="Doomed rule", sections=FULL_RULE,
+                       node_id="rule_user_doomed")
+    graph.api_add_skill(con, name="doomed", title="Doomed", sections=FULL_SKILL,
+                        rules=["rule_user_doomed"])
+    res = graph.delete_contracts(con, ["skill_doomed", "rule_user_doomed", "nope"])
+    ck("selected contracts are deleted", len(res["deleted"]) == 2, str(res)[:140])
+    ck("an id that is not here is reported rather than counted",
+       res["not_found"] == ["nope"], str(res["not_found"]))
+    left = con.execute("SELECT count(*) FROM edges WHERE src=? OR dst=?",
+                       ("skill_doomed", "skill_doomed")).fetchone()[0]
+    ck("and every edge on them went with them", left == 0, str(left))
+
+    ck("a task is refused: archive-never-delete still holds for work",
+       not graph.delete_contracts(con, ["hub_convention"])["deleted"])
+
+    graph.api_add_skill(con, name="shipped", title="Shipped", sections=FULL_SKILL,
+                        kind="plugin")
+    res = graph.delete_contracts(con, ["skill_shipped"])
+    ck("a built-in is refused, because its file would re-ingest it",
+       not res["deleted"] and res["refused"][0]["id"] == "skill_shipped", str(res)[:140])
+    ck("and goes only when the caller says so anyway",
+       len(graph.delete_contracts(con, ["skill_shipped"], force=True)["deleted"]) == 1)
+
+
+def test_bundle_web():
+    print("\n== the browser moves a bundle the same way the shell does ==")
+    import base64
+    home = tempfile.mkdtemp(prefix="second-brain-bundle-w-")
+    port = 8798
+    proc = subprocess.Popen(
+        [sys.executable, str(ROOT / "viz" / "serve.py"), "--port", str(port),
+         "--no-open", "--no-reload"],
+        env=env_for(home), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def call(path, body=None, raw=False):
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}{path}",
+            data=None if body is None else json.dumps(body).encode(),
+            headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return r.read() if raw else json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            return json.loads(e.read())
+
+    try:
+        for _ in range(60):
+            try:
+                if call("/api/meta").get("ok"):
+                    break
+            except Exception:
+                time.sleep(0.2)
+        call("/api/create-skill", {"name": "web-bun", "title": "Web bundle",
+                                   "description": "d", "sections": FULL_SKILL})
+        exp = call("/api/export-bundle", {"skills": ["skill_web-bun"], "rules": []})
+        ck("the page can bundle a selection", exp["ok"] and exp["skills"] == 1,
+           str(exp)[:140])
+        blob = call(exp["download"], raw=True)
+        ck("and download it as a real zip", blob[:2] == b"PK", str(blob[:8]))
+
+        ck("a name pointing out of the bundle directory serves nothing",
+           not call("/api/bundle?name=../graph.db")["ok"])
+
+        got = call("/api/upload-bundle",
+                   {"filename": "web.zip", "data": base64.b64encode(blob).decode()})
+        ck("an uploaded bundle is inspected before anything is written",
+           got["ok"] and got["items"][0]["exists"], str(got)[:140])
+        ck("and the inspection wrote nothing", not call("/api/skills")["trees"][0]["skills"])
+
+        imp = call("/api/import-bundle",
+                   {"token": got["token"], "select": {"skill_web-bun": "replace"}})
+        ck("the page imports what was ticked",
+           imp["ok"] and imp["applied"][0]["action"] == "replaced", str(imp)[:140])
+        ck("a staged upload is not reusable once it landed",
+           not call("/api/import-bundle",
+                    {"token": got["token"], "select": {"skill_web-bun": "update"}})["ok"])
+        ck("garbage in place of base64 is refused",
+           not call("/api/upload-bundle", {"data": "not base64 at all!!"})["ok"])
+
+        d = call("/api/delete-contracts", {"ids": ["skill_web-bun"]})
+        ck("and deletes what was ticked", d["ok"] and d["count"] == 1, str(d)[:140])
+    finally:
+        proc.send_signal(signal.SIGINT)
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        shutil.rmtree(home, ignore_errors=True)
+
+
 def main():
     g("init")
     test_home_adoption()
@@ -804,6 +1081,10 @@ def main():
     test_server_error_paths()
     test_web()
     test_web_odd_shapes()
+    test_page_script_parses()
+    test_bundle_round_trip()
+    test_bundle_refusals()
+    test_bundle_web()
     shutil.rmtree(BRAIN, ignore_errors=True)
     print(f"\n{'ALL PASS' if not FAILS else f'{len(FAILS)} FAILED: ' + ', '.join(FAILS)}")
     return 1 if FAILS else 0

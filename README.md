@@ -538,6 +538,29 @@ link to them. A round trip is lossless — contract, declarations and `honors`
 edges all survive — and it never overwrites a rule the receiving brain already
 holds, because the incoming copy may be the older one.
 
+### Hand someone a few skills
+
+A whole tree is the wrong shape for "send me your three review skills". For a
+**selection**, bundle it:
+
+```bash
+python3 scripts/graph.py export-bundle --skill skill_x --rule rule_user_y
+python3 scripts/graph.py inspect-bundle --zip ~/.memory-ledger/bundles/skills-*.zip
+python3 scripts/graph.py import-bundle  --zip … --select skill_x:update
+```
+
+The zip holds one directory per kind and an `import-plan.json` naming the order
+the items can be read back in — rules first, then each skill after the skills it
+requires — so the dependency tree survives the trip. Rules a selected skill
+honors travel with it; a skill it *requires* that you did not pick is named in
+the report rather than added behind your back.
+
+In the browser this is the **Options** menu on the Skills section: *Select skills
+and rules* puts a checkbox on every card, and the bar that appears exports or
+deletes what you ticked. *Import from a bundle* opens a zip, lists what is in it,
+and for anything this brain already holds asks whether to **update**, **replace**
+or **ignore** it — nothing is written until you confirm.
+
 Writes are unauthenticated and bound to localhost; serve with `--no-write` if you
 expose the UI on your network.
 

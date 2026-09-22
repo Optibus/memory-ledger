@@ -52,6 +52,7 @@ disabled"}`.
 | `/api/meta` | the vocabulary — node types, realms, kinds, edge rels, statuses, and the two contract shapes (`skill_sections`, `rule_sections`, `decl_labels`, `node_types`) |
 | `/api/skills` | the two skill trees, the rule catalog, `node_types` (each with its description, how many of it the brain holds, and which skills read or write it), and the area titles the filters label themselves with |
 | `/api/rule?id=<id>` | one rule in full, for the skill drawer |
+| `/api/bundle?name=<file>` | an exported bundle, as a zip attachment. `name` is reduced to a bare filename, so it can only name a file in `<home>/bundles` |
 | `/api/suggest-links` | proposed edges awaiting acceptance |
 | `/api/search?q=<q>` | node picker results for the relation editor |
 | `/api/settings` | stored preferences, plus what is actually `effective` and which keys the environment has overridden |
@@ -122,6 +123,10 @@ since the dashboard lists tasks and a kind with none would be dead UI.
 | `/api/create-skill` | `{name, title, description?, realm?, sections{}, requires?, waits_for?, enriched_by?, reads?, writes?, rules[], new_rules[]}` | authors a skill (§5). **Refused** unless the six typed sections of §5.1 are filled. `rules[]` are existing rule ids, `new_rules[]` are whole rule bodies created first in the same call |
 | `/api/export-skills` | `{kind?, dir?}` | `graph.py export-skills` — a `SKILL.md` per skill plus every rule they honor |
 | `/api/ingest-skills` | `{dir?}` | `graph.py ingest-skills` — reads a folder back in; a rule this brain already holds is kept, never overwritten |
+| `/api/export-bundle` | `{skills[], rules[]}` | `graph.py export-bundle` — a selection as one zip under `<home>/bundles`; returns `path`, `name`, a `download` URL, and any required skill that did not travel |
+| `/api/upload-bundle` | `{filename, data}` | base64 zip, ≤32MB. Stages it and returns a one-shot `token` plus every item with `exists`. **Reads only — nothing is written** |
+| `/api/import-bundle` | `{token, select{id: update\|replace\|ignore}}` | applies the staged bundle in its plan's order and consumes it. An unmentioned item is created when new, untouched when it exists |
+| `/api/delete-contracts` | `{ids[], force?}` | `graph.py del-contracts` — deletes skill/rule nodes and their edges. A built-in is refused unless `force`, since its file would re-ingest it |
 
 ### Authoring contracts
 

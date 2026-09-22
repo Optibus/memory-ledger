@@ -449,13 +449,74 @@
   .relln .rl{color:var(--muted);font-style:italic}
   .relln .tt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .relln .ty{color:var(--muted);font-size:10.5px}
-  /* the markdown sync bar */
-  #sksync{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 16px;
-    padding:11px 13px;border:1px solid var(--border);border-radius:10px;
-    background:var(--panel)}
-  #sksync .t{font-size:12px;color:var(--muted);flex:1;min-width:190px;line-height:1.45}
-  #sksync .t b{color:var(--fg);font-weight:600}
-  #syncout{width:100%;margin:0}
+  /* what the last export / import / delete did */
+  #syncout{width:100%;margin:0 0 14px}
+
+  /* ---- the options menu, selection mode, and bundles ----
+     Selection is a MODE rather than a checkbox that is always there. A list of
+     contracts is read far more often than it is acted on, and a checkbox on
+     every row of a reading surface is permanent clutter paid for by an action
+     taken once a month. The menu turns it on; Done turns it off. */
+  #skbar{display:flex;gap:8px;align-items:center;margin:0 0 12px}
+  #skbar .sp{flex:1}
+  #skbar h2{margin:0}
+  .menuwrap{position:relative}
+  .menu{position:absolute;right:0;top:calc(100% + 6px);z-index:30;min-width:246px;
+    background:var(--panel);border:1px solid var(--border);border-radius:10px;
+    padding:5px;box-shadow:0 12px 32px #000a;display:none}
+  .menu.open{display:block}
+  .menu button{display:block;width:100%;text-align:left;background:none;border:0;
+    color:var(--fg);font-family:inherit;font-size:12.5px;padding:7px 9px;
+    border-radius:7px;cursor:pointer}
+  .menu button:hover{background:#ffffff0f}
+  .menu button .d{display:block;color:var(--muted);font-size:11px;line-height:1.4;
+    margin-top:2px}
+  .menu hr{border:0;border-top:1px solid var(--border);margin:4px 2px}
+  .menu .gh{font-size:10px;text-transform:uppercase;letter-spacing:.06em;
+    color:var(--muted);padding:6px 9px 3px}
+  /* The selection bar replaces the filter as the top sticky element, so the
+     count and the two destructive-ish actions stay reachable at any scroll. */
+  #sksel{display:none;position:sticky;top:0;z-index:5;background:var(--bg);
+    border-bottom:1px solid var(--accent);padding:8px 0;gap:8px;align-items:center;
+    flex-wrap:wrap}
+  body.sk-picking #sksel{display:flex}
+  /* The filter sticks BELOW the selection bar, which is not a fixed height: the
+     built-in warning wraps onto its own line and pushes it taller. --selh is
+     measured from the bar itself, so the two stack instead of overlapping. */
+  body.sk-picking #skfilter{top:var(--selh,47px)}
+  #sksel .n{font-size:12.5px;font-weight:600;white-space:nowrap}
+  #sksel .sp{flex:1}
+  #sksel .warn{color:#f0883e;font-size:11.5px;width:100%;margin:0}
+  .dbtn.dang{border-color:#f8514955;color:#f85149}
+  .dbtn.dang:hover:not(:disabled){background:#f8514918}
+  /* A checkbox sits in the DOM whether or not the mode is on: toggling the mode
+     must not rebuild the trees, or every open card would snap shut. */
+  .ckb{display:none;flex:0 0 auto;width:15px;height:15px;border-radius:4px;
+    border:1px solid var(--border);background:#0d1117;cursor:pointer;
+    align-items:center;justify-content:center;font-size:10px;line-height:1;
+    color:#0d1117;padding:0}
+  body.sk-picking .ckb{display:inline-flex}
+  .ckb.on{background:var(--accent);border-color:var(--accent)}
+  .sk.picked>.skhead,.rl.picked>.rh{background:#58a6ff14}
+  /* the import dialog: one row per item in the bundle */
+  .bitem{border:1px solid var(--border);border-radius:9px;padding:8px 10px;
+    margin-bottom:6px;background:#0d1117}
+  .bitem.off{opacity:.5}
+  .bh{display:flex;gap:8px;align-items:flex-start}
+  .bh .t{flex:1;min-width:0;font-size:12.5px;line-height:1.4}
+  .bh .t .id{display:block;color:var(--muted);font-size:10.5px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;margin-top:2px}
+  .bh .t .d{display:block;color:var(--muted);font-size:11.5px;margin-top:3px;
+    line-height:1.45}
+  .bmode{display:flex;gap:4px;margin:7px 0 0 23px;flex-wrap:wrap;align-items:center}
+  .bmode .lbl{font-size:11px;color:#f0883e;margin-right:3px}
+  .bmode button{border:1px solid var(--border);background:var(--panel);
+    color:var(--muted);border-radius:999px;padding:3px 9px;font-size:11px;
+    font-family:inherit;cursor:pointer}
+  .bmode button.on{background:var(--accent);color:#0d1117;border-color:var(--accent)}
+  .bdefault{display:flex;gap:6px;align-items:center;flex-wrap:wrap;
+    border:1px dashed var(--border);border-radius:9px;padding:8px 10px;
+    margin-bottom:11px;font-size:11.5px;color:var(--muted)}
 </style>
 </head>
 <body class="mode-map">
@@ -525,20 +586,51 @@
      rather than reported afterwards by audit-contracts. Editing an existing
      contract still belongs where it is gated: a built-in's SKILL.md. -->
 <div id="skills">
-  <h2>Skills</h2>
+  <!-- The heading row carries the options menu, on the right: everything that
+       ACTS on the corpus rather than reading it lives behind one button, so the
+       reading surface underneath stays a reading surface. -->
+  <div id="skbar">
+    <h2>Skills</h2>
+    <span class="sp"></span>
+    <div class="menuwrap">
+      <button class="dbtn" id="skopts" aria-haspopup="true" aria-expanded="false">Options ▾</button>
+      <div class="menu" id="skmenu">
+        <div class="gh">This brain</div>
+        <button data-act="select"><b>Select skills and rules</b>
+          <span class="d">Checkboxes on every card, then export or delete what you ticked.</span></button>
+        <hr>
+        <div class="gh">Bundles — a selection, as one zip</div>
+        <button data-act="import"><b>Import from a bundle…</b>
+          <span class="d">Choose a <code>.zip</code>, pick what to bring in, and say what
+            to do about anything this brain already holds.</span></button>
+        <hr>
+        <div class="gh">Whole-tree markdown sync</div>
+        <button data-act="export-tree"><b>Export the learned tree to .md</b>
+          <span class="d">Every learned skill, as folders on disk.</span></button>
+        <button data-act="ingest-tree"><b>Ingest a .md folder</b>
+          <span class="d">Read a directory of <code>SKILL.md</code> files back in.</span></button>
+      </div>
+    </div>
+  </div>
   <p class="lead">Every skill is a contract: what must be true when it finishes,
     what it reads and writes in the graph, and the rules it answers to. Nesting is
     the <code>requires</code> edge. Click a skill to open it, then a rule to read it.
     <b>+</b> authors a new one.</p>
-  <!-- markdown is the third route between machines, for when there is no shared
-       master to mirror through: export the learned tree, copy the folder, ingest. -->
-  <div id="sksync">
-    <span class="t"><b>Markdown sync.</b> Export the learned tree to
-      <code>SKILL.md</code> files (rules travel with them), or pull a folder from
-      another machine back into the brain.</span>
-    <button class="dbtn" id="skexport">Export to .md</button>
-    <button class="dbtn" id="skingest">Ingest .md</button>
-    <div class="out" id="syncout"></div>
+  <!-- What the last action did. Empty until something is exported, imported or
+       deleted, so the reading surface is not carrying a permanent status box. -->
+  <div class="out" id="syncout"></div>
+  <input type="file" id="skfile" accept=".zip,application/zip" hidden>
+  <!-- Only visible in selection mode. Sticky above the filter, because the two
+       are used together: narrow to "review", select all, export. -->
+  <div id="sksel">
+    <span class="n" id="skseln">Nothing selected</span>
+    <button class="dbtn" id="skselall">Select all shown</button>
+    <button class="dbtn" id="skselnone">Clear</button>
+    <span class="sp"></span>
+    <button class="dbtn" id="skselexp" disabled>Export selected…</button>
+    <button class="dbtn dang" id="skseldel" disabled>Delete selected…</button>
+    <button class="dbtn" id="skseldone">Done</button>
+    <p class="warn" id="skselwarn" style="display:none"></p>
   </div>
   <div id="skfilter">
     <input id="skq" placeholder="filter by name, trigger, rule text, node type…">
@@ -1786,8 +1878,9 @@ const Skills = (function(){
         `<h4>In the graph</h4><div class="relbox" data-rel="${esc(sk.id)}">`+
           `<p class="empty">Loading relations…</p></div>`+
       `</div>`;
-    return `<div class="sk${depth?' kid':''}" id="sk-${esc(sk.id)}">`+
-      `<div class="skhead"><span class="tw">▶</span>`+
+    const on=PICK.has(sk.id);
+    return `<div class="sk${depth?' kid':''}${on?' picked':''}" id="sk-${esc(sk.id)}">`+
+      `<div class="skhead">${ckb(sk.id)}<span class="tw">▶</span>`+
       `<span class="nm">${esc(sk.title)}</span>`+
       (sk.uses?`<span class="chip">used ${sk.uses}×</span>`:'')+
       `<span class="chip">${sk.rules.length} rules</span></div>`+
@@ -1871,7 +1964,8 @@ const Skills = (function(){
   }
 
   function ruleCard(r){
-    return `<div class="rl"><div class="rh rule" data-rule="${esc(r.id)}">`+
+    return `<div class="rl${PICK.has(r.id)?' picked':''}">`+
+      `<div class="rh rule" data-rule="${esc(r.id)}">${ckb(r.id)}`+
       `<span class="chip${r.non_negotiable?' nn':''}">${esc(r.source||'rule')}</span>`+
       `<span class="rt">${mark(r.title)}<span class="rid">${esc(r.id)}</span></span>`+
       `</div><div class="rbody">loading…</div></div>`;
@@ -1936,7 +2030,7 @@ const Skills = (function(){
     try{
       const r=await fetch('/api/skills'); data=await r.json();
       if(!data.ok) throw new Error(data.error||'failed');
-      loaded=true; fillDomains(); render();
+      loaded=true; fillDomains(); markBuiltins(); render();
     }catch(e){
       box.innerHTML='<div class="sk"><div class="skhead"><span class="nm">'+
         'Skills unavailable</span></div><div class="skbody" style="display:block">'+
@@ -1945,11 +2039,18 @@ const Skills = (function(){
     }
   }
 
+  function reload(){ loaded=false; show(); }
+
   // One delegated listener rather than a handler per row: the tree is rebuilt
   // wholesale on reload, and per-node handlers would leak with it.
   // Delegated from the SECTION, not from #sktrees: the rules list is a sibling
   // container, so a listener on the trees alone silently ignores every click in it.
   document.getElementById('skills').addEventListener('click',async e=>{
+    // The checkbox sits INSIDE the row that opens the card, so it has to be
+    // answered first and the click stopped there. Otherwise every tick also
+    // expands (or collapses) whatever it was ticking.
+    const ck=e.target.closest('.ckb');
+    if(ck){ e.stopPropagation(); toggle(ck.dataset.ck); return; }
     const head=e.target.closest('.skhead');
     if(head){
       const card=head.parentElement;
@@ -1993,6 +2094,285 @@ const Skills = (function(){
     body.dataset.done='1';
   });
 
+  // ---- selection mode ------------------------------------------------------
+  // One Set of node ids, skills and rules together, because every action taken
+  // on a selection (export it, delete it) treats the two the same and only the
+  // server needs to know which is which. Held OUTSIDE render, so typing in the
+  // filter — which rebuilds the whole tree — never loses what was ticked.
+  const PICK=new Set();
+  const ckb=id=>`<button class="ckb${PICK.has(id)?' on':''}" data-ck="${esc(id)}" `+
+    `title="select" aria-pressed="${PICK.has(id)}">${PICK.has(id)?'✓':''}</button>`;
+
+  // What is on screen right now — "select all" means all SHOWN, not all held.
+  // Ticking a hundred hidden rules because a filter was open is the surprise
+  // this avoids; narrowing and then selecting is the whole workflow.
+  const shownIds=()=>[...document.querySelectorAll('#skills .ckb')]
+    .map(b=>b.dataset.ck);
+
+  function kindOf(id){ return id.startsWith('skill_')?'skills':'rules'; }
+
+  function selBar(){
+    const n=PICK.size;
+    document.getElementById('skseln').textContent=
+      n?`${n} selected`:'Nothing selected';
+    ['skselexp','skseldel'].forEach(i=>document.getElementById(i).disabled=!n);
+    // A built-in is ingested from a file, so deleting it empties a row the next
+    // ingest-skills fills straight back. Saying so here beats saying so in the
+    // refusal, which arrives after the person has already decided.
+    const built=[...PICK].filter(id=>BUILTIN.has(id));
+    const w=document.getElementById('skselwarn');
+    w.style.display=built.length?'block':'none';
+    w.textContent=built.length
+      ? `${built.length} of these ${built.length===1?'is':'are'} built-in. `+
+        `Deleting one only empties its row `+
+        `— the file it came from is still on disk and the next ingest brings it back.`
+      : '';
+  }
+
+  // Which ids ship as files, filled on every load from the same payload the
+  // trees are drawn from, so the warning cannot disagree with the page.
+  const BUILTIN=new Set();
+  function markBuiltins(){
+    BUILTIN.clear();
+    // the SKILL's own kind, not the tree it hangs in: the server refuses on
+    // props.kind, and a skill whose kind changed since the last sync-skill-tree
+    // is still sitting in the other tree. Reading the tree here would warn about
+    // a different set than the one that gets refused.
+    data.trees.forEach(t=>{ const w=s=>{ if((s.kind||t.kind)==='plugin') BUILTIN.add(s.id);
+      (s.children||[]).forEach(w); }; (t.skills||[]).forEach(w); });
+    (data.rules||[]).forEach(r=>{ if(r.source==='plugin') BUILTIN.add(r.id); });
+  }
+
+  function picking(on){
+    document.body.classList.toggle('sk-picking',on);
+    if(!on){ PICK.clear(); document.querySelectorAll('#skills .ckb.on')
+      .forEach(b=>{ b.classList.remove('on'); b.textContent=''; });
+      document.querySelectorAll('#skills .picked')
+        .forEach(e=>e.classList.remove('picked')); }
+    selBar();
+  }
+
+  function toggle(id,want){
+    const on=want===undefined?!PICK.has(id):want;
+    if(on) PICK.add(id); else PICK.delete(id);
+    document.querySelectorAll(`#skills .ckb[data-ck="${CSS.escape(id)}"]`)
+      .forEach(b=>{ b.classList.toggle('on',on); b.textContent=on?'✓':'';
+        b.setAttribute('aria-pressed',String(on));
+        const card=b.closest('.sk,.rl'); if(card) card.classList.toggle('picked',on); });
+    selBar();
+  }
+
+  // ---- bundles: export a selection, import someone else's ------------------
+  function split(){
+    const sel={skills:[],rules:[]};
+    PICK.forEach(id=>sel[kindOf(id)].push(id));
+    return sel;
+  }
+
+  async function exportSelected(){
+    const sel=split();
+    const box=syncOut();
+    box.className='out show';
+    box.textContent='Building the bundle…';
+    try{
+      const d=await Create.post('/api/export-bundle',sel);
+      box.textContent=
+        `Bundled ${d.skills} skill${d.skills===1?'':'s'} and ${d.rules} `+
+        `rule${d.rules===1?'':'s'} into\n${d.path}\n\n`+
+        `The zip holds one directory per kind and an import-plan.json naming the `+
+        `order they can be read back in — rules first, then each skill after the `+
+        `skills it requires.`+
+        (d.missing_skills&&d.missing_skills.length
+          ? `\n\nThese are REQUIRED by something you exported and did not travel:\n`+
+            d.missing_skills.map(x=>'  '+x).join('\n')+
+            `\nThe other brain needs them, or those links will not form. Select them `+
+            `and export again if it does not already have them.`
+          : '')+
+        (d.cycles&&d.cycles.length
+          ? `\n\nA dependency cycle was found and ordered arbitrarily:\n`+
+            d.cycles.map(c=>'  '+c.join(' → ')).join('\n')
+          : '');
+      // A real same-origin route, so the browser downloads it and the file also
+      // stays on disk at the path above — the two machines case usually wants
+      // the path, the "send it to someone" case wants the download.
+      const a=document.createElement('a');
+      a.href=d.download; a.download=d.name;
+      document.body.appendChild(a); a.click(); a.remove();
+    }catch(e){ box.textContent='Export failed: '+e.message; }
+  }
+
+  async function deleteSelected(){
+    const sel=split(), ids=[...PICK];
+    const built=ids.filter(id=>BUILTIN.has(id));
+    const api=Create.shell({narrow:true,title:`Delete ${ids.length} item`+
+      (ids.length===1?'':'s')+'?',
+      sub:'A contract is not history: a skill nobody should fire again has to '+
+          'stop firing, and a rule left in the corpus keeps binding every '+
+          'request. This deletes the nodes and every edge on them, and it '+
+          'cannot be undone from here.'});
+    const list=Create.el('div');
+    list.style.cssText='max-height:260px;overflow:auto;font-size:12px;line-height:1.7';
+    ids.slice(0,200).forEach(id=>{
+      const r=Create.el('div',null,(BUILTIN.has(id)?'⚠ ':'')+id);
+      r.style.cssText='font-family:ui-monospace,monospace;'+
+        (BUILTIN.has(id)?'color:#f0883e':'color:var(--muted)');
+      list.appendChild(r);
+    });
+    if(ids.length>200) list.appendChild(Create.el('p','empty',
+      `…and ${ids.length-200} more.`));
+    api.body.appendChild(list);
+    let force=false;
+    if(built.length){
+      const p=Create.el('p','warn',
+        `${built.length} of these ships as a file. Deleting one empties its row `+
+        `and the next ingest-skills brings it straight back, so it is refused `+
+        `unless you say to do it anyway.`);
+      api.body.appendChild(p);
+      const b=Create.el('button','dbtn','Delete built-ins too');
+      b.onclick=()=>{ force=!force; b.classList.toggle('pri',force);
+        b.textContent=force?'✓ built-ins included':'Delete built-ins too'; };
+      api.body.appendChild(b);
+    }
+    Create.footer(api,'Delete',async()=>{
+      const d=await Create.post('/api/delete-contracts',{ids,force});
+      api.close(d);
+    });
+    const d=await api.result;
+    if(!d) return;
+    const box=syncOut();
+    box.className='out show';
+    box.textContent=`Deleted ${d.count} item${d.count===1?'':'s'}.\n`+
+      d.deleted.map(x=>`  ${x.type.padEnd(6)} ${x.id}`).join('\n')+
+      (d.refused.length?`\n\nRefused:\n`+
+        d.refused.map(x=>`  ${x.id} — ${x.why}`).join('\n'):'')+
+      (d.not_found.length?`\n\nNot in this brain:\n`+
+        d.not_found.map(x=>'  '+x).join('\n'):'');
+    picking(false);
+    reload();
+  }
+
+  // ---- import: choose the file, then choose what comes out of it -----------
+  const fileInput=()=>document.getElementById('skfile');
+
+  async function importBundle(file){
+    const box=syncOut();
+    box.className='out show'; box.textContent='Reading '+file.name+'…';
+    const b64=await new Promise((res,rej)=>{
+      const fr=new FileReader();
+      fr.onload=()=>res(String(fr.result).split(',').pop());
+      fr.onerror=()=>rej(new Error('could not read that file'));
+      fr.readAsDataURL(file);
+    });
+    let got;
+    try{ got=await Create.post('/api/upload-bundle',{filename:file.name,data:b64}); }
+    catch(e){ box.textContent='That bundle could not be read: '+e.message; return; }
+    box.textContent=`${file.name}: ${got.counts.skills||0} skill(s), `+
+      `${got.counts.rules||0} rule(s). Choose what to bring in.`;
+    const chosen=await chooseImport(got,file.name);
+    if(!chosen){ box.textContent='Import cancelled. Nothing was written.'; return; }
+    box.textContent='Importing…';
+    try{
+      const d=await Create.post('/api/import-bundle',
+        {token:got.token,select:chosen});
+      const w={created:'created',updated:'updated',replaced:'replaced',
+               ignored:'left alone',kept:'left alone'};
+      box.textContent=`Imported from ${file.name}.\n`+
+        d.applied.map(a=>`  ${(w[a.action]||a.action).padEnd(10)} ${a.id}`+
+          (a.rules_not_found
+            ? `  (rules not in this brain: ${a.rules_not_found.join(', ')})`:'')
+        ).join('\n')+
+        (d.tree?`\n\nTree: +${d.tree.added} edges, -${d.tree.pruned}.`:'')+
+        (d.missing_skills&&d.missing_skills.length
+          ? `\n\nThe bundle declares skills it did not carry: `+
+            d.missing_skills.join(', ')+`. Those links cannot form until they `+
+            `are in this brain.`
+          : '');
+      reload();
+    }catch(e){ box.textContent='Import failed: '+e.message; }
+  }
+
+  // The dialog the person actually decides in. An item already here is the only
+  // interesting case, and it gets the three-way answer the question deserves —
+  // update it, replace it outright, or leave it alone — rather than one silent
+  // policy applied to everything.
+  async function chooseImport(got,fname){
+    const MODES=[['update','Update','refresh it from the file, keep the node'],
+                 ['replace','Replace','delete this brain’s copy, then create it fresh'],
+                 ['ignore','Ignore','leave this brain’s copy exactly as it is']];
+    const state=new Map();
+    got.items.forEach(i=>state.set(i.id,
+      {on:true, mode:i.exists?'update':'update', exists:i.exists}));
+    const clash=got.items.filter(i=>i.exists).length;
+
+    const api=Create.shell({title:'Import from '+fname,
+      sub:`${got.items.length} item${got.items.length===1?'':'s'} in this bundle`+
+        (clash?`, ${clash} of which this brain already holds. `+
+          `Say what should happen to those — nothing is written until you confirm.`
+          :`. None of them collides with anything here.`)});
+
+    if(clash){
+      const row=Create.el('div','bdefault');
+      row.appendChild(Create.el('span',null,
+        'For everything already here, set them all to:'));
+      MODES.forEach(([m,label])=>{
+        const b=Create.el('button','dbtn',label);
+        b.onclick=()=>{ state.forEach(v=>{ if(v.exists) v.mode=m; }); draw(); };
+        row.appendChild(b);
+      });
+      api.body.appendChild(row);
+    }
+
+    const list=Create.el('div'); api.body.appendChild(list);
+    const count=Create.el('span','pkcount');
+
+    function draw(){
+      list.innerHTML='';
+      got.items.forEach(i=>{
+        const st=state.get(i.id);
+        const card=Create.el('div','bitem'+(st.on?'':' off'));
+        const h=Create.el('div','bh');
+        const ck=Create.el('button','ckb'+(st.on?' on':''),st.on?'✓':'');
+        ck.style.display='inline-flex';
+        ck.onclick=()=>{ st.on=!st.on; draw(); };
+        const t=Create.el('div','t');
+        t.innerHTML=`<b>${esc(i.title||i.id)}</b>`+
+          `<span class="id">${esc(i.id)}</span>`+
+          (i.description?`<span class="d">${esc(i.description)}</span>`:'');
+        const chip=Create.el('span','chip'+(i.exists?' nn':''),
+          i.exists?'already here':(i.kind==='rule'?'rule':'skill'));
+        h.append(ck,t,chip);
+        card.appendChild(h);
+        if(i.exists&&st.on){
+          const m=Create.el('div','bmode');
+          m.appendChild(Create.el('span','lbl','This one exists:'));
+          MODES.forEach(([mode,label,why])=>{
+            const b=Create.el('button',st.mode===mode?'on':null,label);
+            b.title=why;
+            b.onclick=()=>{ st.mode=mode; draw(); };
+            m.appendChild(b);
+          });
+          card.appendChild(m);
+        }
+        list.appendChild(card);
+      });
+      const n=[...state.values()].filter(v=>v.on).length;
+      count.textContent=`${n} of ${got.items.length} will be imported`;
+      go.disabled=!n;
+    }
+
+    const cancel=Create.el('button','dbtn','Cancel');
+    cancel.onclick=()=>api.close(null);
+    const go=Create.el('button','dbtn pri','Import');
+    go.onclick=()=>{
+      const sel={};
+      state.forEach((v,id)=>{ if(v.on) sel[id]=v.mode; });
+      api.close(sel);
+    };
+    api.foot.append(count,Create.el('span','sp'),cancel,go);
+    draw();
+    return api.result;
+  }
+
   // ---- markdown sync (§5a): the file route between two machines ----
   // Both buttons run the same commands the CLI runs, out of process, so a person
   // who syncs from the page and a person who syncs from a shell move the same
@@ -2023,9 +2403,7 @@ const Skills = (function(){
       (rules.length?`\n\nRules that travelled with them:\n`+rules.join('\n'):'')+
       (d.tree?`\n\nTree: +${d.tree.added} edges, -${d.tree.pruned}.`:'');
   }
-  document.getElementById('skexport').onclick=()=>
-    sync('/api/export-skills','Exporting',{kind:'learned'});
-  document.getElementById('skingest').onclick=async()=>{
+  async function ingestTree(){
     const got=await Create.ask({
       title:'Ingest skills from markdown',
       sub:'Every <code>SKILL.md</code> under the directory becomes a skill node. '+
@@ -2039,7 +2417,57 @@ const Skills = (function(){
       submit:'Ingest'});
     if(!got) return;
     sync('/api/ingest-skills','Ingesting',got.value?{dir:got.value}:{});
+  }
+
+  // ---- the options menu ----------------------------------------------------
+  // Everything that acts on the corpus is behind one button on the right, so
+  // the list below stays something you read. A menu that closes on the next
+  // click anywhere is the only kind that does not get left hanging open.
+  const menu=document.getElementById('skmenu');
+  const optsBtn=document.getElementById('skopts');
+  function closeMenu(){ menu.classList.remove('open');
+    optsBtn.setAttribute('aria-expanded','false'); }
+  optsBtn.onclick=e=>{
+    e.stopPropagation();
+    const open=menu.classList.toggle('open');
+    optsBtn.setAttribute('aria-expanded',String(open));
   };
+  document.addEventListener('click',e=>{
+    if(!menu.contains(e.target)&&e.target!==optsBtn) closeMenu(); });
+  addEventListener('keydown',e=>{
+    if(e.key==='Escape'&&menu.classList.contains('open')) closeMenu(); });
+  menu.addEventListener('click',e=>{
+    const b=e.target.closest('button[data-act]');
+    if(!b) return;
+    closeMenu();
+    if(b.dataset.act==='select') picking(true);
+    else if(b.dataset.act==='import') fileInput().click();
+    else if(b.dataset.act==='export-tree')
+      sync('/api/export-skills','Exporting',{kind:'learned'});
+    else if(b.dataset.act==='ingest-tree') ingestTree();
+  });
+
+  fileInput().addEventListener('change',e=>{
+    const f=e.target.files&&e.target.files[0];
+    e.target.value='';   // so choosing the SAME file twice still fires
+    if(f) importBundle(f);
+  });
+
+  // Measured rather than assumed: a hardcoded offset here was wrong the moment
+  // the warning line appeared, and it fails by hiding the filter's own controls
+  // under the bar above them — visible only after scrolling, which is exactly
+  // when the sticky filter is the thing being used.
+  const selEl=document.getElementById('sksel');
+  if(window.ResizeObserver){
+    new ResizeObserver(()=>document.getElementById('skills').style
+      .setProperty('--selh',selEl.offsetHeight+'px')).observe(selEl);
+  }
+
+  document.getElementById('skselall').onclick=()=>shownIds().forEach(i=>toggle(i,true));
+  document.getElementById('skselnone').onclick=()=>[...PICK].forEach(i=>toggle(i,false));
+  document.getElementById('skseldone').onclick=()=>picking(false);
+  document.getElementById('skselexp').onclick=exportSelected;
+  document.getElementById('skseldel').onclick=deleteSelected;
 
   let tmr=null;
   document.getElementById('skq').addEventListener('input',e=>{
@@ -2056,7 +2484,7 @@ const Skills = (function(){
   document.getElementById('skdom').addEventListener('change',e=>{
     F.dom=e.target.value; render(); });
 
-  return {show, reload(){ loaded=false; show(); }};
+  return {show, reload};
 })();
 
 // ---- create: author a skill or a rule from the browser --------------------
@@ -2639,7 +3067,11 @@ const Create = (function(){
     return api.result;
   }
 
-  return {chooser, rule, skill, ask, invalidate(){ CAT=null; }};
+  // shell/footer/post/el are exported so the Skills page can build its own
+  // dialogs in the same modal stack. Two modal implementations on one page is
+  // two Escape handlers, two scroll locks, and a second look nobody asked for.
+  return {chooser, rule, skill, ask, shell, footer, post, el, field, pick,
+          invalidate(){ CAT=null; }};
 })();
 
 const Settings = (function(){
