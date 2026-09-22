@@ -4,10 +4,14 @@ import type { ProcessNode, RuleNode, SkillNode } from "@/api/types";
 export type ItemType = "process" | "skill" | "rule";
 export const ITEM_TYPES: ItemType[] = ["process", "skill", "rule"];
 
+/** Who authored a thing. Multi-select, like the types. */
+export type Source = "plugin" | "user" | "learned";
+export const SOURCES: Source[] = ["plugin", "user", "learned"];
+
 export interface SkillFilter {
   q: string;
   types: Set<ItemType>;
-  src: "all" | "plugin" | "user" | "learned";
+  src: Set<Source>;
   dom: string;
   /**
    * Which realms' processes are shown. `null` means "the current realm" — the
@@ -18,7 +22,12 @@ export interface SkillFilter {
 }
 
 export function emptySkillFilter(): SkillFilter {
-  return { q: "", types: new Set(ITEM_TYPES), src: "all", dom: "all", realms: null };
+  return { q: "", types: new Set(ITEM_TYPES), src: new Set(SOURCES), dom: "all", realms: null };
+}
+
+/** Every source ticked: nothing is filtered, including a source outside the three. */
+export function allSources(f: SkillFilter): boolean {
+  return SOURCES.every((s) => f.src.has(s));
 }
 
 /** The realms a filter actually shows, with `null` resolved to the current one. */
@@ -77,9 +86,11 @@ export function keepSkill(sk: SkillNode, treeKind: string, f: SkillFilter): Kept
     .map((c) => keepSkill(c, treeKind, f))
     .filter((x): x is KeptSkill => x !== null);
 
+  // The learned tree is where both user-authored and learned skills live, so
+  // either source keeps it; only the plugin tree is built-in.
   const srcOk =
-    f.src === "all" ||
-    (f.src === "plugin" ? treeKind === "plugin" : treeKind === "learned");
+    allSources(f) ||
+    (treeKind === "plugin" ? f.src.has("plugin") : f.src.has("user") || f.src.has("learned"));
   const domOk = f.dom === "all" || sk.domains.includes(f.dom);
   const qOk = !f.q || skillHaystack(sk).includes(f.q.toLowerCase());
   const self = srcOk && domOk && qOk;
@@ -89,7 +100,7 @@ export function keepSkill(sk: SkillNode, treeKind: string, f: SkillFilter): Kept
 }
 
 export function keepRule(r: RuleNode, f: SkillFilter): boolean {
-  if (f.src !== "all" && r.source !== f.src) return false;
+  if (!allSources(f) && !f.src.has(r.source as Source)) return false;
   if (f.dom !== "all" && !(r.domains || []).includes(f.dom)) return false;
   return !f.q || ruleHaystack(r).includes(f.q.toLowerCase());
 }
@@ -106,7 +117,7 @@ export function processHaystack(p: ProcessNode): string {
  */
 export function keepProcess(p: ProcessNode, f: SkillFilter, realms: Set<string>): boolean {
   if (!realms.has(p.realm)) return false;
-  if (f.src === "plugin" || f.src === "learned") return false;
+  if (!allSources(f) && !f.src.has("user")) return false;
   if (f.dom !== "all" && !p.domains.includes(f.dom)) return false;
   return !f.q || processHaystack(p).includes(f.q.toLowerCase());
 }

@@ -8,7 +8,6 @@ import {
   EmptyState,
   FacetDropdown,
   Menu,
-  Pills,
   SearchInput,
   Select,
   Spinner,
@@ -25,6 +24,8 @@ import { ProcessDialog } from "./ProcessDialog";
 import type { ProcessDraft } from "./ProcessDialog";
 import {
   ITEM_TYPES,
+  SOURCES,
+  allSources,
   countSkills,
   effectiveRealms,
   emptySkillFilter,
@@ -32,7 +33,7 @@ import {
   keepRule,
   keepSkill,
 } from "./filter";
-import type { ItemType, KeptSkill, SkillFilter } from "./filter";
+import type { ItemType, KeptSkill, SkillFilter, Source } from "./filter";
 import { useSelection } from "./useSelection";
 import type { ImportChoice, SkillsPayload, UploadBundleResult } from "@/api/types";
 import "./SkillsSection.css";
@@ -56,6 +57,12 @@ const TYPE_LABEL: Record<ItemType, string> = {
   process: "Processes",
   skill: "Skills",
   rule: "Rules",
+};
+
+const SOURCE_LABEL: Record<Source, [string, string]> = {
+  plugin: ["Built-in", "shipped with the plugin"],
+  user: ["User", "written in this brain by a person; every process is one"],
+  learned: ["Learned", "taught to this brain at runtime"],
 };
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -162,7 +169,7 @@ export function SkillsSection() {
     ]
       .filter(Boolean)
       .join(" · ") || "nothing shown";
-  const narrowed = Boolean(filter.q) || filter.src !== "all" || filter.dom !== "all";
+  const narrowed = Boolean(filter.q) || !allSources(filter) || filter.dom !== "all";
 
   // ---- the actions behind the Options menu --------------------------------
   const exportSelected = async () => {
@@ -476,16 +483,16 @@ export function SkillsSection() {
             }
           />
         ) : null}
-        <Pills
-          aria-label="source"
-          value={filter.src}
-          onChange={(src) => setFilter((f) => ({ ...f, src }))}
-          options={[
-            { value: "all", label: "Any source" },
-            { value: "plugin", label: "Built-in" },
-            { value: "user", label: "User" },
-            { value: "learned", label: "Learned" },
-          ]}
+        <FacetDropdown
+          name="Sources"
+          options={SOURCES.map((v) => ({
+            value: v,
+            label: SOURCE_LABEL[v][0],
+            title: SOURCE_LABEL[v][1],
+          }))}
+          selected={filter.src as Set<string>}
+          onChange={(next) => setFilter((f) => ({ ...f, src: next as Set<Source> }))}
+          note={<>A skill in the learned tree counts as both user and learned.</>}
         />
         <Select
           aria-label="domain"

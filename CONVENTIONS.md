@@ -1267,7 +1267,8 @@ in the importer's configured realm, or the one they pick in the import dialog,
 and keeps the realm it came from as `props.origin_realm` — so a teammate's way
 of working arrives in *your* work realm and still says whose it was. The Skills
 page lists processes beside skills and rules, filters by type (multi-select:
-process, skill, rule) and by realm, defaulting to the current realm.
+process, skill, rule), by source (multi-select: built-in, user, learned; every
+process counts as user) and by realm, defaulting to the current realm.
 
 Selection is respected in both directions. Exporting a skill carries the rules
 it honors, for the reason above — but a skill it *requires* and you did not pick

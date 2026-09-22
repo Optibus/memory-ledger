@@ -87,9 +87,22 @@ describe("Skills", () => {
   it("filters rules by source", async () => {
     const { user } = renderApp(<SkillsSection />, { route: "/skills" });
     await screen.findByText("1 process · 2 skills · 2 rules");
-    await user.click(screen.getByRole("button", { name: "User" }));
-    await waitFor(() => expect(screen.getByText(/1 rule/)).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: /Sources/ }));
+    await user.click(screen.getByRole("checkbox", { name: /Built-in/ }));
+    await user.click(screen.getByRole("checkbox", { name: /Learned/ }));
+    await waitFor(() => expect(screen.getByText("1 process · 0 skills · 1 rule")).toBeInTheDocument());
     expect(screen.queryByRole("button", { name: /The memory graph API/ })).not.toBeInTheDocument();
+  });
+
+  it("takes several sources at once", async () => {
+    const { user } = renderApp(<SkillsSection />, { route: "/skills" });
+    await screen.findByText("1 process · 2 skills · 2 rules");
+    await user.click(screen.getByRole("button", { name: /Sources/ }));
+    await user.click(screen.getByRole("button", { name: "none" }));
+    await waitFor(() => expect(screen.getByText("0 processes · 0 skills · 0 rules")).toBeInTheDocument());
+    await user.click(screen.getByRole("checkbox", { name: /Built-in/ }));
+    await user.click(screen.getByRole("checkbox", { name: /User/ }));
+    await waitFor(() => expect(screen.getByText("1 process · 2 skills · 2 rules")).toBeInTheDocument());
   });
 
   it("labels the domain filter with the area titles rather than hub ids", async () => {

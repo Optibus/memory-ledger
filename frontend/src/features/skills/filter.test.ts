@@ -9,6 +9,7 @@ import {
   ruleHaystack,
   skillHaystack,
 } from "./filter";
+import type { Source } from "./filter";
 import { skillsFixture } from "@/test/fixtures";
 import type { SkillNode } from "@/api/types";
 
@@ -48,10 +49,10 @@ describe("keepSkill", () => {
   });
 
   it("filters by source, treating user and learned as the same tree", () => {
-    expect(keepSkill(recall, "plugin", f({ src: "plugin" }))).not.toBeNull();
-    expect(keepSkill(recall, "plugin", f({ src: "user" }))).toBeNull();
-    expect(keepSkill(recall, "learned", f({ src: "learned" }))).not.toBeNull();
-    expect(keepSkill(recall, "learned", f({ src: "user" }))).not.toBeNull();
+    expect(keepSkill(recall, "plugin", f({ src: new Set(["plugin"] as Source[]) }))).not.toBeNull();
+    expect(keepSkill(recall, "plugin", f({ src: new Set(["user"] as Source[]) }))).toBeNull();
+    expect(keepSkill(recall, "learned", f({ src: new Set(["learned"] as Source[]) }))).not.toBeNull();
+    expect(keepSkill(recall, "learned", f({ src: new Set(["user"] as Source[]) }))).not.toBeNull();
   });
 
   it("filters by domain", () => {
@@ -73,8 +74,9 @@ describe("keepRule", () => {
   });
 
   it("filters by source and domain", () => {
-    expect(keepRule(emoji!, f({ src: "user" }))).toBe(true);
-    expect(keepRule(emoji!, f({ src: "plugin" }))).toBe(false);
+    expect(keepRule(emoji!, f({ src: new Set(["user"] as Source[]) }))).toBe(true);
+    expect(keepRule(emoji!, f({ src: new Set(["plugin"] as Source[]) }))).toBe(false);
+    expect(keepRule(emoji!, f({ src: new Set(["plugin", "user"] as Source[]) }))).toBe(true);
     expect(keepRule(graphApi!, f({ dom: "hub_process" }))).toBe(true);
     expect(keepRule(graphApi!, f({ dom: "hub_writing" }))).toBe(false);
   });
@@ -124,8 +126,13 @@ describe("keepProcess", () => {
     expect(keepProcess(mine!, f({ q: "invoice" }), cur)).toBe(false);
   });
 
+  it("keeps a process when user is one of several sources ticked", () => {
+    expect(keepProcess(mine!, f({ src: new Set(["plugin", "user"] as Source[]) }), cur)).toBe(true);
+    expect(keepProcess(mine!, f({ src: new Set() }), cur)).toBe(false);
+  });
+
   it("is never built-in or learned, so those sources hide it", () => {
-    expect(keepProcess(mine!, f({ src: "plugin" }), cur)).toBe(false);
-    expect(keepProcess(mine!, f({ src: "user" }), cur)).toBe(true);
+    expect(keepProcess(mine!, f({ src: new Set(["plugin"] as Source[]) }), cur)).toBe(false);
+    expect(keepProcess(mine!, f({ src: new Set(["user"] as Source[]) }), cur)).toBe(true);
   });
 });
