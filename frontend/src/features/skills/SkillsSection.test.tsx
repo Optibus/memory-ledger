@@ -277,6 +277,20 @@ describe("Skills processes", () => {
     await waitFor(() => expect(screen.getByText("1 process · 0 skills · 0 rules")).toBeInTheDocument());
   });
 
+  it("offers the brain's realms as a dropdown, and stores in the one picked", async () => {
+    const { user } = renderApp(<SkillsSection />, { route: "/skills" });
+    await screen.findByText("1 process · 2 skills · 2 rules");
+    await user.click(screen.getByRole("button", { name: "New process…" }));
+    await user.type(await screen.findByRole("textbox", { name: /Title/ }), "Sunday review");
+    const realm = screen.getByRole("combobox", { name: /Realm/ });
+    expect(realm).toHaveValue("optibus");
+    await user.selectOptions(realm, "personal");
+    await user.click(screen.getByRole("button", { name: "Save process" }));
+    await waitFor(() =>
+      expect(writes.find((w) => w.path === "/api/create-process")?.body).toMatchObject({ realm: "personal" }),
+    );
+  });
+
   it("stores a new process in the current realm by default", async () => {
     const { user } = renderApp(<SkillsSection />, { route: "/skills" });
     await screen.findByText("1 process · 2 skills · 2 rules");

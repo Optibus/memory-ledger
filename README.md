@@ -586,8 +586,8 @@ lists what is in it, and for anything this brain already holds asks whether to
 Processes in a bundle land in your current realm unless you pick another.
 
 New things are written from the floating **+** button (or `n`) on the Skills
-section: *a process* (title, when it applies, steps, realm — prefilled with the
-current one), *a skill* or *a rule*. What it writes appears on the page at once,
+section: *a process* (title, when it applies, steps, and a realm dropdown of the
+brain's realms, starting on the current one), *a skill* or *a rule*. What it writes appears on the page at once,
 and a process saved in a realm the filter is not showing adds that realm to it.
 
 Writes are unauthenticated and bound to localhost; serve with `--no-write` if you

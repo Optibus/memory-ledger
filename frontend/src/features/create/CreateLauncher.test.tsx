@@ -156,8 +156,9 @@ describe("recording a process from the + button", () => {
     const { user } = renderApp(<CreateLauncher onCreated={(c) => seen.push(c)} />, { route: "/" });
     await user.click(await screen.findByRole("button", { name: /create a process, a skill or a rule/ }));
     await user.click(await screen.findByRole("button", { name: /A process/ }));
-    const realm = await screen.findByRole("textbox", { name: /Realm/ });
+    const realm = await screen.findByRole("combobox", { name: /Realm/ });
     await waitFor(() => expect(realm).toHaveValue("optibus"));
+    expect(realm).toHaveTextContent("optibus (current)");
     await user.type(screen.getByRole("textbox", { name: /Title/ }), "Ship a hotfix");
     await user.click(screen.getByRole("button", { name: "Save process" }));
     await waitFor(() =>

@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Button, Field, Modal, StatusMessage, TextArea, TextInput } from "@/components";
+import { useMeta } from "@/api/MetaContext";
+import { Button, Field, Modal, Select, StatusMessage, TextArea, TextInput } from "@/components";
 
 export interface ProcessDraft {
   title: string;
@@ -19,7 +20,13 @@ export interface ProcessDialogProps {
 
 /** Record a way of working in a realm. Only the title is required. */
 export function ProcessDialog({ realm, busy, error, onCancel, onSubmit }: ProcessDialogProps) {
+  const { meta } = useMeta();
   const [d, setD] = useState<ProcessDraft>({ title: "", trigger: "", body: "", realm });
+  // The realms this brain holds, read from /api/meta like every other realm
+  // picker — never a list shipped in the page. The current one leads.
+  const realms = [
+    ...new Set([realm, ...Object.keys(meta?.realms ?? {}).sort()].filter(Boolean)),
+  ];
   const set = (k: keyof ProcessDraft) => (e: { target: { value: string } }) =>
     setD((prev) => ({ ...prev, [k]: e.target.value }));
 
@@ -68,12 +75,18 @@ export function ProcessDialog({ realm, busy, error, onCancel, onSubmit }: Proces
         label="Realm"
         hint={
           <>
-            Defaults to <code>{realm}</code>, the brain&rsquo;s current realm. Lowercase letters, digits
-            and dashes.
+            Defaults to <code>{realm}</code>, the brain&rsquo;s current realm.
           </>
         }
       >
-        {(id) => <TextInput id={id} value={d.realm} onChange={set("realm")} />}
+        {(id) => (
+          <Select
+            id={id}
+            value={d.realm}
+            onChange={set("realm")}
+            options={realms.map((r) => ({ value: r, label: r === realm ? `${r} (current)` : r }))}
+          />
+        )}
       </Field>
     </Modal>
   );
