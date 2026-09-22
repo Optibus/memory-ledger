@@ -1,0 +1,3753 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "memory-ledger",
+    "version": "1.0.0",
+    "description": "The local HTTP API over one person's memory graph.\n\n**It calls no model.** Every endpoint here is the graph engine behind a socket:\nplain SQL through `graph.py`'s `api_*` helpers, so everything it does is\ntoken-free. Leaving a client polling it costs nothing.\n\n## Security — read this before changing `--host`\n\n**The write API is unauthenticated.** There is no token, no session, no CSRF\nprotection. Anything that can reach the port can rewrite the graph.\n\n- The default bind is `127.0.0.1`. Keep it there.\n- If you must expose it (`--host 0.0.0.0` for phone access), pass `--no-write`:\n  every `POST` then returns 403 and `/api/meta` reports `writable: false`, which\n  is what makes the UI hide its editing controls.\n- Do not put it behind a plain reverse proxy and call it done; that publishes an\n  unauthenticated write API to whoever can reach the proxy.\n\n## Conventions\n\n- Every response is JSON with an `ok` boolean; failures carry `error`, and the\n  error is the reason worth showing a person rather than a status code.\n- String inputs are length-capped server-side. Over-long values are truncated,\n  not rejected.\n- Open vocabulary (`realms`, `kinds`, node `types`) is read from `/api/meta`,\n  never shipped in a client. Closed sets (`rels`, `statuses`) are enforced here.\n- A disconnected client is not an error: the map polls, so a reload aborts a\n  response mid-write, and the server returns silently rather than reporting a\n  500 down a socket that has already closed.\n",
+    "license": {
+      "name": "See the repository"
+    }
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "This server."
+    }
+  ],
+  "tags": [
+    {
+      "name": "graph",
+      "description": "Nodes, edges, and what connects to what."
+    },
+    {
+      "name": "dashboard",
+      "description": "The token-free date views."
+    },
+    {
+      "name": "tasks",
+      "description": "Creating and moving work."
+    },
+    {
+      "name": "people",
+      "description": "Person nodes and assignment."
+    },
+    {
+      "name": "contracts",
+      "description": "Skills and rules — the two trees, and the file and bundle routes between machines."
+    },
+    {
+      "name": "vocabulary",
+      "description": "The open and closed sets a client must read rather than hard-code."
+    },
+    {
+      "name": "settings",
+      "description": "Preferences, store health, and upkeep."
+    },
+    {
+      "name": "meta",
+      "description": "This document, and the UI over it."
+    }
+  ],
+  "paths": {
+    "/api/graph": {
+      "get": {
+        "summary": "The whole graph, for the map",
+        "tags": [
+          "graph"
+        ],
+        "operationId": "getGraph",
+        "responses": {
+          "200": {
+            "description": "The read succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "nodes": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Node"
+                          }
+                        },
+                        "edges": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Edge"
+                          }
+                        },
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "count": {
+                              "type": "integer"
+                            },
+                            "edges": {
+                              "type": "integer"
+                            },
+                            "by_type": {
+                              "type": "object",
+                              "additionalProperties": {
+                                "type": "integer"
+                              }
+                            },
+                            "by_realm": {
+                              "type": "object",
+                              "additionalProperties": {
+                                "type": "integer"
+                              }
+                            },
+                            "by_kind": {
+                              "type": "object",
+                              "additionalProperties": {
+                                "type": "integer"
+                              }
+                            },
+                            "backend": {
+                              "type": "string"
+                            },
+                            "boot": {
+                              "type": "string",
+                              "description": "Identifies THIS process. The page reloads itself when it changes, so an open tab never keeps a page older than the API behind it."
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised; the reason is in `error`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "Nodes, edges, and the facet counts the map builds its filters from. Read from the neo4j master when one is reachable, else from the local sqlite mirror."
+      }
+    },
+    "/api/meta": {
+      "get": {
+        "summary": "The vocabulary, so no client hard-codes it",
+        "tags": [
+          "vocabulary"
+        ],
+        "operationId": "getMeta",
+        "responses": {
+          "200": {
+            "description": "The read succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "rels": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "statuses": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "realms": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "$ref": "#/components/schemas/RealmCount"
+                          }
+                        },
+                        "default_realm": {
+                          "type": "string"
+                        },
+                        "kinds": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "$ref": "#/components/schemas/RealmCount"
+                          }
+                        },
+                        "no_kind_token": {
+                          "type": "string"
+                        },
+                        "types": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "integer"
+                          }
+                        },
+                        "skill_sections": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/SectionShape"
+                          }
+                        },
+                        "rule_sections": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/SectionShape"
+                          }
+                        },
+                        "decl_labels": {
+                          "type": "array",
+                          "items": {
+                            "type": "object"
+                          }
+                        },
+                        "rule_sources": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "node_types": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "writable": {
+                          "type": "boolean",
+                          "description": "False under --no-write; the UI hides its editing controls."
+                        },
+                        "boot": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised; the reason is in `error`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "Two of these sets are CLOSED — `rels` and `statuses` are enforced on write. `realms`, `kinds` and `types` are OPEN: they are whatever this brain actually contains, and nobody's brain has the same list."
+      }
+    },
+    "/api/views": {
+      "get": {
+        "summary": "The names of the date views",
+        "tags": [
+          "dashboard"
+        ],
+        "operationId": "getViews",
+        "responses": {
+          "200": {
+            "description": "The read succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "views": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised; the reason is in `error`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/assignees": {
+      "get": {
+        "summary": "Every assignee token on an open task, with counts",
+        "tags": [
+          "vocabulary"
+        ],
+        "operationId": "getAssignees",
+        "responses": {
+          "200": {
+            "description": "The read succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "assignees": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised; the reason is in `error`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/realms": {
+      "get": {
+        "summary": "Every realm in the brain, with two counts each",
+        "tags": [
+          "vocabulary"
+        ],
+        "operationId": "getRealms",
+        "responses": {
+          "200": {
+            "description": "The read succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "realms": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "$ref": "#/components/schemas/RealmCount"
+                          }
+                        },
+                        "default": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised; the reason is in `error`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/kinds": {
+      "get": {
+        "summary": "Every props.kind in the brain, with the same two counts",
+        "tags": [
+          "vocabulary"
+        ],
+        "operationId": "getKinds",
+        "responses": {
+          "200": {
+            "description": "The read succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kinds": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "$ref": "#/components/schemas/RealmCount"
+                          }
+                        },
+                        "none_token": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised; the reason is in `error`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/node": {
+      "get": {
+        "summary": "One node in full, plus its named neighbours",
+        "tags": [
+          "graph"
+        ],
+        "operationId": "getNode",
+        "responses": {
+          "200": {
+            "description": "The read succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string"
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string"
+                        },
+                        "due": {
+                          "type": "string"
+                        },
+                        "realm": {
+                          "type": "string"
+                        },
+                        "body": {
+                          "type": "string"
+                        },
+                        "props": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "edges": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/NeighbourEdge"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised; the reason is in `error`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "The node id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/people": {
+      "get": {
+        "summary": "Person nodes, for the assignee picker",
+        "tags": [
+          "people"
+        ],
+        "operationId": "getPeople",
+        "responses": {
+          "200": {
+            "description": "The read succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "people": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "title": {
+                                "type": "string"
+                              },
+                              "aliases": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "realm": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised; the reason is in `error`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/person-duplicates": {
+      "get": {
+        "summary": "People who look like the same person",
+        "tags": [
+          "people"
+        ],
+        "operationId": "getPersonDuplicates",
+        "responses": {
+          "200": {
+            "description": "The read succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "duplicates": {
+                          "type": "array",
+                          "items": {
+                            "type": "object"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised; the reason is in `error`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "Read-only: it proposes, and `POST /api/merge-person` acts."
+      }
+    },
+    "/api/skills": {
+      "get": {
+        "summary": "The two skill trees and the rule catalogue",
+        "tags": [
+          "contracts"
+        ],
+        "operationId": "getSkills",
+        "responses": {
+          "200": {
+            "description": "The read succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "trees": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string"
+                              },
+                              "hub": {
+                                "type": "string"
+                              },
+                              "title": {
+                                "type": "string"
+                              },
+                              "count": {
+                                "type": "integer"
+                              },
+                              "skills": {
+                                "type": "array",
+                                "items": {
+                                  "$ref": "#/components/schemas/Skill"
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "rules": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Rule"
+                          }
+                        },
+                        "node_types": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/NodeTypeInfo"
+                          }
+                        },
+                        "areas": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised; the reason is in `error`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "Built from the edges `sync-skill-tree` wrote, never re-derived from the files here: two readers of one declaration cannot disagree, two parsers of it eventually do."
+      }
+    },
+    "/api/rule": {
+      "get": {
+        "summary": "One rule in full",
+        "tags": [
+          "contracts"
+        ],
+        "operationId": "getRule",
+        "responses": {
+          "200": {
+            "description": "The read succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "rule": {
+                          "type": "object",
+                          "nullable": true
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised; the reason is in `error`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "The rule id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/bundle": {
+      "get": {
+        "summary": "Download an exported bundle",
+        "tags": [
+          "contracts"
+        ],
+        "operationId": "getBundle",
+        "responses": {
+          "200": {
+            "description": "The read succeeded.",
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised; the reason is in `error`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "`name` is reduced to a bare filename, so it can only name a file in `<home>/bundles`.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "description": "The bundle filename.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/search": {
+      "get": {
+        "summary": "Find a node by title, for the relation picker",
+        "tags": [
+          "graph"
+        ],
+        "operationId": "getSearch",
+        "responses": {
+          "200": {
+            "description": "The read succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "results": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Node"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised; the reason is in `error`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "Under two characters it answers with an empty list rather than scanning the brain.",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "description": "Title substring. Two characters minimum.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/suggest-links": {
+      "get": {
+        "summary": "What a piece of text mentions, and how",
+        "tags": [
+          "graph"
+        ],
+        "operationId": "getSuggestLinks",
+        "responses": {
+          "200": {
+            "description": "The read succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "count": {
+                          "type": "integer"
+                        },
+                        "suggestions": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/LinkSuggestion"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised; the reason is in `error`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "Scans the text for nodes this brain already holds and reads the wording around each mention to pick a relation: 'blocked by PR #7366' becomes `blocked-by`, 'part of …' becomes `part-of`. A suggestion engine, not an oracle — the caller is expected to let a person confirm each one.",
+        "parameters": [
+          {
+            "name": "text",
+            "in": "query",
+            "required": true,
+            "description": "The text to scan — a task title, usually.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "exclude",
+            "in": "query",
+            "required": false,
+            "description": "A node id to leave out, normally the one being edited.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/settings": {
+      "get": {
+        "summary": "Stored preferences, and what is actually in effect",
+        "tags": [
+          "settings"
+        ],
+        "operationId": "getSettings",
+        "responses": {
+          "200": {
+            "description": "The read succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "writable": {
+                          "type": "boolean"
+                        },
+                        "keys": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "settings": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "env": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "string"
+                          }
+                        },
+                        "path": {
+                          "type": "string"
+                        },
+                        "effective": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised; the reason is in `error`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "They differ whenever an environment variable overrides the file, and a settings page that hides that is lying — so `env` names every key the shell has taken over."
+      },
+      "post": {
+        "summary": "Save preferences",
+        "tags": [
+          "settings"
+        ],
+        "operationId": "postSettings",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "tz": {
+                    "type": "string"
+                  },
+                  "realm": {
+                    "type": "string"
+                  },
+                  "map_poll_seconds": {
+                    "type": "integer"
+                  },
+                  "dash_refresh_seconds": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The write was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused. `error` says why, in the words a person can act on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server was started with --no-write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "Writes `<home>/settings.json`. Only these keys, each validated. An empty string REMOVES a key, falling back to the environment variable or the built-in default."
+      }
+    },
+    "/api/timezones": {
+      "get": {
+        "summary": "Every IANA zone name, from the stdlib",
+        "tags": [
+          "settings"
+        ],
+        "operationId": "getTimezones",
+        "responses": {
+          "200": {
+            "description": "The read succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "zones": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised; the reason is in `error`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/status": {
+      "get": {
+        "summary": "Where the data lives and whether the master is reachable",
+        "tags": [
+          "settings"
+        ],
+        "operationId": "getStatus",
+        "responses": {
+          "200": {
+            "description": "The read succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "db": {
+                          "type": "string"
+                        },
+                        "home": {
+                          "type": "string"
+                        },
+                        "nodes": {
+                          "type": "integer"
+                        },
+                        "edges": {
+                          "type": "integer"
+                        },
+                        "pending_ops": {
+                          "type": "integer"
+                        },
+                        "loose_captures": {
+                          "type": "integer"
+                        },
+                        "boot": {
+                          "type": "string"
+                        },
+                        "writable": {
+                          "type": "boolean"
+                        },
+                        "neo4j": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised; the reason is in `error`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "The neo4j password is NEVER sent to the browser; this reports `password_set` only."
+      }
+    },
+    "/api/openapi.json": {
+      "get": {
+        "summary": "This document",
+        "tags": [
+          "meta"
+        ],
+        "operationId": "getOpenapi",
+        "responses": {
+          "200": {
+            "description": "The read succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised; the reason is in `error`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/docs": {
+      "get": {
+        "summary": "Swagger UI over this document",
+        "tags": [
+          "meta"
+        ],
+        "operationId": "getDocs",
+        "responses": {
+          "200": {
+            "description": "The read succeeded.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised; the reason is in `error`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/{view}": {
+      "get": {
+        "summary": "Run one date view",
+        "description": "The same query layer the CLI uses, over HTTP. `realm` and `kind` take comma lists; omitting one means every value, so there is no 'all' token to get out of sync.",
+        "tags": [
+          "dashboard"
+        ],
+        "operationId": "getView",
+        "parameters": [
+          {
+            "name": "view",
+            "in": "path",
+            "required": true,
+            "description": "One of the names `/api/views` returns.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "agenda",
+                "open",
+                "today",
+                "tomorrow",
+                "week",
+                "closed",
+                "range"
+              ]
+            }
+          },
+          {
+            "name": "mine",
+            "in": "query",
+            "required": false,
+            "description": "Only rows that need action from the brain's owner.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            }
+          },
+          {
+            "name": "assignee",
+            "in": "query",
+            "required": false,
+            "description": "Comma list of assignee tokens. `unassigned` is one of them.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "realm",
+            "in": "query",
+            "required": false,
+            "description": "Comma list of realms. Omit for every realm.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "description": "Comma list of props.kind values. `(none)` selects nodes carrying none.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tz",
+            "in": "query",
+            "required": false,
+            "description": "IANA name overriding the brain's configured timezone for this call.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "backend",
+            "in": "query",
+            "required": false,
+            "description": "sqlite | neo4j | auto. Defaults to auto, the same store the map reads.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "range only: any | open | done.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "range only: ISO date, inclusive.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "range only: ISO date, inclusive.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since_days",
+            "in": "query",
+            "required": false,
+            "description": "closed only: how far back to look.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The rows the view matched.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "view": {
+                          "type": "string"
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "ref": {
+                          "type": "string"
+                        },
+                        "count": {
+                          "type": "integer"
+                        },
+                        "results": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/TaskRow"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No view by that name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/set-due": {
+      "post": {
+        "summary": "Set or clear a due date",
+        "tags": [
+          "tasks"
+        ],
+        "operationId": "postSetDue",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "due": {
+                    "type": "string",
+                    "description": "ISO timestamp. Empty clears it."
+                  }
+                },
+                "required": [
+                  "id"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The write was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused. `error` says why, in the words a person can act on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server was started with --no-write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/add-task": {
+      "post": {
+        "summary": "Create a task",
+        "tags": [
+          "tasks"
+        ],
+        "operationId": "postAddTask",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "task",
+                      "subtask"
+                    ]
+                  },
+                  "assignee": {
+                    "type": "string"
+                  },
+                  "priority": {
+                    "type": "string"
+                  },
+                  "realm": {
+                    "type": "string"
+                  },
+                  "due": {
+                    "type": "string"
+                  },
+                  "body": {
+                    "type": "string"
+                  },
+                  "links": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "rel": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                },
+                "required": [
+                  "title"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The write was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused. `error` says why, in the words a person can act on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server was started with --no-write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "Created `open`, with `props.source = \"web-ui\"` so UI-origin data stays distinguishable from hook-captured and skill-written data."
+      }
+    },
+    "/api/complete": {
+      "post": {
+        "summary": "Archive a task",
+        "tags": [
+          "tasks"
+        ],
+        "operationId": "postComplete",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "note": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The write was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused. `error` says why, in the words a person can act on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server was started with --no-write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "Sets `status=done` and stamps `completed_at`. Never deletes — finishing work is archiving (CONVENTIONS §2a)."
+      }
+    },
+    "/api/set-status": {
+      "post": {
+        "summary": "Move a task's state",
+        "tags": [
+          "tasks"
+        ],
+        "operationId": "postSetStatus",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "waiting_on": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "status"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The write was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused. `error` says why, in the words a person can act on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server was started with --no-write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "Refused with the allowed set in the error string when the status is not one the engine enforces."
+      }
+    },
+    "/api/set-assignee": {
+      "post": {
+        "summary": "Reassign a task",
+        "tags": [
+          "tasks"
+        ],
+        "operationId": "postSetAssignee",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "assignee": {
+                    "type": "string",
+                    "description": "Empty un-assigns."
+                  }
+                },
+                "required": [
+                  "id"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The write was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused. `error` says why, in the words a person can act on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server was started with --no-write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/update-node": {
+      "post": {
+        "summary": "Rename or edit any node",
+        "tags": [
+          "graph"
+        ],
+        "operationId": "postUpdateNode",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "body": {
+                    "type": "string"
+                  },
+                  "realm": {
+                    "type": "string"
+                  },
+                  "priority": {
+                    "type": "string"
+                  },
+                  "due": {
+                    "type": "string"
+                  },
+                  "props": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                },
+                "required": [
+                  "id"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The write was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused. `error` says why, in the words a person can act on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server was started with --no-write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/assign": {
+      "post": {
+        "summary": "Point a task at a person node",
+        "tags": [
+          "people"
+        ],
+        "operationId": "postAssign",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "person_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The write was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused. `error` says why, in the words a person can act on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server was started with --no-write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "Rewires the `assigned-to` edge as well as the prop, which is why it is a separate call from set-assignee."
+      }
+    },
+    "/api/merge-person": {
+      "post": {
+        "summary": "Merge two person nodes",
+        "tags": [
+          "people"
+        ],
+        "operationId": "postMergePerson",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "keep": {
+                    "type": "string"
+                  },
+                  "drop": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The write was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused. `error` says why, in the words a person can act on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server was started with --no-write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/link": {
+      "post": {
+        "summary": "Create a relation",
+        "tags": [
+          "graph"
+        ],
+        "operationId": "postLink",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "src": {
+                    "type": "string"
+                  },
+                  "dst": {
+                    "type": "string"
+                  },
+                  "rel": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "src",
+                  "dst",
+                  "rel"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The write was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused. `error` says why, in the words a person can act on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server was started with --no-write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/unlink": {
+      "post": {
+        "summary": "Remove a relation",
+        "tags": [
+          "graph"
+        ],
+        "operationId": "postUnlink",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "src": {
+                    "type": "string"
+                  },
+                  "dst": {
+                    "type": "string"
+                  },
+                  "rel": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "src",
+                  "dst",
+                  "rel"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The write was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused. `error` says why, in the words a person can act on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server was started with --no-write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/neo4j-config": {
+      "post": {
+        "summary": "Point the brain at a master",
+        "tags": [
+          "settings"
+        ],
+        "operationId": "postNeo4jConfig",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string"
+                  },
+                  "db": {
+                    "type": "string"
+                  },
+                  "user": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "url"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The write was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused. `error` says why, in the words a person can act on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server was started with --no-write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "Writes `<home>/neo4j.json` mode 600 and probes it. A blank password keeps the stored one; an empty url deletes the file and resets the read backend to sqlite."
+      }
+    },
+    "/api/neo4j-test": {
+      "post": {
+        "summary": "Probe the configured master",
+        "tags": [
+          "settings"
+        ],
+        "operationId": "postNeo4jTest",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The write was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused. `error` says why, in the words a person can act on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server was started with --no-write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/flush": {
+      "post": {
+        "summary": "Drain the outbox to the master",
+        "tags": [
+          "settings"
+        ],
+        "operationId": "postFlush",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The write was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused. `error` says why, in the words a person can act on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server was started with --no-write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/prune": {
+      "post": {
+        "summary": "Run maintain",
+        "tags": [
+          "settings"
+        ],
+        "operationId": "postPrune",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "keep_days": {
+                    "type": "integer",
+                    "default": 2
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The write was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused. `error` says why, in the words a person can act on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server was started with --no-write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "Consolidates old captures. Non-destructive — deletes nothing."
+      }
+    },
+    "/api/create-rule": {
+      "post": {
+        "summary": "Author a rule (CONVENTIONS §5b)",
+        "tags": [
+          "contracts"
+        ],
+        "operationId": "postCreateRule",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  },
+                  "scenario": {
+                    "type": "string"
+                  },
+                  "source": {
+                    "type": "string"
+                  },
+                  "section": {
+                    "type": "string"
+                  },
+                  "realm": {
+                    "type": "string"
+                  },
+                  "non_negotiable": {
+                    "type": "boolean"
+                  },
+                  "overrides": {
+                    "type": "string"
+                  },
+                  "sections": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "title",
+                  "scenario",
+                  "sections"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The write was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused. `error` says why, in the words a person can act on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server was started with --no-write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "STRICTER than the CLI, not looser: refused unless `sections.the_rule` and `sections.judged_against` are filled. A form has all the fields in front of it and no excuse to submit one that cannot be checked."
+      }
+    },
+    "/api/create-skill": {
+      "post": {
+        "summary": "Author a skill (CONVENTIONS §5)",
+        "tags": [
+          "contracts"
+        ],
+        "operationId": "postCreateSkill",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "realm": {
+                    "type": "string"
+                  },
+                  "sections": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    }
+                  },
+                  "requires": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "waits_for": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "enriched_by": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "reads": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "writes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "rules": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "new_rules": {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "required": [
+                  "name",
+                  "title",
+                  "sections"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The write was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused. `error` says why, in the words a person can act on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server was started with --no-write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "Refused unless the six typed sections of §5.1 are filled. `new_rules[]` are whole rule bodies created FIRST in the same call, and a failure in one aborts everything — a skill is never left accountable to a rule that does not exist."
+      }
+    },
+    "/api/export-skills": {
+      "post": {
+        "summary": "Write the skill tree out as markdown",
+        "tags": [
+          "contracts"
+        ],
+        "operationId": "postExportSkills",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string"
+                  },
+                  "dir": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The write was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused. `error` says why, in the words a person can act on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server was started with --no-write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ingest-skills": {
+      "post": {
+        "summary": "Read a markdown folder back in",
+        "tags": [
+          "contracts"
+        ],
+        "operationId": "postIngestSkills",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "dir": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The write was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused. `error` says why, in the words a person can act on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server was started with --no-write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "Re-running is safe: a skill is refreshed, and a rule this brain already holds is kept, never overwritten."
+      }
+    },
+    "/api/export-bundle": {
+      "post": {
+        "summary": "Export a selection as one zip",
+        "tags": [
+          "contracts"
+        ],
+        "operationId": "postExportBundle",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "skills": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "rules": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The write was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "skills": {
+                          "type": "integer"
+                        },
+                        "rules": {
+                          "type": "integer"
+                        },
+                        "path": {
+                          "type": "string",
+                          "description": "Where the zip landed on disk."
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "download": {
+                          "type": "string",
+                          "description": "A same-origin URL, so the browser can download it too."
+                        },
+                        "missing_skills": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "cycles": {
+                          "type": "array",
+                          "items": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused. `error` says why, in the words a person can act on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server was started with --no-write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "Returns the path, a same-origin download URL, and any skill REQUIRED by something exported that did not travel — those links cannot form on the other brain."
+      }
+    },
+    "/api/upload-bundle": {
+      "post": {
+        "summary": "Stage a bundle and read what is in it",
+        "tags": [
+          "contracts"
+        ],
+        "operationId": "postUploadBundle",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "filename": {
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "string",
+                    "format": "byte"
+                  }
+                },
+                "required": [
+                  "filename",
+                  "data"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The write was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "token": {
+                          "type": "string",
+                          "description": "One-shot; consumed by /api/import-bundle."
+                        },
+                        "counts": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "integer"
+                          }
+                        },
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/BundleItem"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused. `error` says why, in the words a person can act on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server was started with --no-write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "READS ONLY — nothing is written. Returns a one-shot token and every item with whether this brain already holds it. Capped at 32MB, because the upload arrives base64-encoded in one JSON body and is read into memory whole."
+      }
+    },
+    "/api/import-bundle": {
+      "post": {
+        "summary": "Apply a staged bundle",
+        "tags": [
+          "contracts"
+        ],
+        "operationId": "postImportBundle",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string"
+                  },
+                  "select": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string",
+                      "enum": [
+                        "update",
+                        "replace",
+                        "ignore"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "token",
+                  "select"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The write was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "applied": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "action": {
+                                "type": "string"
+                              },
+                              "rules_not_found": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "tree": {
+                          "type": "object",
+                          "properties": {
+                            "added": {
+                              "type": "integer"
+                            },
+                            "pruned": {
+                              "type": "integer"
+                            }
+                          }
+                        },
+                        "missing_skills": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused. `error` says why, in the words a person can act on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server was started with --no-write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "Applies in the plan's order and consumes the token. An item not mentioned in `select` is created when new and untouched when it exists."
+      }
+    },
+    "/api/delete-contracts": {
+      "post": {
+        "summary": "Delete skills and rules, with their edges",
+        "tags": [
+          "contracts"
+        ],
+        "operationId": "postDeleteContracts",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "force": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "ids"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The write was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "count": {
+                          "type": "integer"
+                        },
+                        "deleted": {
+                          "type": "array",
+                          "items": {
+                            "type": "object"
+                          }
+                        },
+                        "refused": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "why": {
+                                "type": "string",
+                                "description": "Usually: it ships as a file."
+                              }
+                            }
+                          }
+                        },
+                        "not_found": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused. `error` says why, in the words a person can act on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server was started with --no-write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "A built-in is REFUSED unless `force`, since its file would re-ingest it on the next sync."
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Envelope": {
+        "type": "object",
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string",
+            "description": "Present, and worth showing, only when ok is false."
+          }
+        }
+      },
+      "Node": {
+        "type": "object",
+        "description": "One node of the graph, as the map draws it.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "examples": [
+              "task_ship-ui_a1b2"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "description": "OPEN vocabulary — the engine never restricts it.",
+            "examples": [
+              "task"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "realm": {
+            "type": "string",
+            "description": "Empty is normalised to the server's default realm."
+          },
+          "kind": {
+            "type": "string",
+            "description": "props.kind, or the none-token for a node carrying none."
+          },
+          "due": {
+            "type": "string"
+          },
+          "degree": {
+            "type": "integer",
+            "description": "How many edges touch it — the map sizes the dot by this."
+          },
+          "body": {
+            "type": "string"
+          },
+          "props": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "Edge": {
+        "type": "object",
+        "required": [
+          "src",
+          "dst",
+          "rel"
+        ],
+        "properties": {
+          "src": {
+            "type": "string"
+          },
+          "dst": {
+            "type": "string"
+          },
+          "rel": {
+            "type": "string",
+            "description": "A CLOSED set, enforced on write. See /api/meta."
+          }
+        }
+      },
+      "NeighbourEdge": {
+        "type": "object",
+        "description": "An edge seen from one node, so it carries its direction.",
+        "properties": {
+          "dir": {
+            "type": "string",
+            "enum": [
+              "out",
+              "in"
+            ]
+          },
+          "rel": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
+      "TaskRow": {
+        "type": "object",
+        "description": "The slim row the date views return — small on purpose.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "realm": {
+            "type": "string"
+          },
+          "due": {
+            "type": "string"
+          },
+          "due_local": {
+            "type": "string",
+            "description": "The due date resolved into the brain's timezone, or '--' when there is none."
+          },
+          "waiting_on": {
+            "type": "string"
+          },
+          "assignee": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "delegated": {
+            "type": "string"
+          },
+          "mine": {
+            "type": "boolean"
+          },
+          "blocked_by": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RelatedRef"
+            }
+          },
+          "blocks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RelatedRef"
+            }
+          },
+          "related": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RelatedRef"
+            }
+          }
+        }
+      },
+      "RelatedRef": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
+      "RealmCount": {
+        "type": "object",
+        "description": "Two counts, because they answer different questions: `nodes` is what the map filters over, `open_tasks` is what the dashboard filters over.",
+        "properties": {
+          "nodes": {
+            "type": "integer"
+          },
+          "open_tasks": {
+            "type": "integer"
+          }
+        }
+      },
+      "SectionShape": {
+        "type": "object",
+        "description": "One heading of a contract shape (CONVENTIONS §5.1, §5b.1). The UI builds its forms from these rather than hard-coding the headings — a heading written into the page would be a second definition of the shape, and the one nothing checks.",
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "heading": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "generated": {
+            "type": "boolean",
+            "description": "Rendered from the declarations; the form leaves it out."
+          }
+        }
+      },
+      "Skill": {
+        "type": "object",
+        "description": "A skill contract, with its children nested by `requires` and nothing else (CONVENTIONS §5a).",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "triggers": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "plugin",
+              "learned"
+            ]
+          },
+          "uses": {
+            "type": "integer"
+          },
+          "requires": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "waits_for": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "enriched_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reads": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "writes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reads_other": {
+            "type": "string"
+          },
+          "writes_other": {
+            "type": "string"
+          },
+          "domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "declared": {
+            "type": "boolean"
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SkillRuleRef"
+            }
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Skill"
+            }
+          }
+        }
+      },
+      "SkillRuleRef": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "non_negotiable": {
+            "type": "boolean"
+          },
+          "why": {
+            "type": "string",
+            "enum": [
+              "declared",
+              "matched",
+              "always"
+            ],
+            "description": "Three different questions. `declared` is what the skill says it is accountable for; `matched` is what match-rules hands it at runtime; `always` is a non-negotiable, appended to every match."
+          }
+        }
+      },
+      "Rule": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "section": {
+            "type": "string"
+          },
+          "non_negotiable": {
+            "type": "boolean"
+          },
+          "scenario": {
+            "type": "string",
+            "description": "The cue match-rules actually fires on — not the body."
+          },
+          "domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "chars": {
+            "type": "integer"
+          }
+        }
+      },
+      "NodeTypeInfo": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "readers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "writers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "LinkSuggestion": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "rel": {
+            "type": "string"
+          },
+          "cue": {
+            "type": "string",
+            "description": "The wording in the text that produced this guess."
+          }
+        }
+      },
+      "BundleItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "skill",
+              "rule"
+            ]
+          },
+          "exists": {
+            "type": "boolean",
+            "description": "This brain already holds it — the only interesting case."
+          }
+        }
+      }
+    }
+  }
+}

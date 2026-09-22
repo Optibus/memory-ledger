@@ -1,0 +1,95 @@
+import { describe, expect, it } from "vitest";
+import { countSkills, emptySkillFilter, keepRule, keepSkill, ruleHaystack, skillHaystack } from "./filter";
+import { skillsFixture } from "@/test/fixtures";
+import type { SkillNode } from "@/api/types";
+
+const recall = skillsFixture.trees[0]!.skills[0]!;
+const f = (over: Partial<ReturnType<typeof emptySkillFilter>> = {}) => ({ ...emptySkillFilter(), ...over });
+
+describe("skillHaystack", () => {
+  it("covers every field a person might reach for", () => {
+    const hay = skillHaystack(recall);
+    expect(hay).toContain("recall");
+    expect(hay).toContain("read the graph back");
+    expect(hay).toContain("what do i know about");
+    expect(hay).toContain("task");
+  });
+
+  it("leaves the always-on rules out, or one query returns the whole corpus", () => {
+    const hay = skillHaystack(recall);
+    expect(hay).toContain("the memory graph api"); // declared
+    expect(hay).not.toContain("always-on capture"); // non-negotiable, on every skill
+  });
+});
+
+describe("keepSkill", () => {
+  it("keeps a skill that matches", () => {
+    expect(keepSkill(recall, "plugin", f({ q: "recall" }))?.dim).toBe(false);
+  });
+
+  it("drops one that does not", () => {
+    expect(keepSkill(recall, "plugin", f({ q: "invoice" }))).toBeNull();
+  });
+
+  it("keeps a parent whose descendant matched, and dims it", () => {
+    const kept = keepSkill(recall, "plugin", f({ q: "visualize" }));
+    expect(kept).not.toBeNull();
+    expect(kept!.dim).toBe(true);
+    expect(kept!.children.map((c) => c.id)).toEqual(["skill_visualize"]);
+  });
+
+  it("filters by source, treating user and learned as the same tree", () => {
+    expect(keepSkill(recall, "plugin", f({ src: "plugin" }))).not.toBeNull();
+    expect(keepSkill(recall, "plugin", f({ src: "user" }))).toBeNull();
+    expect(keepSkill(recall, "learned", f({ src: "learned" }))).not.toBeNull();
+    expect(keepSkill(recall, "learned", f({ src: "user" }))).not.toBeNull();
+  });
+
+  it("filters by domain", () => {
+    expect(keepSkill(recall, "plugin", f({ dom: "hub_process" }))).not.toBeNull();
+    expect(keepSkill(recall, "plugin", f({ dom: "hub_writing" }))).toBeNull();
+  });
+
+  it("is case-insensitive", () => {
+    expect(keepSkill(recall, "plugin", f({ q: "RECALL" }))).not.toBeNull();
+  });
+});
+
+describe("keepRule", () => {
+  const [emoji, graphApi] = skillsFixture.rules;
+
+  it("matches the cue as well as the title, because match-rules fires on the cue", () => {
+    expect(keepRule(emoji!, f({ q: "writing anything" }))).toBe(true);
+    expect(ruleHaystack(emoji!)).toContain("writing anything for a person");
+  });
+
+  it("filters by source and domain", () => {
+    expect(keepRule(emoji!, f({ src: "user" }))).toBe(true);
+    expect(keepRule(emoji!, f({ src: "plugin" }))).toBe(false);
+    expect(keepRule(graphApi!, f({ dom: "hub_process" }))).toBe(true);
+    expect(keepRule(graphApi!, f({ dom: "hub_writing" }))).toBe(false);
+  });
+
+  it("keeps everything when nothing is asked", () => {
+    expect(keepRule(emoji!, f())).toBe(true);
+  });
+});
+
+describe("countSkills", () => {
+  it("counts every level, not just the roots", () => {
+    const kept = keepSkill(recall, "plugin", f())!;
+    expect(countSkills([kept])).toBe(2);
+  });
+
+  it("is zero for nothing", () => {
+    expect(countSkills([])).toBe(0);
+  });
+
+  it("counts a deep branch", () => {
+    const deep: SkillNode = {
+      ...recall,
+      children: [{ ...recall, id: "b", children: [{ ...recall, id: "c", children: [] }] }],
+    };
+    expect(countSkills([keepSkill(deep, "plugin", f())!])).toBe(3);
+  });
+});

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """memory-ledger pre-commit — enforce CONVENTIONS §4 (docs ship with behavior).
 
-Fails the commit if it changes behavior (engine, hooks, viz, or plugin config)
+Fails the commit if it changes behavior (engine, hooks, frontend, or plugin config)
 without also staging a docs change (any *.md — README / CONVENTIONS / INSTALL /
 a SKILL.md / commands). Bypass a false positive with `git commit --no-verify`.
 
@@ -29,7 +29,10 @@ def is_behavior(f: str) -> bool:
         return True
     if f.startswith("hooks/"):                 # Claude Code hooks (.py / .json / .sh)
         return True
-    if f.startswith("viz/") and (f.endswith(".py") or f.endswith(".html")):
+    # The UI. Source only: frontend/dist is BUILT from it, so a rebuild is not a
+    # behavior change of its own and demanding a doc edit for one would train
+    # people to reach for --no-verify on every commit.
+    if f.startswith("frontend/src/") or f == "frontend/index.html":
         return True
     if f.startswith(".claude-plugin/") and f.endswith(".json"):
         return True

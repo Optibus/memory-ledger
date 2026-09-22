@@ -258,15 +258,20 @@ python3 scripts/graph.py tree --session <sid>  # the agent tree, with its ideas
 python3 scripts/graph.py recheck               # what became possible again (§2k)
 ```
 
-### Map + dashboard (optional UI)
+### The brain UI (optional)
 
 ```
-python3 viz/serve.py                 # http://127.0.0.1:8770
-python3 viz/serve.py --no-write      # read-only
+python3 scripts/serve.py                 # http://127.0.0.1:8770
+python3 scripts/serve.py --no-write      # read-only
 ```
-One page, three sections behind the hamburger menu (`m`): **Map** (live graph),
-**Dashboard** (the query views), and **Settings** (timezone, default realm,
-database connection, prune). The dashboard also **edits** the brain — create tasks
+**No install step.** It is a React app, but the compiled bundle ships with the
+plugin, so this works on a machine with no node and nothing to `npm install`.
+
+Four sections behind the hamburger menu (`m`), each with its own URL: **Map**
+(live graph), **Dashboard** (the query views), **Skills** (the two contract trees
+and the rule catalogue), and **Settings** (timezone, default realm, database
+connection, prune). The API documents itself at
+[`/api/docs`](http://127.0.0.1:8770/api/docs). The dashboard also **edits** the brain — create tasks
 with auto-recognised links, complete them, change status/assignee/due, rename, and
 add/remove relations — all token-free (no model). Set the timezone once in
 Settings rather than per command. Add `--host 0.0.0.0` to reach it from your phone

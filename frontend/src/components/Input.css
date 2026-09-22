@@ -1,0 +1,10 @@
+.ml-input {
+  background: var(--bg-sunken); border: 1px solid var(--border); color: var(--fg);
+  border-radius: var(--radius); padding: 6px 10px; outline: none;
+  font-family: inherit; font-size: 13px; width: 100%;
+}
+.ml-input:focus { border-color: var(--accent); }
+.ml-input::placeholder { color: var(--muted); }
+.ml-input--area { resize: vertical; line-height: 1.5; min-height: 64px; }
+.ml-input--select { cursor: pointer; }
+.ml-input:disabled { opacity: 0.5; cursor: not-allowed; }

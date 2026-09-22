@@ -139,7 +139,7 @@ python3 ~/dev/memory-ledger/scripts/graph.py list --type capture --all --limit 5
 
 ## 6. Optional extras
 
-- **The map + dashboard:** `python3 ~/dev/memory-ledger/viz/serve.py` →
+- **The brain UI:** `python3 ~/dev/memory-ledger/scripts/serve.py` →
   <http://127.0.0.1:8770>.
 - **A local neo4j** for graph queries (Docker, data under
   `~/.second_brain/neo4j`, restarts unless stopped):

@@ -1,0 +1,12 @@
+.ml-due {
+  display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 20px;
+  border: 1px solid var(--border); background: transparent; color: var(--muted);
+  font-family: inherit; white-space: nowrap;
+}
+.ml-due.is-editable { cursor: pointer; }
+.ml-due.is-editable:hover { border-color: var(--accent); color: var(--fg); }
+.ml-due.is-over { color: var(--danger); border-color: var(--danger); }
+.ml-due__picker {
+  background: var(--bg-sunken); border: 1px solid var(--accent); color: var(--fg);
+  border-radius: var(--radius-sm); padding: 1px 6px; font: inherit; font-size: 11px;
+}

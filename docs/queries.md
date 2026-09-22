@@ -189,7 +189,7 @@ the same cue in ~1,500.
 
 ## Reading from the dashboard instead
 
-Every view above is also served over HTTP by `viz/serve.py`, and the dashboard
+Every view above is also served over HTTP by `scripts/serve.py`, and the dashboard
 can write too (due dates, status, assignee, relations) without spending a token.
 See [the API reference](api.md).
 

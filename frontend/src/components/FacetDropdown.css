@@ -1,0 +1,18 @@
+.ml-facet__head {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: 2px 4px 7px; border-bottom: 1px solid var(--border); margin-bottom: 5px;
+}
+.ml-facet__title {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.6px;
+  color: var(--muted); flex: 1;
+}
+.ml-facet__bulk {
+  background: var(--bg-sunken); border: 1px solid var(--border); color: var(--muted);
+  border-radius: var(--radius-sm); padding: 2px 8px; font: inherit; font-size: 11px; cursor: pointer;
+}
+.ml-facet__bulk:hover { border-color: var(--accent); color: var(--fg); }
+.ml-facet__opts { max-height: min(52vh, 340px); overflow: auto; }
+.ml-facet__note {
+  color: var(--muted); font-size: 11px; line-height: 1.35; padding: var(--space-1) 5px;
+}
+.ml-facet__note code { color: var(--fg); font-size: 10.5px; }

@@ -20,14 +20,18 @@ skills to my other machine", "change the timezone", "run prune".
 - **The server**, which is dependency-free and local:
 
   ```
-  python3 "$CLAUDE_PLUGIN_ROOT/viz/serve.py" [--port 8770] [--no-open]
+  python3 "$CLAUDE_PLUGIN_ROOT/scripts/serve.py" [--port 8770] [--no-open]
   ```
 
   It prints a URL, defaulting to `http://127.0.0.1:8770/`, and runs until Ctrl-C.
+  **Nothing needs installing.** The UI is a React app whose build ships with the
+  plugin, so this runs on a machine with no node.
   Because it is long-running, start it in the background and give the person the
   URL. It binds to 127.0.0.1 only unless `--host 0.0.0.0` is passed.
-- **Four sections behind the hamburger menu** (`m` toggles it), reading the same
-  brain file and a configured graph mirror when one is reachable:
+- **Four sections behind the hamburger menu** (`m` toggles it), each with its own
+  URL (`/map`, `/dashboard`, `/skills`, `/settings`) so a section can be linked
+  to directly, reading the same brain file and a configured graph mirror when one
+  is reachable:
   - **Map.** Zoom, pan, pin a node by dragging, reset with a double-click. Search
     highlights matches and dims the rest. Four multi-select filters with live
     counts: node types, realms, kinds from `props.kind`, and display toggles.
@@ -77,7 +81,7 @@ Accountable for: `rule_s2g_the-web-ui-is-a-full-write-surface-the-b`,
 See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTIONS §5a).
 
 - **Requires:** none.
-- **Reads:** every node type in the graph, through `viz/serve.py`.
+- **Reads:** every node type in the graph, through `scripts/serve.py`.
 - **Writes:** none by this skill. The person writes, through the UI.
 
 ## Deliverables
@@ -94,6 +98,9 @@ See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTION
 - **A read-only server is diagnosed, not worked around.** If it was started with
   `--no-write`, the editing controls are hidden and writes return 403. Say so and
   say to restart without the flag.
+- **A request about the API itself is answered with `/api/docs`**, the Swagger UI
+  the server builds from its own routes. Describing the endpoints from memory is
+  how a stale answer gets into someone's client.
 
 ## Judged against
 

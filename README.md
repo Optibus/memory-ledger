@@ -21,6 +21,7 @@ work and keeps what is still open: what you owe, to whom, by when.
 > **Building on it?** [`docs/`](docs/README.md) is the developer reference —
 > [the algorithm](docs/algorithm.md), [query methods](docs/queries.md),
 > [search patterns](docs/search.md), [the HTTP API](docs/api.md),
+> [the frontend](docs/frontend.md),
 > [measured performance](docs/performance.md), [running neo4j](docs/neo4j.md),
 > [how it compares to MemPalace](docs/comparison.md),
 > and [how to contribute](CONTRIBUTING.md).
@@ -565,9 +566,15 @@ Writes are unauthenticated and bound to localhost; serve with `--no-write` if yo
 expose the UI on your network.
 
 ```bash
-python3 viz/serve.py            # opens http://127.0.0.1:8770/ in your browser
-python3 viz/serve.py --no-open --host 0.0.0.0 --port 8770 &   # reachable on LAN / phone
+python3 scripts/serve.py            # opens http://127.0.0.1:8770/ in your browser
+python3 scripts/serve.py --no-open --host 0.0.0.0 --port 8770 &   # reachable on LAN / phone
 ```
+
+The UI is a React single-page app (`frontend/`). Its build is **committed**, so
+the command above needs no node and nothing installed — see
+[the frontend](docs/frontend.md) to work on it. The API describes itself at
+**`/api/docs`**: Swagger UI over an OpenAPI 3.1 document the running process
+builds, so it can never describe a server other than the one answering you.
 
 Reads neo4j when reachable, else the SQLite mirror. Binds to localhost by default;
 use `--host 0.0.0.0` (behind a tunnel) to reach it from your phone. The dashboard

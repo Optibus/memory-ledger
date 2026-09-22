@@ -21,18 +21,51 @@ jobs:
         with:
           python-version: "3.12"
 
-      # The suite parses viz/index.html's inline script with `node --check`, and
-      # SKIPS ITSELF when node is absent. ubuntu-latest happens to ship node, so
-      # the guard would run today by accident -- and would start passing
-      # vacuously the day a runner image drops it, which is exactly the silent
-      # failure it exists to catch. Installing it makes that non-incidental.
-      - name: Set up Node (for the page-script syntax guard)
+      # Node builds and tests the frontend, and test_contracts.py parses the
+      # committed bundle with `node --check` -- a guard that SKIPS ITSELF when
+      # node is absent. ubuntu-latest happens to ship node, so that guard would
+      # run today by accident and start passing vacuously the day a runner image
+      # drops it, which is exactly the silent failure it exists to catch.
+      # Installing it makes that non-incidental.
+      - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
-      - name: Byte-compile scripts, hooks, viz
-        run: python -m compileall -q scripts hooks viz
+      - name: Byte-compile scripts and hooks
+        run: python -m compileall -q scripts hooks
+
+      # The frontend is the only part of the repo with a toolchain. Its suites
+      # are unit (components, hooks, pure logic) and integration (a whole section
+      # driven against a mock server), and both run here.
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Typecheck and build the frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Frontend tests
+        working-directory: frontend
+        run: npm test
+
+      # The build output is COMMITTED, because `python3 scripts/serve.py` must
+      # work with no node installed. That promise is only kept if the committed
+      # bundle matches the source it was built from -- so rebuild it above and
+      # fail here if the working tree moved. The fix is to run `npm run build`
+      # and commit the result with the change that caused it.
+      - name: The committed build matches the source
+        run: |
+          if ! git diff --quiet -- frontend/dist; then
+            echo "frontend/dist is stale — rebuild it and commit it with this change:"
+            echo "    cd frontend && npm run build"
+            git --no-pager diff --stat -- frontend/dist
+            exit 1
+          fi
+          echo "frontend/dist is up to date"
 
       # The suites are stdlib-only and self-contained, so there is no install
       # step and no reason not to run them. SECOND_BRAIN_HOME points at a temp
@@ -47,6 +80,19 @@ jobs:
             echo "== $t"
             python "$t" || exit 1
           done
+
+      # The OpenAPI document is generated, so the copy in docs/ is a convenience
+      # for readers who are not running the server. It has to be regenerated with
+      # any API change, exactly like every other doc (CONVENTIONS §4).
+      - name: The checked-in OpenAPI document is current
+        run: |
+          python3 scripts/openapi.py --out docs/openapi.json
+          if ! git diff --quiet -- docs/openapi.json; then
+            echo "docs/openapi.json is stale — regenerate it and commit it:"
+            echo "    python3 scripts/openapi.py --out docs/openapi.json"
+            exit 1
+          fi
+          echo "docs/openapi.json is up to date"
 
       # Manifest validation exists because .claude-plugin/plugin.json and
       # marketplace.json are hand-edited and never executed — a typo or a

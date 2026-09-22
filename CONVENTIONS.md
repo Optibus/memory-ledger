@@ -290,7 +290,7 @@ unless you configure it. When the mirror is unreachable the change is queued in 
 - `neo4j-status` — configured / reachable / pending-ops · `flush` — drain the queue.
 - `$SECOND_BRAIN_NO_AUTOSYNC=1` queues without per-op push (for heavy batch loads;
   `flush` afterwards) · `scripts/brain_sync.py` does a full bulk reconcile.
-- The visualizer (`viz/serve.py`) reads the mirror when one is reachable, else the
+- The visualizer (`scripts/serve.py`) reads the mirror when one is reachable, else the
   local file.
 
 **A local graph server in one command.** `scripts/neo4j_local.py up` (slash command
@@ -370,7 +370,7 @@ Prefer it (or `graph.py search` / `open-loops`) over asking the model to recall 
 recall is free. `--backend sqlite|neo4j|auto` (with no flag: the `backend` setting,
 §2d, default `sqlite`), local-tz buckets via `--tz`, `$SECOND_BRAIN_TZ`, or the `tz`
 setting in `<home>/settings.json` (§2g) — in that order. The dashboard tab of
-`viz/serve.py` is this same layer over HTTP.
+`scripts/serve.py` is this same layer over HTTP.
 
 **`--mine` — only what the owner must act on.** Any view takes `--mine` (the
 dashboard's "🙋 Mine · needs action" toggle → `?mine=1`) to keep ONLY the owner's
@@ -423,6 +423,7 @@ guarantee as the read layer.
 | Create a relation | `POST /api/link` | Search for the other end, pick the relation, done. |
 | Remove a relation | `POST /api/unlink` | The `×` on any row under **Related**. |
 | Read the vocabulary | `GET /api/meta` | Relations + statuses + `writable`; the UI never hardcodes them. |
+| Read the API itself | `GET /api/docs` | Swagger UI over `GET /api/openapi.json`, built by the running process so it cannot describe a different server. |
 | Find a node to link | `GET /api/search?q=` | Title substring, for the relation picker. |
 | Change a preference | `POST /api/settings` | `tz`, `realm`, `backend`, `map_poll_seconds`, `dash_refresh_seconds` → `<home>/settings.json`. |
 | Point at the master | `POST /api/neo4j-config` / `/api/neo4j-test` | Writes `<home>/neo4j.json` (mode 600) and probes it. Empty url = sqlite only, and resets `backend` to `sqlite`. The **default read backend** select (§2d) sits in this card. |
@@ -458,9 +459,13 @@ expose the UI (`--host 0.0.0.0` for phone access), pass **`--no-write`**: every
 `POST` then returns 403 and the UI hides its editing controls (`/api/meta`
 reports `writable: false`).
 
-**Four sections, behind one hamburger: Map, Dashboard, Skills, Settings.** The sections
-live in a left drawer (`m` toggles it, Settings pinned at the bottom) so nothing
-sits on top of the search bar, and each section owns the whole viewport. The map's
+**Four sections, behind one hamburger: Map, Dashboard, Skills, Settings.** The UI
+is a React single-page app (`frontend/`, built to a committed `frontend/dist`
+that `scripts/serve.py` serves — see [the frontend](docs/frontend.md)). The
+sections live in a left drawer (`m` toggles it, Settings pinned at the bottom) so
+nothing sits on top of the search bar, each section owns the whole viewport, and
+**the section is in the URL** (`/map`, `/dashboard`, `/skills`, `/settings`), so
+a reload lands where you were and a link to a section is a link to that section. The map's
 facet filters — node types, realms, kinds, and the display toggles — are one
 dropdown each, multi-select, with an **all** / **none** that applies to that scope
 only; the button says what the closed menu is doing (`all`, `none`, `4/9`). Nothing
@@ -908,7 +913,7 @@ for the turn that caused a transition, and adds `supersedes`.
 Both vocabularies are **soft** — the engine does not reject an unlisted type or
 relation (hooks legitimately write `capture` nodes and `captured-from` edges).
 Closed sets are enforced at untrusted boundaries instead: the web UI's write API
-(`viz/serve.py`) accepts only the relations above and only `task`/`subtask`.
+(`scripts/serve.py`) accepts only the relations above and only `task`/`subtask`.
 
 **Task status values:** `open`, `doing`, `blocked`, `done`, `cancelled`.
 `done`/`cancelled` are the **archive** — hidden from active views but kept.
@@ -943,7 +948,12 @@ without matching doc updates is **incomplete**.
 - a new / changed / removed `graph.py` command or flag, or a changed default;
 - a new / renamed / removed skill (`skills/*/SKILL.md`) or command (`commands/*`);
 - a hook change (`hooks/`) — what fires, when, or what it stores;
-- a new or changed script / endpoint (`brain_query.py`, `viz/serve.py`, sync);
+- a new or changed script / endpoint (`brain_query.py`, `scripts/serve.py`, sync) —
+  and a new endpoint also means describing it in `scripts/openapi.py`, which
+  `tests/test_openapi.py` enforces;
+- a change to the web UI (`frontend/src/`), which also means **rebuilding
+  `frontend/dist` in the same commit** — it is committed so the server needs no
+  node, and a stale bundle ships behavior nobody wrote;
 - a change to storage, sync, realms, vocabulary (node types, edges, states), or
   the install/enable flow.
 
@@ -960,7 +970,7 @@ default changed, update the example that shows it. Verify commands/flags shown i
 docs actually exist (`graph.py <cmd> --help`). Then commit code + docs together.
 
 **Enforced by a pre-commit hook** (`.githooks/pre-commit`), in two stages. First,
-a commit that stages behavior (`scripts/`, `hooks/`, `viz/`, or
+a commit that stages behavior (`scripts/`, `hooks/`, `frontend/src/`, or
 `.claude-plugin/*.json`) without also staging a docs change (any `*.md`) is
 **blocked**. Second, `scripts/check-contracts.sh` runs, so a skill that lost its
 contract shape, its graph surface, or its place in the dependency tree blocks the

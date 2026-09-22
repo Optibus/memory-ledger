@@ -17,7 +17,7 @@
   4. generates a password once, stores it in `~/.second_brain/neo4j.json`
      (chmod 600), and **never prints it**;
   5. makes neo4j the default backend (`backend` setting), so the CLI reads it too
-     rather than only `viz/serve.py`;
+     rather than only `scripts/serve.py`;
   6. backfills the existing brain into it (`brain_sync.py`) and drains the outbox.
 
 Nothing here is required to use the brain: SQLite stays the durable mirror and is
@@ -168,7 +168,7 @@ def _wait_ready(bin_, name: str, url: str, seconds: int) -> tuple[bool, str]:
 def _write_config(url: str, password: str, db="neo4j", user="neo4j") -> dict:
     """Write <home>/neo4j.json (chmod 600), backing up anything different first.
 
-    Same file and shape `viz/serve.py` writes from the Settings page, so the two
+    Same file and shape `scripts/serve.py` writes from the Settings page, so the two
     paths cannot drift.
     """
     f = graph.home_dir() / "neo4j.json"

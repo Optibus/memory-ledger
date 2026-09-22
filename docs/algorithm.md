@@ -18,7 +18,7 @@ Read [`architecture`](#the-shape-of-it) first if you just want the shape;
    open_loops_brief.py ┘     │ recall · consolidate │        │  (SQLite)    │
                              └──────────┬───────────┘        └──────┬───────┘
    skills/  (model-driven,              │                           │ optional
-   spend tokens when they         viz/serve.py                      ▼ mirror
+   spend tokens when they         scripts/serve.py                      ▼ mirror
    reach out to Slack/Jira)       HTTP + dashboard             neo4j master
 ```
 

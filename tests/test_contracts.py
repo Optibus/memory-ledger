@@ -28,7 +28,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
-sys.path.insert(0, str(ROOT / "viz"))
 
 BRAIN = tempfile.mkdtemp(prefix="second-brain-contracts-")
 # In-process checks import the engine directly, and it resolves its home from the
@@ -229,7 +228,7 @@ def test_web():
     home = tempfile.mkdtemp(prefix="second-brain-contracts-w-")
     port = 8799
     proc = subprocess.Popen(
-        [sys.executable, str(ROOT / "viz" / "serve.py"), "--port", str(port),
+        [sys.executable, str(ROOT / "scripts" / "serve.py"), "--port", str(port),
          "--no-open", "--no-reload"],
         env=env_for(home), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -794,33 +793,109 @@ def test_home_adoption_keeps_the_data():
 # skill before the rule it honors, or before the skill it requires, produces a
 # zip that imports without complaint and arrives wired to nothing — the same
 # silent-lie failure §5 exists to prevent, one layer out.
-def test_page_script_parses():
-    """The page's inline script, checked as a whole.
+def test_built_ui_is_shipped():
+    """The committed build exists, is coherent, and parses.
 
-    index.html has one script block and no build step, so a duplicate `const` or
-    a stray brace anywhere in it kills EVERY handler on the page at once — and it
-    does so silently: nothing throws where you are looking, the buttons simply
-    stop responding. A syntax check is the only cheap way to see that before a
-    person does. Skipped when node is not installed; it is a guard, not a
-    dependency."""
-    print("\n== the page's own script still parses ==")
+    The UI is a React app now, which means it has a BUILD — and the plugin
+    promises `python3 scripts/serve.py` works with no npm and no install step.
+    The only way to keep both is to commit `frontend/dist`, and the only way to
+    keep THAT honest is to check it is there and intact on every run. A missing
+    or half-written bundle is the worst kind of failure here: the API answers,
+    the server starts, and the person gets a blank page.
+
+    The syntax check is skipped when node is not installed; it is a guard, not a
+    dependency (CI installs node so the guard cannot pass vacuously)."""
+    print("\n== the built UI ships with the plugin ==")
+    dist = ROOT / "frontend" / "dist"
+    index = dist / "index.html"
+    ck("frontend/dist/index.html is committed", index.is_file(), str(index))
+    if not index.is_file():
+        return
+
+    html = index.read_text(encoding="utf-8")
+    import re
+    refs = re.findall(r'(?:src|href)="\.?/?(assets/[^"]+)"', html)
+    ck("its entry point references built assets", bool(refs), str(refs))
+    missing = [r for r in refs if not (dist / r).is_file()]
+    ck("and every one of them is on disk — a half-committed build is a blank page",
+       not missing, ", ".join(missing))
+
+    ck("the app mounts on the root the bundle expects", 'id="root"' in html, "")
+
     node = shutil.which("node")
     if not node:
         print("  SKIP  node not installed")
         return
-    import re
-    html = (ROOT / "viz" / "index.html").read_text(encoding="utf-8")
-    blocks = re.findall(r"<script>(.*?)</script>", html, re.S)
-    ck("index.html carries its script inline", bool(blocks), str(len(blocks)))
-    src = Path(tempfile.mkdtemp(prefix="second-brain-js-")) / "page.js"
-    src.write_text("\n".join(blocks), encoding="utf-8")
-    pr = subprocess.run([node, "--check", str(src)], capture_output=True, text=True)
-    # node prints the offending line, a caret, the SyntaxError, then a stack and
-    # its own version banner. The SyntaxError line is the only one worth showing.
-    why = next((l for l in (pr.stderr or "").splitlines() if "Error" in l), "")
-    ck("and it parses — a dead script takes every handler with it",
-       pr.returncode == 0, why.strip())
-    shutil.rmtree(src.parent, ignore_errors=True)
+    scripts = [r for r in refs if r.endswith(".js")]
+    ck("the bundle is a single script, so one syntax error is visible at once",
+       len(scripts) == 1, str(scripts))
+    for rel in scripts:
+        # .mjs so `node --check` parses it as the ES module the build emits.
+        src = Path(tempfile.mkdtemp(prefix="second-brain-js-")) / "bundle.mjs"
+        src.write_text((dist / rel).read_text(encoding="utf-8"), encoding="utf-8")
+        pr = subprocess.run([node, "--check", str(src)], capture_output=True, text=True)
+        why = next((l for l in (pr.stderr or "").splitlines() if "Error" in l), "")
+        ck(f"{rel} parses — a dead bundle takes the whole page with it",
+           pr.returncode == 0, why.strip())
+        shutil.rmtree(src.parent, ignore_errors=True)
+
+
+def test_api_docs_are_served():
+    """The API describes itself, over the same port it answers on.
+
+    A spec that lives only in a file is one a reader has to go and find, and one
+    that can describe a server other than the one running. Serving it from the
+    process means the two cannot be different.
+    """
+    print("\n== the API documents itself ==")
+    import urllib.request
+    import openapi
+
+    doc = openapi.build()
+    ck("the document builds", doc.get("openapi") == "3.1.0", str(doc.get("openapi")))
+
+    home = tempfile.mkdtemp(prefix="second-brain-contracts-d-")
+    port = 8798
+    proc = subprocess.Popen(
+        [sys.executable, str(ROOT / "scripts" / "serve.py"), "--port", str(port),
+         "--no-open", "--no-reload"],
+        env=env_for(home), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        for _ in range(60):
+            try:
+                urllib.request.urlopen(f"http://127.0.0.1:{port}/api/meta", timeout=5)
+                break
+            except Exception:
+                time.sleep(0.2)
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/openapi.json") as r:
+            served = json.loads(r.read())
+        ck("the running server serves the same document it was built from",
+           served["paths"].keys() == doc["paths"].keys(),
+           str(set(served["paths"]) ^ set(doc["paths"]))[:120])
+
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/docs") as r:
+            page = r.read().decode("utf-8")
+        ck("and a browsable UI over it", "swagger" in page.lower(), page[:60])
+
+        # The SPA fallback must not swallow a genuinely unknown API route: a
+        # client asking for an endpoint that does not exist has to hear so.
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/api/no-such-endpoint")
+            ck("an unknown /api/ route is a 404, not the app", False, "got 200")
+        except urllib.error.HTTPError as e:
+            ck("an unknown /api/ route is a 404, not the app", e.code == 404, str(e.code))
+
+        # ...while any non-API path is the app, so a deep link works.
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/dashboard") as r:
+            ck("a deep link into the app is served the app",
+               r.headers.get_content_type() == "text/html", r.headers.get_content_type())
+    finally:
+        proc.send_signal(signal.SIGINT)
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        shutil.rmtree(home, ignore_errors=True)
 
 
 def test_bundle_round_trip():
@@ -1005,7 +1080,7 @@ def test_bundle_web():
     home = tempfile.mkdtemp(prefix="second-brain-bundle-w-")
     port = 8798
     proc = subprocess.Popen(
-        [sys.executable, str(ROOT / "viz" / "serve.py"), "--port", str(port),
+        [sys.executable, str(ROOT / "scripts" / "serve.py"), "--port", str(port),
          "--no-open", "--no-reload"],
         env=env_for(home), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -1081,7 +1156,8 @@ def main():
     test_server_error_paths()
     test_web()
     test_web_odd_shapes()
-    test_page_script_parses()
+    test_built_ui_is_shipped()
+    test_api_docs_are_served()
     test_bundle_round_trip()
     test_bundle_refusals()
     test_bundle_web()

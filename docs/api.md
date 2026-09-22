@@ -1,14 +1,43 @@
 # HTTP API
 
-`viz/serve.py` is a dependency-free stdlib HTTP server that serves the map +
-dashboard UI and a small JSON API over the same graph. It calls **no model** — it
-is the graph engine behind a socket, so everything it does is token-free.
+`scripts/serve.py` is a dependency-free stdlib HTTP server. It serves two things
+over one port: this JSON API, and the React single-page app built from
+`frontend/`. It calls **no model** — it is the graph engine behind a socket, so
+everything it does is token-free.
 
 ```bash
-python3 viz/serve.py                    # http://127.0.0.1:8770
-python3 viz/serve.py --port 9000 --host 127.0.0.1
-python3 viz/serve.py --no-write         # read-only
-python3 viz/serve.py --no-open          # don't open a browser
+python3 scripts/serve.py                    # http://127.0.0.1:8770
+python3 scripts/serve.py --port 9000 --host 127.0.0.1
+python3 scripts/serve.py --no-write         # read-only
+python3 scripts/serve.py --no-open          # don't open a browser
+```
+
+## The interactive reference
+
+**This file is the prose; [`/api/docs`](http://127.0.0.1:8770/api/docs) is the
+reference.** Start the server and open it: Swagger UI over an OpenAPI 3.1
+document with every endpoint, every parameter, every response shape, and a
+Try-it-out button that hits your own brain.
+
+| Where | What |
+|---|---|
+| `GET /api/docs` | Swagger UI. The viewer loads from a CDN; the document does not. |
+| `GET /api/openapi.json` | The document itself, built by the running process. |
+| `docs/openapi.json` | The same document on disk, for reading without a server. |
+| `scripts/openapi.py` | Where it is written. Run it with `--out` to regenerate the file. |
+
+The document is **built by the process that answers the requests**, so what you
+browse always describes the server you are talking to. And it cannot drift from
+the router: `tests/test_openapi.py` reads serve.py's actual `do_GET` chain and
+`do_POST` dispatch table out of the source and fails if either side holds an
+endpoint the other has never heard of. Documentation nobody checks is a rumour.
+
+Adding an endpoint therefore means adding it in two places, and CI tells you
+when you have done one of them:
+
+```bash
+python3 tests/test_openapi.py                      # the drift guard
+python3 scripts/openapi.py --out docs/openapi.json # refresh the checked-in copy
 ```
 
 ## Security — read this before changing `--host`
@@ -215,21 +244,21 @@ of after a restart.
 The server restarts itself when its own code changes:
 
 ```bash
-python3 viz/serve.py                 # reload on, the default
-python3 viz/serve.py --no-reload     # off
+python3 scripts/serve.py                 # reload on, the default
+python3 scripts/serve.py --no-reload     # off
 ```
 
 This exists because of a failure that is genuinely hard to diagnose from the
-browser. `index.html` is read from disk on **every request**, but `serve.py`,
-`graph.py` and `brain_query.py` are imported **once at startup**. A server left
-running for hours therefore serves a CURRENT page against a STALE API: the page
-asks for a facet the process has never heard of, gets nothing back, and renders an
-empty filter that looks broken rather than out of date.
+browser. The built page is read from disk on **every request**, but `serve.py`,
+`graph.py`, `brain_query.py` and `openapi.py` are imported **once at startup**. A
+server left running for hours therefore serves a CURRENT page against a STALE
+API: the page asks for a facet the process has never heard of, gets nothing back,
+and renders an empty filter that looks broken rather than out of date.
 
 How it behaves:
 
-- Polls the mtimes of those four files once a second. No watch dependency for four
-  files.
+- Polls the mtimes of those five files once a second. No watch dependency for
+  five files.
 - On change it re-execs with the same argv, so the pid is unchanged and the port is
   rebound after the listening socket closes. It does not reopen the browser.
 - **It refuses to restart into code that does not compile.** A typo mid-edit prints
@@ -268,11 +297,19 @@ read in context instead of floating alone.
 
 One predicate feeds both, which is what keeps them honest:
 
-```js
-function filteredOut(n){ return directHidden(n) || cascadeOff.has(n.id); }
-function hidden(n){ return !shade && filteredOut(n); }
-function shaded(n){ return  shade && filteredOut(n); }
+```ts
+// frontend/src/lib/graphFilter.ts
+export function filteredOut(node, f, cascadeOff) {
+  return directHidden(node, f) || cascadeOff.has(node.id);
+}
+export function isHidden(node, f, off) { return !f.shade && filteredOut(node, f, off); }
+export function isShaded(node, f, off) { return  f.shade && filteredOut(node, f, off); }
 ```
+
+It is a pure module with no React and no canvas in it, which is what makes the
+property above testable rather than merely asserted:
+`frontend/src/lib/graphFilter.test.ts` renders neither and checks that the two
+modes reach exactly the same set.
 
 Every filter — the three facet dropdowns, hide-done, and the cascade below —
 computes `filteredOut` and nothing else, so none of them knows the mode exists and
@@ -331,6 +368,15 @@ The handler is a single `BaseHTTPRequestHandler` with a `GET` branch and a
 3. Validate and length-cap inputs with `self._str(data, key, max_len)`.
 4. Go through a `graph.api_*` helper rather than raw SQL, so the neo4j outbox and
    FTS triggers stay correct.
+5. **Describe it in `scripts/openapi.py`.** `tests/test_openapi.py` fails until
+   you do, which is the point: the spec is generated from a table beside the
+   router precisely so the two cannot be edited apart.
+
+On the client side, add it to the named surface in
+`frontend/src/api/client.ts` rather than calling `fetch` from a component. Every
+call in the app goes through one `get`/`post` pair, so retry, error shaping, the
+`--no-write` 403 and abort-on-unmount are decided once instead of at each of the
+fifty call sites the old single-file page had.
 
 That last point matters: writing straight to SQLite bypasses `_after_write()`,
 which is what enqueues the neo4j sync. See [the neo4j backend](neo4j.md).

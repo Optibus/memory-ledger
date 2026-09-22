@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
-"""memory-ledger graph visualizer — a tiny, dependency-free local web server.
+"""memory-ledger backend — a tiny, dependency-free local web server.
 
 Reads the same brain the CLI uses (~/.second_brain/graph.db, or $SECOND_BRAIN_DB /
-$SECOND_BRAIN_HOME) and serves an interactive force-directed graph you can zoom,
-pan, filter, search, and click through. The page polls the API so edits made by
-any skill show up live.
+$SECOND_BRAIN_HOME) and serves two things over one port:
 
-    python3 viz/serve.py [--port 8770] [--no-open] [--no-reload]
+  * the JSON API (`/api/*`), described by `scripts/openapi.py` and browsable at
+    **/api/docs**;
+  * the React single-page app built from `frontend/`, served from the COMMITTED
+    `frontend/dist`.
+
+    python3 scripts/serve.py [--port 8770] [--no-open] [--no-reload]
+
+**No npm at runtime.** The build output is committed precisely so that a person
+who installs the plugin runs this file and gets the UI, with no node toolchain
+and no install step. `npm run dev` in `frontend/` is for changing the UI, and it
+proxies /api straight back here.
 
 It restarts itself when its own code changes, so a long-running server never
 serves a page newer than the API behind it. See RELOAD below.
@@ -27,11 +35,47 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent / "scripts"))
+ROOT = HERE.parent
+sys.path.insert(0, str(HERE))
 import graph  # noqa: E402  (the engine — single source of truth for the DB)
-import brain_query  # noqa: E402  (the off-token query layer — powers the dashboard tab)
+import brain_query  # noqa: E402  (the off-token query layer — powers the dashboard views)
+import openapi  # noqa: E402  (the API description, and the Swagger UI over it)
 
-INDEX = HERE / "index.html"
+# The built SPA. `index.html` is its entry point and `assets/` everything it
+# loads; both are committed, so this server has no build step of its own.
+DIST = ROOT / "frontend" / "dist"
+INDEX = DIST / "index.html"
+
+# What to say when the app was never built. Naming the one command that fixes it
+# beats a 404, which reads as "the server is broken" rather than "run the build".
+MISSING_UI = """<!doctype html>
+<meta charset="utf-8">
+<title>memory-ledger — the UI is not built</title>
+<style>body{font:15px/1.6 ui-sans-serif,system-ui,sans-serif;max-width:40rem;
+margin:12vh auto;padding:0 1.5rem;background:#0d1117;color:#e6edf3}
+code{background:#161b22;padding:2px 6px;border-radius:5px;color:#58a6ff}
+a{color:#58a6ff}</style>
+<h1>The UI is not built</h1>
+<p>The API is running and healthy &mdash; only the page is missing. Build it once:</p>
+<p><code>cd frontend &amp;&amp; npm install &amp;&amp; npm run build</code></p>
+<p>The output lands in <code>frontend/dist</code>, which is committed, so this is
+only ever needed in a working copy where it was deleted.</p>
+<p>Meanwhile the API is fully usable: <a href="/api/docs">/api/docs</a>.</p>
+"""
+
+# The only file types the SPA build emits. An explicit map beats mimetypes.guess,
+# which is configured per machine and has been known to answer text/plain for .js.
+CONTENT_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".json": "application/json",
+    ".svg": "image/svg+xml",
+    ".ico": "image/x-icon",
+    ".png": "image/png",
+    ".woff2": "font/woff2",
+    ".map": "application/json",
+}
 
 # Writes (POST /api/*) are enabled unless started with --no-write. The write API
 # is unauthenticated, so bind to 127.0.0.1 or pass --no-write when exposing it.
@@ -61,9 +105,9 @@ _RESTART = threading.Event()
 
 
 def _watched() -> list[Path]:
-    """This module, the engine modules it serves, and the page."""
+    """This module, the engine modules it serves, and the built page."""
     out = [Path(__file__).resolve(), INDEX]
-    for mod in (graph, brain_query):
+    for mod in (graph, brain_query, openapi):
         f = getattr(mod, "__file__", None)
         if f:
             out.append(Path(f).resolve())
@@ -366,9 +410,12 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         try:
-            if path in ("/", "/index.html"):
-                self._send(200, INDEX.read_text(encoding="utf-8"),
-                           "text/html; charset=utf-8")
+            if path == "/api/openapi.json":
+                # Built by the running process, so what a reader browses is what
+                # this server actually answers — not a file that went stale.
+                self._send(200, json.dumps(openapi.build()), "application/json")
+            elif path == "/api/docs":
+                self._send(200, openapi.SWAGGER_HTML, "text/html; charset=utf-8")
             elif path == "/api/graph":
                 self._send(200, json.dumps(graph_payload()),
                            "application/json")
@@ -481,10 +528,39 @@ class Handler(BaseHTTPRequestHandler):
             elif path.startswith("/api/"):   # dashboard views: /api/<view>?params
                 self._dashboard(path[len("/api/"):], parse_qs(parsed.query))
             else:
-                self._send(404, json.dumps({"error": "not found"}),
-                           "application/json")
+                # Everything that is not /api/ is the single-page app. An unknown
+                # path under /api/ is still a 404 — a client asking for an
+                # endpoint that does not exist must hear so, not be handed HTML.
+                self._static(path)
         except Exception as e:  # keep the server alive, report to client
             self._fail(e)
+
+    def _static(self, path):
+        """Serve the built SPA, falling back to its index for any unknown path.
+
+        The app routes on the hash, so this fallback is belt and braces rather
+        than load-bearing: it means a stray path still lands on the app instead
+        of a bare 404.
+        """
+        if not INDEX.exists():
+            self._send(503, MISSING_UI, "text/html; charset=utf-8")
+            return
+
+        rel = path.lstrip("/")
+        target = INDEX
+        if rel:
+            # resolve() then containment-check, so `../../etc/passwd` and any
+            # symlink pointing out of the build cannot be read through this.
+            candidate = (DIST / rel).resolve()
+            try:
+                inside = candidate.is_relative_to(DIST.resolve())
+            except AttributeError:      # Python < 3.9
+                inside = str(candidate).startswith(str(DIST.resolve()))
+            if inside and candidate.is_file():
+                target = candidate
+
+        ctype = CONTENT_TYPES.get(target.suffix, "application/octet-stream")
+        self._send(200, target.read_bytes(), ctype)
 
     # the off-token dashboard views, reusing the exact CLI query layer
     def _dashboard(self, view, qs):

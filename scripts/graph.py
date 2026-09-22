@@ -3220,7 +3220,7 @@ def api_create_person(con, title: str, body="", props=None, realm="") -> dict:
 # ---------------------------------------------------------------------------
 # write API — one implementation, shared by the CLI and the web UI
 # ---------------------------------------------------------------------------
-# These return plain dicts (no printing) so viz/serve.py can call them directly
+# These return plain dicts (no printing) so scripts/serve.py can call them directly
 # and stay in lockstep with the CLI: same validation, same neo4j sync.
 TASK_STATUSES = ["open", "doing", "blocked", "waiting", "done", "cancelled"]
 
@@ -3301,7 +3301,7 @@ def api_set_status(con, node_id, status, waiting_on=None):
 
 def api_link(con, src, dst, rel, props=None):
     # EDGE_RELS is also soft — hooks legitimately write `captured-from`. Closed
-    # sets are enforced by the caller (see viz/serve.py).
+    # sets are enforced by the caller (see scripts/serve.py).
     if not (rel or "").strip():
         return {"ok": False, "error": "missing relation"}
     if src == dst:
