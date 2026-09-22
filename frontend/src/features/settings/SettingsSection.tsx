@@ -7,25 +7,43 @@ import {
   Card,
   Field,
   KeyValue,
+  Select,
   Spinner,
   StatusMessage,
   TextInput,
 } from "@/components";
 import { Section } from "@/features/shell/Section";
-import type { Settings, Status, Timezones } from "@/api/types";
+import { SettingSwitch } from "./SettingSwitch";
+import { CaptureCard } from "./CaptureCard";
+import { UpkeepCard } from "./UpkeepCard";
+import { DoctorCard } from "./DoctorCard";
+import { BrowserCard } from "./BrowserCard";
+import type { RealmCount, Settings, Status, StoredSettings, Timezones } from "@/api/types";
 import "./SettingsSection.css";
 
 /**
- * Preferences, and the health of the store behind them.
+ * Preferences, the switches, the health of the store — and what belongs where.
  *
- * Everything here is written SERVER-side, to `<home>/settings.json` — a
- * timezone set in the browser has to hold for the CLI, the hooks and any cron
- * reading the same brain, and `localStorage` cannot do that.
+ * The page is grouped by LIFETIME, because three different things used to sit in
+ * one flat card and behave differently without saying so:
+ *
+ *   engine config   `<home>/settings.json` — read by the CLI, the hooks and any
+ *                   cron over the same brain, so a change here is a change
+ *                   everywhere (§2g).
+ *   machine state   the `.disabled` marker, the neo4j credentials, the snapshots
+ *                   on disk. Per machine, not per person.
+ *   view state      this browser's own, in localStorage, optionally mirrored
+ *                   into the brain — see BrowserCard for why that is a separate
+ *                   question.
  */
 export function SettingsSection() {
   const settings = useAsync<Settings>((signal) => api.settings(signal), []);
   const status = useAsync<Status>((signal) => api.status(signal), []);
   const zones = useAsync<Timezones>((signal) => api.timezones(signal), []);
+  const realms = useAsync<{ ok: boolean; realms: Record<string, RealmCount>; default: string }>(
+    (signal) => api.realms(signal),
+    [],
+  );
 
   return (
     <Section
@@ -36,12 +54,39 @@ export function SettingsSection() {
       {settings.error ? <StatusMessage tone="error">{settings.error}</StatusMessage> : null}
 
       {settings.data ? (
-        <PreferencesCard
-          settings={settings.data}
-          zones={zones.data?.zones ?? []}
-          onSaved={() => settings.reload()}
-        />
+        <>
+          <PreferencesCard
+            settings={settings.data}
+            zones={zones.data?.zones ?? []}
+            realms={Object.keys(realms.data?.realms ?? {})}
+            onSaved={() => settings.reload()}
+          />
+          <CaptureCard
+            capture={settings.data.capture}
+            writable={settings.data.writable}
+            onChanged={() => settings.reload()}
+          />
+          <BrowserCard
+            effective={settings.data.effective}
+            writable={settings.data.writable}
+            onChange={async (key, value) => {
+              await api.saveSettings({ [key]: value } as Partial<StoredSettings>);
+              // The provider holds the sync flag; tell it directly rather than
+              // making it poll, so the next click is already being stored.
+              if (key === "ui_sync") {
+                window.dispatchEvent(new CustomEvent("ml:ui-sync", { detail: value }));
+              }
+              settings.reload();
+            }}
+          />
+        </>
       ) : null}
+
+      {status.data ? (
+        <UpkeepCard writable={status.data.writable} onChanged={() => status.reload()} />
+      ) : null}
+
+      <DoctorCard />
 
       {status.data ? <StoreCard status={status.data} onChanged={() => status.reload()} /> : null}
       {status.error ? <StatusMessage tone="error">{status.error}</StatusMessage> : null}
@@ -52,15 +97,19 @@ export function SettingsSection() {
 function PreferencesCard({
   settings,
   zones,
+  realms,
   onSaved,
 }: {
   settings: Settings;
   zones: string[];
+  realms: string[];
   onSaved: () => void;
 }) {
   const eff = settings.effective;
   const [tz, setTz] = useState(settings.settings.tz ?? "");
   const [realm, setRealm] = useState(settings.settings.realm ?? "");
+  const [owner, setOwner] = useState(settings.settings.owner ?? "");
+  const [backend, setBackend] = useState(settings.settings.backend ?? "");
   const [mapPoll, setMapPoll] = useState(String(eff.map_poll_seconds));
   const [dashRefresh, setDashRefresh] = useState(String(eff.dash_refresh_seconds));
   const [out, setOut] = useState<{ text: string; tone: "info" | "error" | "success" } | null>(null);
@@ -69,22 +118,28 @@ function PreferencesCard({
   useEffect(() => {
     setTz(settings.settings.tz ?? "");
     setRealm(settings.settings.realm ?? "");
+    setOwner(settings.settings.owner ?? "");
+    setBackend(settings.settings.backend ?? "");
     setMapPoll(String(eff.map_poll_seconds));
     setDashRefresh(String(eff.dash_refresh_seconds));
   }, [settings, eff.map_poll_seconds, eff.dash_refresh_seconds]);
 
-  const save = async () => {
+  const save = async (patch?: Partial<StoredSettings>) => {
     setBusy(true);
     setOut(null);
     try {
       // "" REMOVES a key, falling back to the env var or the system default —
       // which is why the fields send empty strings rather than skipping them.
-      await api.saveSettings({
-        tz,
-        realm,
-        map_poll_seconds: Number(mapPoll) || 0,
-        dash_refresh_seconds: Number(dashRefresh) || 0,
-      });
+      await api.saveSettings(
+        patch ?? {
+          tz,
+          realm,
+          owner,
+          backend,
+          map_poll_seconds: Number(mapPoll) || 0,
+          dash_refresh_seconds: Number(dashRefresh) || 0,
+        },
+      );
       setOut({ text: `Saved to ${settings.path}.`, tone: "success" });
       onSaved();
     } catch (err) {
@@ -112,6 +167,20 @@ function PreferencesCard({
       ) : null}
 
       <Field
+        label="Your name"
+        hint={`Who "me" is: what --mine filters on, and what an unassigned task falls back to. In effect: ${eff.owner} (from ${eff.owner_source}).`}
+      >
+        {(id) => (
+          <TextInput
+            id={id}
+            value={owner}
+            placeholder={eff.owner}
+            onChange={(e) => setOwner(e.target.value)}
+          />
+        )}
+      </Field>
+
+      <Field
         label="Timezone"
         hint={`Decides which calendar day a due date falls on. In effect: ${
           eff.tz || eff.system_tz
@@ -135,11 +204,50 @@ function PreferencesCard({
         )}
       </Field>
 
-      <Field label="Default realm" hint={`New nodes land here when nothing else says. In effect: ${eff.realm}.`}>
-        {(id) => (
-          <TextInput id={id} value={realm} placeholder={eff.realm} onChange={(e) => setRealm(e.target.value)} />
-        )}
-      </Field>
+      <div className="ml-settings__grid">
+        <Field
+          label="Default realm"
+          hint={`New nodes land here when nothing else says. Per machine, so work on one and personal on another is exactly what this is for. In effect: ${eff.realm}.`}
+        >
+          {(id) => (
+            <Select
+              id={id}
+              value={realm}
+              onChange={(e) => setRealm(e.target.value)}
+              // The realms the graph actually has, plus whatever is stored —
+              // a realm set before its first node exists must not vanish from
+              // its own dropdown.
+              options={[
+                { value: "", label: `default (${eff.realm})` },
+                ...Array.from(new Set([...realms, realm].filter(Boolean)))
+                  .sort()
+                  .map((r) => ({ value: r, label: r })),
+              ]}
+            />
+          )}
+        </Field>
+
+        <Field
+          label="Read from"
+          hint={`Which store a CLI read uses when given no --backend. Writes always hit SQLite first and mirror onward, whatever this says. In effect: ${eff.backend}.`}
+        >
+          {(id) => (
+            <Select
+              id={id}
+              value={backend}
+              onChange={(e) => setBackend(e.target.value)}
+              options={[
+                { value: "", label: `default (${eff.backend})` },
+                ...eff.backends.map((b) => ({
+                  value: b,
+                  label:
+                    b === "auto" ? "auto — neo4j when it answers, else the local mirror" : b,
+                })),
+              ]}
+            />
+          )}
+        </Field>
+      </div>
 
       <div className="ml-settings__grid">
         <Field label="Map poll (seconds)" hint="How often the map re-reads the graph.">
@@ -160,8 +268,28 @@ function PreferencesCard({
         </Field>
       </div>
 
+      <h3 className="ml-settings__h3">Behaviour</h3>
+      <SettingSwitch
+        label="Push every write to the mirror"
+        hint="Off, writes still queue for neo4j — they just wait for a flush instead of going out one at a time. Useful for a bulk load; the usual cause of a mirror that looks stale."
+        checked={eff.autosync}
+        source={eff.autosync_source}
+        envVar="MEMORY_LEDGER_NO_AUTOSYNC"
+        disabled={!settings.writable || busy}
+        onChange={(v) => save({ autosync: v })}
+      />
+      <SettingSwitch
+        label="Consolidate closed days automatically"
+        hint="Once a day, at session start, yesterday and earlier are folded into per-day digests so recall stays cheap. Non-destructive, and it never touches the day you are still living in."
+        checked={eff.consolidate}
+        source={eff.consolidate_source}
+        envVar="MEMORY_LEDGER_NO_CONSOLIDATE"
+        disabled={!settings.writable || busy}
+        onChange={(v) => save({ consolidate: v })}
+      />
+
       <div className="ml-settings__foot">
-        <Button variant="primary" onClick={save} disabled={busy || !settings.writable}>
+        <Button variant="primary" onClick={() => save()} disabled={busy || !settings.writable}>
           {busy ? "saving…" : "Save"}
         </Button>
         {!settings.writable ? <span className="ml-settings__note">read-only server</span> : null}
@@ -269,17 +397,6 @@ function StoreCard({ status, onChanged }: { status: Status; onChanged: () => voi
           onClick={() => run("Flushing", () => api.flush())}
         >
           Flush queue ({status.pending_ops})
-        </Button>
-      </div>
-
-      <h3 className="ml-settings__h3">Upkeep</h3>
-      <p className="ml-settings__hint">
-        Prune runs <code>maintain</code>: it consolidates old captures and deletes nothing. Finishing
-        work is archiving, never deleting (CONVENTIONS §2a).
-      </p>
-      <div className="ml-settings__foot">
-        <Button disabled={busy || !status.writable} onClick={() => run("Pruning", () => api.prune())}>
-          Prune
         </Button>
       </div>
 

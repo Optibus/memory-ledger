@@ -51,3 +51,29 @@ export function toQuery(s: DashboardState): Record<string, string> {
   if (s.kinds.length) q.kind = s.kinds.join(",");
   return q;
 }
+
+/**
+ * The part of the dashboard's state worth remembering between visits.
+ *
+ * `from` and `to` are deliberately absent. They are a rolling window —
+ * `initialState` sets them to today and today+14 — so storing the literal dates
+ * would bring back a fortnight that ended weeks ago and call it your default.
+ * Everything else describes what you are looking FOR, not when, and that does
+ * survive a reload.
+ */
+export type PersistedDashboard = Pick<
+  DashboardState,
+  "view" | "status" | "sinceDays" | "mine" | "assignees" | "realms" | "kinds"
+>;
+
+export function persistable(s: DashboardState): PersistedDashboard {
+  return {
+    view: s.view,
+    status: s.status,
+    sinceDays: s.sinceDays,
+    mine: s.mine,
+    assignees: s.assignees,
+    realms: s.realms,
+    kinds: s.kinds,
+  };
+}

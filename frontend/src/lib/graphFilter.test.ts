@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   computeCascade,
+  deserializeFilter,
   directHidden,
   emptyFilter,
   filteredOut,
   isHidden,
   isShaded,
   matchesQuery,
+  serializeFilter,
 } from "./graphFilter";
 import type { GraphEdge, GraphNode } from "@/api/types";
 
@@ -149,5 +151,36 @@ describe("matchesQuery", () => {
 
   it("does not match what is not there", () => {
     expect(matchesQuery(n, "invoice")).toBe(false);
+  });
+});
+
+describe("filter persistence", () => {
+  it("survives a round trip through JSON, Sets included", () => {
+    const f = emptyFilter();
+    f.typesOff.add("capture");
+    f.realmsOff.add("personal");
+    f.hideDone = true;
+    f.shade = true;
+
+    const back = deserializeFilter(JSON.parse(JSON.stringify(serializeFilter(f))));
+
+    expect([...back.typesOff]).toEqual(["capture"]);
+    expect([...back.realmsOff]).toEqual(["personal"]);
+    expect(back.hideDone).toBe(true);
+    expect(back.shade).toBe(true);
+    expect(back.cascade).toBe(false);
+  });
+
+  it("degrades to the empty filter rather than hiding nodes for no reason", () => {
+    for (const junk of [null, undefined, "nope", 42, [], { typesOff: "capture" }]) {
+      const f = deserializeFilter(junk);
+      expect(f.typesOff.size).toBe(0);
+      expect(f.hideDone).toBe(false);
+    }
+  });
+
+  it("drops non-strings inside a facet list", () => {
+    const f = deserializeFilter({ typesOff: ["task", 7, null, "note"] });
+    expect([...f.typesOff]).toEqual(["task", "note"]);
   });
 });

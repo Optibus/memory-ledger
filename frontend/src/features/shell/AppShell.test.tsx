@@ -30,6 +30,27 @@ describe("the app shell", () => {
     expect(await screen.findByRole("heading", { name: "Skills" })).toBeInTheDocument();
   });
 
+  it("reaches the People section, which the drawer now carries", async () => {
+    const { user } = renderApp(<App />, { route: "/map", withMeta: false });
+    await screen.findByText(/nodes · 3 edges/);
+    await user.click(screen.getByRole("button", { name: "sections" }));
+    await user.click(screen.getByRole("link", { name: /People/ }));
+    expect(await screen.findByRole("heading", { name: "People" })).toBeInTheDocument();
+  });
+
+  it("links out to the server's own API docs, in a new tab", async () => {
+    const { user } = renderApp(<App />, { route: "/map", withMeta: false });
+    await screen.findByText(/nodes · 3 edges/);
+    await user.click(screen.getByRole("button", { name: "sections" }));
+
+    const link = screen.getByRole("link", { name: /API docs/ });
+    // A real navigation, not a route: Swagger is rendered by serve.py, so a
+    // NavLink here would hand the URL to the router and show the map instead.
+    expect(link).toHaveAttribute("href", "./api/docs");
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noreferrer");
+  });
+
   it("toggles the drawer with the m key, and not while typing", async () => {
     const { user } = renderApp(<App />, { route: "/map", withMeta: false });
     await screen.findByText(/nodes · 3 edges/);

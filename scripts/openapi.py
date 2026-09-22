@@ -460,6 +460,79 @@ GET_ROUTES: dict[str, dict] = {
             boot={"type": "string"}, writable={"type": "boolean"},
             neo4j={"type": "object", "additionalProperties": True}),
     },
+    "/api/capture": {
+        "summary": "Is the ledger recording?",
+        "description": "Two switches decide this and they are not equal: "
+                       "$MEMORY_LEDGER_OFF is per-process and OUTRANKS the "
+                       "`<home>/.disabled` marker, so `env_off` tells a client "
+                       "whether offering to turn capture back on would be a lie.",
+        "tags": ["settings"],
+        "response": _envelope_with(
+            enabled={"type": "boolean"},
+            marker={"type": "string"},
+            marker_present={"type": "boolean"},
+            env_off={"type": "boolean"},
+            source={"type": "string", "enum": ["env", "marker", "on"]}),
+    },
+    "/api/doctor": {
+        "summary": "The health check, as JSON",
+        "description": "The same report `scripts/doctor.py` prints. `ok` means "
+                       "the CALL succeeded; `healthy` is the verdict — an "
+                       "unhealthy brain is a successful request, not a failure. "
+                       "Being disabled is a choice and never counts as a problem.",
+        "tags": ["settings"],
+        "response": _envelope_with(
+            healthy={"type": "boolean"},
+            problems={"type": "array", "items": {"type": "string"}},
+            status={"type": "object", "additionalProperties": True},
+            paths={"type": "object", "additionalProperties": True},
+            config={"type": "object", "additionalProperties": True},
+            content={"type": "object", "additionalProperties": True},
+            hooks={"type": "object", "additionalProperties": True},
+            mirror={"type": "object", "additionalProperties": True}),
+    },
+    "/api/consolidate-preview": {
+        "summary": "What consolidation WOULD do",
+        "description": "A read: it computes the plan and writes nothing, so it "
+                       "is safe to reload. The plan comes from the same "
+                       "`graph.consolidation_plan` the run itself consolidates "
+                       "from, so the preview cannot drift from the result.",
+        "tags": ["settings"],
+        "params": [_query("keep_days",
+                          "Leave the last N days of captures loose. Default 2.",
+                          schema={"type": "integer", "default": 2})],
+        "response": _envelope_with(
+            dry_run={"type": "boolean"},
+            keep_days={"type": "integer"}, cutoff={"type": "string"},
+            still_loose={"type": "integer"},
+            backup_keep_days={"type": "integer"},
+            days={"type": "array", "items": {"type": "object",
+                                             "additionalProperties": True}},
+            totals={"type": "object", "additionalProperties": True}),
+    },
+    "/api/backups": {
+        "summary": "The snapshots consolidation leaves behind",
+        "description": "Point-in-time copies of the whole graph, taken before a "
+                       "consolidation run and kept for a fixed window. Restore "
+                       "one by copying it back over graph.db.",
+        "tags": ["settings"],
+        "response": _envelope_with(
+            dir={"type": "string"}, keep_days={"type": "integer"},
+            backups={"type": "array", "items": {"type": "object",
+                                                "additionalProperties": True}}),
+    },
+    "/api/ui-prefs": {
+        "summary": "The browser's own view state, if it is being synced",
+        "description": "NOT settings. A setting changes what the engine "
+                       "computes and must be server-side; which dashboard tab "
+                       "you had open changes nothing, so the browser owns it and "
+                       "storing it here is opt-in (`ui_sync`). The blob is "
+                       "opaque on purpose — its shape belongs to the frontend.",
+        "tags": ["settings"],
+        "response": _envelope_with(
+            synced={"type": "boolean"}, path={"type": "string"},
+            prefs={"type": "object", "additionalProperties": True}),
+    },
     "/api/openapi.json": {
         "summary": "This document",
         "tags": ["meta"],
@@ -592,10 +665,70 @@ POST_ROUTES: dict[str, dict] = {
         "body": _body([]),
     },
     "/api/prune": {
-        "summary": "Run maintain",
-        "description": "Consolidates old captures. Non-destructive — deletes nothing.",
+        "summary": "Run maintain — consolidate old captures",
+        "description": "Non-destructive: every capture is kept and linked to the "
+                       "digest that now stands in for it (§2a). REFUSED without "
+                       "`confirm: true`, because it still rewrites props on every "
+                       "capture it touches and 'non-destructive' is a promise "
+                       "about the data, not about whether you wanted it — preview "
+                       "with GET /api/consolidate-preview first. A snapshot of the "
+                       "whole graph is taken before the first write.",
         "tags": ["settings"],
-        "body": _body([], keep_days={"type": "integer", "default": 2}),
+        "body": _body(["confirm"],
+                      confirm={"type": "boolean",
+                               "description": "Must be true. Without it the call "
+                                              "returns ok:false and "
+                                              "needs_confirmation:true."},
+                      keep_days={"type": "integer", "default": 2}),
+    },
+    "/api/consolidate": {
+        "summary": "Consolidate (the same engine as prune)",
+        "description": "Identical to /api/prune, reached under the name the CLI "
+                       "uses, so a client can run the plan it previewed without "
+                       "calling the operation something else. Same confirmation "
+                       "and the same pre-run snapshot.",
+        "tags": ["settings"],
+        "body": _body(["confirm"], confirm={"type": "boolean"},
+                      keep_days={"type": "integer", "default": 2}),
+    },
+    "/api/capture": {
+        "summary": "Turn capture on or off, machine-wide",
+        "description": "Writes the same `<home>/.disabled` marker `graph.py "
+                       "disable` writes — one switch, two front doors. Refused "
+                       "while $MEMORY_LEDGER_OFF is set in the server's "
+                       "environment, because that outranks the marker and "
+                       "removing the file would not actually resume capture.",
+        "tags": ["settings"],
+        "body": _body(["enabled"], enabled={"type": "boolean"}),
+    },
+    "/api/backup": {
+        "summary": "Snapshot the graph now",
+        "description": "Takes a point-in-time copy and expires the ones past "
+                       "their retention window. Uses sqlite's backup API, not a "
+                       "file copy, so the snapshot can never catch the database "
+                       "mid-transaction.",
+        "tags": ["settings"],
+        "body": _body([], label={"type": "string", "default": "manual"}),
+    },
+    "/api/ui-prefs": {
+        "summary": "Store the browser's view state in the brain",
+        "description": "REPLACES the stored blob rather than merging into it: "
+                       "the browser holds the whole thing, and a merge would "
+                       "resurrect a preference the person just cleared. Accepted "
+                       "even when `ui_sync` is off, because the toggle that "
+                       "enables syncing is itself one of these preferences.",
+        "tags": ["settings"],
+        "body": _body(["prefs"],
+                      prefs={"type": "object", "additionalProperties": True}),
+    },
+    "/api/add-alias": {
+        "summary": "Pin another spelling onto a person",
+        "description": "Goes through the engine's `api_add_alias`, so the rules "
+                       "that decide whether two names are one human are the ones "
+                       "already in use. A spelling the person already answers to "
+                       "is a no-op, not a duplicate.",
+        "tags": ["people"],
+        "body": _body(["id", "alias"], id=_ID, alias=_STR),
     },
     "/api/create-rule": {
         "summary": "Author a rule (CONVENTIONS §5b)",

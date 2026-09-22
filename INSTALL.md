@@ -269,10 +269,12 @@ plugin, so this works on a machine with no node and nothing to `npm install`.
 (Change the UI's source with node installed and the server rebuilds the bundle
 on the next start, so you never serve a page older than your edit.)
 
-Four sections behind the hamburger menu (`m`), each with its own URL: **Map**
-(live graph), **Dashboard** (the query views), **Skills** (the two contract trees
-and the rule catalogue), and **Settings** (timezone, default realm, database
-connection, prune). The API documents itself at
+Five sections behind the hamburger menu (`m`), each with its own URL: **Map**
+(live graph), **Dashboard** (the query views), **People** (person nodes, what each
+connects to, and merging the ones that are the same human), **Skills** (the two
+contract trees and the rule catalogue), and **Settings** (your name, timezone,
+default realm, the capture switch, database connection, consolidation and the
+health check). The API documents itself at
 [`/api/docs`](http://127.0.0.1:8770/api/docs). The dashboard also **edits** the brain — create tasks
 with auto-recognised links, complete them, change status/assignee/due, rename, and
 add/remove relations — all token-free (no model). Set the timezone once in
@@ -293,8 +295,9 @@ It reports, in plain language:
 - **Status** — enabled or disabled, and if disabled, which switch did it (the
   `.disabled` marker or the `MEMORY_LEDGER_OFF`/`SECOND_BRAIN_OFF` env var).
 - **Paths** — the resolved home dir and DB file, and whether each exists.
-- **Config** — the effective timezone and realm, and where each came from
-  (env var, `settings.json`, or a built-in default).
+- **Config** — the effective timezone, realm and owner, plus the `autosync` and
+  `consolidate` switches, and where each came from (env var, `settings.json`, or
+  a built-in default).
 - **Content** — total node count, a breakdown by type, open-loop count, and
   how stale the newest capture is (a warning if nothing's landed in the last
   2 days, or ever).

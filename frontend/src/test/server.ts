@@ -2,9 +2,15 @@ import { setupServer } from "msw/node";
 import { http, HttpResponse } from "msw";
 import {
   agendaFixture,
+  backupsFixture,
+  captureFixture,
+  consolidationPreviewFixture,
+  doctorFixture,
   graphFixture,
   metaFixture,
   nodeDetailFixture,
+  personDetailFixture,
+  personDuplicatesFixture,
   settingsFixture,
   skillsFixture,
   statusFixture,
@@ -45,7 +51,13 @@ export const handlers = [
       ],
     }),
   ),
-  http.get("/api/node", () => HttpResponse.json(nodeDetailFixture)),
+  // A person id answers with a person; anything else with the task fixture.
+  // One endpoint returning a task for `?id=person_…` is how a test ends up
+  // asserting on a node that merely shares someone's name.
+  http.get("/api/node", ({ request }) => {
+    const id = new URL(request.url).searchParams.get("id") || "";
+    return HttpResponse.json(id.startsWith("person_") ? personDetailFixture : nodeDetailFixture);
+  }),
   http.get("/api/skills", () => HttpResponse.json(skillsFixture)),
   http.get("/api/rule", ({ request }) => {
     const id = new URL(request.url).searchParams.get("id");
@@ -54,6 +66,15 @@ export const handlers = [
   http.get("/api/settings", () => HttpResponse.json(settingsFixture)),
   http.get("/api/status", () => HttpResponse.json(statusFixture)),
   http.get("/api/timezones", () => ok({ zones: ["UTC", "America/Sao_Paulo", "Europe/Lisbon"] })),
+  http.get("/api/capture", () => HttpResponse.json(captureFixture)),
+  http.get("/api/doctor", () => HttpResponse.json(doctorFixture)),
+  http.get("/api/backups", () => HttpResponse.json(backupsFixture)),
+  http.get("/api/consolidate-preview", () => HttpResponse.json(consolidationPreviewFixture)),
+  http.get("/api/person-duplicates", () => HttpResponse.json(personDuplicatesFixture)),
+  // Nothing stored by default: the brain's copy is opt-in, and a test that did
+  // not ask for synced preferences must see the same defaults a fresh browser
+  // does. A test that wants one overrides this with server.use().
+  http.get("/api/ui-prefs", () => ok({ synced: false, path: "/home/brain/ui_prefs.json", prefs: {} })),
   http.get("/api/search", ({ request }) => {
     const q = (new URL(request.url).searchParams.get("q") || "").toLowerCase();
     const hits = graphFixture.nodes
@@ -95,7 +116,16 @@ export const handlers = [
   write("/api/neo4j-config"),
   write("/api/neo4j-test"),
   write("/api/flush"),
-  write("/api/prune"),
+  write("/api/prune", () =>
+    ok({ keep_days: 2, days_consolidated: 1, newly_consolidated: 12, still_loose: 0,
+         backup: { path: "/home/brain/backups/maintain-20260922T120000Z.db", bytes: 102400 } }),
+  ),
+  write("/api/consolidate"),
+  write("/api/capture", () => ok({ capture: { ...captureFixture, enabled: false, marker_present: true, source: "marker" } })),
+  write("/api/ui-prefs", () => ok({ synced: true })),
+  write("/api/backup", () => ok({ created: backupsFixture.backups[0], removed: [], backups: backupsFixture.backups })),
+  write("/api/merge-person", () => ok({ moved: 2, dropped: 0 })),
+  write("/api/add-alias", () => ok({ added: true })),
   write("/api/create-rule"),
   write("/api/create-skill"),
   write("/api/export-skills", () => ok({ dir: "/home/brain/learned_skills", skills: 2, rules: 1 })),

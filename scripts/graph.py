@@ -37,6 +37,8 @@ from pathlib import Path
 from _switch import (  # noqa: E402,F401
     _env, home_dir, disabled, enabled, DISABLE_MARKER, _OFF_TRUTHY,
     HOME_DIRNAME, HOME_CANDIDATES, adopt_canonical_home, legacy_homes,
+    flag, flag_source, BOOL_SETTINGS,
+    settings as _switch_settings,
 )
 
 
@@ -140,6 +142,93 @@ def db_path() -> Path:
     return home_dir() / "graph.db"
 
 
+# ---------------------------------------------------------------------------
+# backups — a point in time to come back to
+#
+# Consolidation is non-destructive by construction (§2a): it adds a digest and
+# links the captures to it, and every original stays. That makes it safe, not
+# reversible — undoing a run means unpicking a digest and a props key from every
+# capture it touched, which is exactly the kind of work nobody wants to do at
+# the moment they realise they want it. So a run takes a snapshot of the whole
+# file first and you restore by copying one file back.
+#
+# Snapshots expire after BACKUP_KEEP_DAYS. That IS a delete, and it is not the
+# delete §2a forbids: §2a is about the graph's own content — a task is archived,
+# never removed — while this is retention on a copy, whose whole purpose is to
+# be temporary. An unbounded backup directory silently doubles the brain's disk
+# footprint every time you press a button.
+# ---------------------------------------------------------------------------
+BACKUP_KEEP_DAYS = 5
+
+
+def backups_dir() -> Path:
+    return home_dir() / "backups"
+
+
+def backup_db(label: str = "manual") -> dict:
+    """Snapshot the graph into <home>/backups/<label>-<stamp>.db.
+
+    Uses sqlite3's own backup API rather than copying the file, because a plain
+    copy of a live database can catch it mid-transaction and produce a snapshot
+    that will not open — the one failure mode a backup may not have."""
+    src = db_path()
+    if not src.exists():
+        return {"ok": False, "error": f"no database at {src}"}
+    d = backups_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    dest = d / f"{slugify(label) or 'manual'}-{stamp}.db"
+    import sqlite3           # lazy, like connect() — see that function
+    con = sqlite3.connect(str(src))
+    try:
+        target = sqlite3.connect(str(dest))
+        try:
+            con.backup(target)
+        finally:
+            target.close()
+    finally:
+        con.close()
+    return {"ok": True, "path": str(dest), "bytes": dest.stat().st_size,
+            "created": now(), "expires_in_days": BACKUP_KEEP_DAYS}
+
+
+def list_backups() -> list:
+    """Every snapshot on disk, newest first, each saying how long it has left."""
+    d = backups_dir()
+    if not d.is_dir():
+        return []
+    cutoff = datetime.now(timezone.utc) - timedelta(days=BACKUP_KEEP_DAYS)
+    rows = []
+    for f in d.glob("*.db"):
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        made = datetime.fromtimestamp(st.st_mtime, timezone.utc)
+        rows.append({"name": f.name, "path": str(f), "bytes": st.st_size,
+                     "created": made.isoformat(timespec="seconds"),
+                     "expires": (made + timedelta(days=BACKUP_KEEP_DAYS)
+                                 ).isoformat(timespec="seconds"),
+                     "expired": made < cutoff})
+    return sorted(rows, key=lambda r: r["created"], reverse=True)
+
+
+def prune_backups(keep_days: int = BACKUP_KEEP_DAYS) -> list:
+    """Delete snapshots past their retention window. Returns what it removed,
+    so the caller can say so rather than tidying up behind the user's back."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=keep_days)
+    removed = []
+    for f in backups_dir().glob("*.db") if backups_dir().is_dir() else []:
+        try:
+            if datetime.fromtimestamp(f.stat().st_mtime, timezone.utc) < cutoff:
+                size = f.stat().st_size
+                f.unlink()
+                removed.append({"name": f.name, "bytes": size})
+        except OSError:
+            continue
+    return removed
+
+
 def learned_skills_dir() -> Path:
     """Where runtime-learned user skills live (one folder per skill, each with
     a SKILL.md). This is the plastic layer — the brain writes new abilities here
@@ -155,7 +244,8 @@ def learned_skills_dir() -> Path:
 # file is the machine-wide answer, and the web UI's Settings page edits it.
 # Precedence everywhere: explicit flag > env var > this file > built-in default.
 # ---------------------------------------------------------------------------
-SETTING_KEYS = ["tz", "realm", "backend", "map_poll_seconds", "dash_refresh_seconds"]
+SETTING_KEYS = ["tz", "realm", "owner", "backend", "autosync", "consolidate",
+                "map_poll_seconds", "dash_refresh_seconds", "ui_sync"]
 
 # `backend` is where READS come from by default (writes always hit SQLite first
 # and mirror onward, whatever this says). `auto` is the honest setting for a
@@ -163,19 +253,23 @@ SETTING_KEYS = ["tz", "realm", "backend", "map_poll_seconds", "dash_refresh_seco
 # does not. `scripts/neo4j_local.py up` writes it.
 BACKENDS = ("sqlite", "neo4j", "auto")
 
+# BOOL_SETTINGS, flag() and flag_source() live in _switch, imported above — the
+# SessionStart path reads them before it is willing to import this module.
+
+# The fallback owner, used only when neither the env var nor the file names one.
+# It is a name rather than "" because norm_assignee() has to map SOMETHING to
+# "me", and a blank owner would quietly make every task somebody else's.
+DEFAULT_OWNER = "Gabriel"
+
 
 def settings_path() -> Path:
     return home_dir() / "settings.json"
 
 
-def settings() -> dict:
-    """Read the preferences file. Missing or corrupt reads as empty — a bad
-    settings file must never stop the brain from answering."""
-    try:
-        val = json.loads(settings_path().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return val if isinstance(val, dict) else {}
+#: Reading the preferences file is _switch's job — flag() there resolves the
+#: boolean settings before this module is importable, and one file must not have
+#: two readers that can disagree about a corrupt one. The write side stays here.
+settings = _switch_settings
 
 
 def save_settings(patch: dict) -> dict:
@@ -186,14 +280,68 @@ def save_settings(patch: dict) -> dict:
     for k, v in (patch or {}).items():
         if k not in SETTING_KEYS:
             continue
-        if v in (None, ""):
+        # `False` is a value, not an absence. Testing `v in (None, "")` alone
+        # would delete every switch the moment someone turned one off, and the
+        # key would read back as its default — an off switch that turns itself
+        # on is the worst kind.
+        if v is None or (v == "" and not isinstance(v, bool)):
             cur.pop(k, None)
+        elif k in BOOL_SETTINGS:
+            cur[k] = bool(v)
         else:
             cur[k] = v
     p = settings_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(cur, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return cur
+
+
+# ---------------------------------------------------------------------------
+# UI preferences — the browser's own state, optionally kept in the brain
+#
+# These are NOT settings. A setting (tz, realm, owner) changes what the engine
+# computes, so it has to live server-side or the CLI and the cron disagree with
+# the page. Which dashboard tab you had open changes nothing, and forcing it
+# through the same file would make every idle click a disk write on a value no
+# other reader cares about.
+#
+# So the browser owns them in localStorage, and syncing them here is opt-in
+# (`ui_sync`). Turned on, this file is what a second machine — or the same
+# machine in another browser — starts from instead of the defaults.
+#
+# It is one opaque blob on purpose: the shape belongs to the frontend, and a
+# server that validates the keys becomes a second place to edit every time the
+# UI grows a toggle. What IS enforced is that it is an object and that it is
+# small, because neither is the frontend's business to get right.
+# ---------------------------------------------------------------------------
+UI_PREFS_MAX_BYTES = 64 * 1024
+
+
+def ui_prefs_path() -> Path:
+    return home_dir() / "ui_prefs.json"
+
+
+def ui_prefs() -> dict:
+    try:
+        val = json.loads(ui_prefs_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return val if isinstance(val, dict) else {}
+
+
+def save_ui_prefs(prefs: dict) -> dict:
+    """Replace the stored blob. Replace rather than merge: the browser holds the
+    whole thing, and a merge would resurrect a preference the user just cleared."""
+    if not isinstance(prefs, dict):
+        return {"ok": False, "error": "preferences must be an object"}
+    body = json.dumps(prefs, indent=2, sort_keys=True) + "\n"
+    if len(body.encode("utf-8")) > UI_PREFS_MAX_BYTES:
+        return {"ok": False,
+                "error": f"preferences exceed {UI_PREFS_MAX_BYTES} bytes"}
+    p = ui_prefs_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(body, encoding="utf-8")
+    return {"ok": True, "path": str(p), "keys": sorted(prefs)}
 
 
 def setting(name: str, default: str = "") -> str:
@@ -203,6 +351,19 @@ def setting(name: str, default: str = "") -> str:
         return val
     val = settings().get(name)
     return str(val) if val not in (None, "") else default
+
+
+def owner() -> str:
+    """Who "me" is. Resolved, never hardcoded: $MEMORY_LEDGER_OWNER, then the
+    `owner` setting, then DEFAULT_OWNER. Everything that decides whether a task
+    is on YOUR plate — norm_assignee, is_mine_actionable, a new session's
+    props.owner — goes through this."""
+    return setting("owner", DEFAULT_OWNER)
+
+
+#: Alias for the handful of api_* helpers that take an `owner=` argument and so
+#: shadow the resolver's name inside their own scope.
+_resolve_owner = owner
 
 
 DEFAULT_REALM = setting("realm", "optibus")
@@ -583,7 +744,9 @@ def _after_write(con, nodes=(), edges=(), del_nodes=(), del_edges=()):
     for e in del_edges:
         _enqueue(con, "del_edge", EDGE_SEP.join(e))
     con.commit()
-    if _env("NO_AUTOSYNC"):
+    # flag() folds in $MEMORY_LEDGER_NO_AUTOSYNC, so a bulk load that exports it
+    # still queues without pushing — it just is no longer the ONLY way to say so.
+    if not flag("autosync"):
         return None
     return _flush(con)
 
@@ -633,6 +796,21 @@ def cmd_init(args):
     home = adopt_canonical_home()
     connect().close()
     out({"ok": True, "db": str(db_path()), "home": home})
+
+
+def cmd_backups(args):
+    """List the snapshots, take one, or expire the old ones.
+
+    Snapshots exist so consolidation is undoable (see backup_db). They are
+    reachable from here as well as the web UI, because a recovery path that
+    only exists in a browser is not a recovery path."""
+    res = {"ok": True, "dir": str(backups_dir()), "keep_days": BACKUP_KEEP_DAYS}
+    if args.new:
+        res["created"] = backup_db(args.label or "manual")
+    if args.prune:
+        res["removed"] = prune_backups()
+    res["backups"] = list_backups()
+    out(res)
 
 
 def cmd_disable(args):
@@ -3644,7 +3822,7 @@ def cmd_resume(args):
     # What was being worked on: recently touched, minus the machinery (captures,
     # digests, people, skills, rules) and minus work explicitly owned by someone
     # else — after a clear you want YOUR thread back, not the last thing ingested.
-    owner = _env("OWNER", "Gabriel").lower()
+    me = owner().lower()
     focus = []
     for r in con.execute(
         "SELECT * FROM nodes WHERE updated>=? AND type NOT IN"
@@ -3654,7 +3832,7 @@ def cmd_resume(args):
             (since,)).fetchall():
         d = _node_dict(r)
         a = str((d["props"] or {}).get("assignee", "")).strip().lower()
-        if a and owner not in a and a not in ("me", "unassigned", "team"):
+        if a and me not in a and a not in ("me", "unassigned", "team"):
             continue
         focus.append(d)
         if len(focus) >= int(args.limit or 8):
@@ -3829,12 +4007,32 @@ def cmd_maintain(args):
         " WHERE type='capture' AND substr(created,1,10)<=?"
         " AND json_extract(props,'$.consolidated_into') IS NULL", (cutoff,)).fetchone()
 
-    repaired = _repair_digest_edges(con)
-
     # consolidate every day at or before the cutoff, one digest per day
     days = [r["d"] for r in con.execute(
         "SELECT DISTINCT substr(created,1,10) d FROM nodes WHERE type='capture'"
         " AND substr(created,1,10)<=? ORDER BY d", (cutoff,)).fetchall()]
+
+    if getattr(args, "dry_run", False):
+        # Everything below writes — the digests, the edge repair, the props
+        # stamp — so the preview stops here and reports the plan instead. The
+        # reversed-edge repair is counted, not performed.
+        plan = consolidation_plan(con, days)
+        reversible = con.execute(
+            "SELECT COUNT(*) n FROM edges WHERE rel='part-of' AND src LIKE 'note_digest_%'"
+        ).fetchone()["n"]
+        out({"ok": True, "dry_run": True, "destructive": False,
+             "keep_days": keep, "cutoff": cutoff,
+             "reversed_edges_to_repair": reversible,
+             "still_loose": before_rows["n"], **plan,
+             "note": "nothing was written"})
+        return
+
+    backup = None
+    if not getattr(args, "no_backup", False):
+        backup = backup_db("maintain")
+        prune_backups()
+
+    repaired = _repair_digest_edges(con)
     digested = []
     for day in days:
         caps = [_node_dict(r) for r in con.execute(
@@ -3885,6 +4083,7 @@ def cmd_maintain(args):
 
     _after_write(con, nodes=[d["digest"] for d in digested])
     out({"ok": True, "destructive": False, "keep_days": keep, "cutoff": cutoff,
+         "backup": backup,
          "reversed_edges_repaired": repaired,
          "days_consolidated": len(digested), "digests": digested,
          "newly_consolidated": before_rows["n"] - after["n"],
@@ -3898,26 +4097,88 @@ def cmd_maintain(args):
                   "recall stops at the digest instead of every raw turn")})
 
 
+def consolidation_plan(con, days: list) -> dict:
+    """What a consolidation run over `days` WOULD do, computed without writing.
+
+    The preview and the run must not be two implementations of the same
+    arithmetic — a preview that is merely a good guess is worse than none, since
+    it is trusted exactly when it is wrong. So this reads the rows, and the run
+    below consolidates the days this returns.
+    """
+    plan, totals = [], {"captures": 0, "new_digests": 0, "updated_digests": 0,
+                        "newly_consolidated": 0, "chars": 0}
+    for day in days:
+        caps = [_node_dict(r) for r in con.execute(
+            "SELECT * FROM nodes WHERE type='capture' AND substr(created,1,10)=?"
+            " ORDER BY created", (day,)).fetchall()]
+        if not caps:
+            continue
+        did = f"note_digest_{day}"
+        exists = bool(con.execute("SELECT 1 FROM nodes WHERE id=?", (did,)).fetchone())
+        loose = [c for c in caps if not c["props"].get("consolidated_into")]
+        chars = sum(len(c.get("title") or "") + len(c.get("body") or "") for c in caps)
+        plan.append({
+            "day": day, "digest": did,
+            "digest_exists": exists,
+            "action": "update" if exists else "create",
+            "captures": len(caps),
+            "prompts": sum(1 for c in caps if c["props"].get("role") == "user"),
+            "newly_consolidated": len(loose),
+            "already_consolidated": len(caps) - len(loose),
+            "chars_behind_it": chars,
+        })
+        totals["captures"] += len(caps)
+        totals["newly_consolidated"] += len(loose)
+        totals["chars"] += chars
+        totals["updated_digests" if exists else "new_digests"] += 1
+    return {"days": plan, "totals": totals}
+
+
+def capture_days(con, day: str = "", older_than=None) -> list:
+    """The days a consolidation run would touch, under the same filter the run
+    uses. Separated out so the preview cannot drift from the run."""
+    where, params = "type='capture'", []
+    if day:
+        where += " AND substr(created,1,10)=?"; params.append(day)
+    elif older_than is not None:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=int(older_than))
+                  ).date().isoformat()
+        where += " AND substr(created,1,10)<=?"; params.append(cutoff)
+    return [r["d"] for r in con.execute(
+        f"SELECT DISTINCT substr(created,1,10) d FROM nodes WHERE {where}"
+        " ORDER BY d", params).fetchall()]
+
+
 def cmd_consolidate(args):
     """Sleep-style consolidation: episodic captures -> one semantic digest per
     day, linked back to the originals. NON-DESTRUCTIVE — every capture is kept;
     the digest is what recall surfaces, so reads get cheaper without losing raw
     detail (CONVENTIONS §2a)."""
     con = connect()
-    where, params = "type='capture'", []
-    if args.day:
-        where += " AND substr(created,1,10)=?"; params.append(args.day)
-    elif args.older_than is not None:
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=int(args.older_than))
-                  ).date().isoformat()
-        where += " AND substr(created,1,10)<=?"; params.append(cutoff)
-    rows = con.execute(
-        f"SELECT * FROM nodes WHERE {where} ORDER BY created", params).fetchall()
-    if not rows:
+    days = capture_days(con, args.day or "", args.older_than)
+    if not days:
         out({"ok": True, "digests": [], "note": "no captures matched"}); return
 
+    plan = consolidation_plan(con, days)
+    if getattr(args, "dry_run", False):
+        # Reads only. Nothing below this line runs, which is the point: the
+        # answer to "what will this change?" must not change anything.
+        out({"ok": True, "dry_run": True, "destructive": False, **plan,
+             "note": "nothing was written"})
+        return
+
+    # A snapshot before the first write, so a run you regret is one file copy
+    # away from undone. Skipped on --no-backup for the daily hook, which runs
+    # unattended and would otherwise leave a snapshot behind every morning.
+    backup = None
+    if not getattr(args, "no_backup", False):
+        backup = backup_db("consolidate")
+        prune_backups()
+
     by_day = {}
-    for r in rows:
+    for r in con.execute(
+            "SELECT * FROM nodes WHERE type='capture' AND substr(created,1,10) IN "
+            "(" + ",".join("?" * len(days)) + ") ORDER BY created", days).fetchall():
         by_day.setdefault(r["created"][:10], []).append(_node_dict(r))
 
     digests = []
@@ -3952,7 +4213,8 @@ def cmd_consolidate(args):
         digests.append({"id": did, "day": day, "captures": linked,
                         "kept_originals": True})
     _after_write(con, nodes=[d["id"] for d in digests])
-    out({"ok": True, "digests": digests, "destructive": False})
+    out({"ok": True, "digests": digests, "destructive": False,
+         "backup": backup, "planned": plan["totals"]})
 
 
 # ---------------------------------------------------------------------------
@@ -4215,7 +4477,9 @@ Consequences a rebuild must preserve:
   zero: the two injected strings above are real context. Say "no model call" when
   that is what is meant.
 - `SessionStart` also runs the once-a-day consolidation, guarded by a
-  `~/.second_brain/.last_consolidate` stamp. Opt out with `$SECOND_BRAIN_NO_CONSOLIDATE`.
+  `~/.second_brain/.last_consolidate` stamp. Opt out with the `consolidate`
+  setting (Settings in the UI) or `$MEMORY_LEDGER_NO_CONSOLIDATE`. It runs
+  `--no-backup`: snapshots are for the runs a person triggers.
 """),
     "spec_storage": ("Where the brain lives and how it is addressed", """
 The brain is GLOBAL and lives outside any repo, so every project on the machine
@@ -4224,11 +4488,19 @@ shares one brain. It is never committed.
 ```
 ~/.second_brain/
   graph.db          the whole brain in one portable SQLite file (content + skills + genome)
+  backups/          snapshots taken before a consolidation run, kept BACKUP_KEEP_DAYS
   learned_skills/   optional local SKILL.md exports; never the source of truth
   exports/          export-memory output
   neo4j.json        optional graph-mirror config (secret)
+  settings.json     preferences shared by the CLI, hooks, cron and the web UI
+  ui_prefs.json     the browser's view state, only when the `ui_sync` setting is on
   .last_consolidate stamp for the daily consolidation
 ```
+
+`consolidate` and `maintain` take `--dry-run` (report the plan, write nothing) and
+snapshot the graph before their first write unless given `--no-backup`. `backups`
+lists, takes (`--new`) and expires (`--prune`) them; restore by copying one back
+over `graph.db`.
 
 Path resolution: `$SECOND_BRAIN_DB` (explicit file) -> `$SECOND_BRAIN_HOME/graph.db`
 -> `~/.second_brain/graph.db`. Copying `graph.db` moves the brain; copying the home
@@ -4250,7 +4522,9 @@ and the whole graph cross the network on every write.
 - `neo4j-status` — configured / reachable / pending op count.
 - `flush` — drain the outbox.
 - `scripts/brain_sync.py` — full bulk reconcile.
-- `$SECOND_BRAIN_NO_AUTOSYNC=1` — queue without per-op push (bulk loads), then flush.
+- `$MEMORY_LEDGER_NO_AUTOSYNC=1`, or the `autosync` setting turned off — queue
+  without per-op push (bulk loads), then flush. The env var is the negative and
+  outranks the file, like every other switch in the engine.
 
 Node `type` is a PROPERTY in neo4j, not a label, so changing a node's type needs no
 label surgery — re-emitting the node through the API is enough.
@@ -4463,7 +4737,7 @@ def api_conversation(con, session_id: str, *, cwd="", owner="", title="") -> dic
     if row:
         return {"ok": True, "node": _node_dict(row), "created": False}
     props = {"session_id": session_id, "started_at": now(),
-             "owner": owner or _env("OWNER", "Gabriel")}
+             "owner": owner or _resolve_owner()}
     if cwd:
         props["cwd"] = cwd
     res = api_create_node(con, "conversation",
@@ -5240,6 +5514,15 @@ def build_parser():
     sub.add_parser("init").set_defaults(func=cmd_init)
     sub.add_parser("stats").set_defaults(func=cmd_stats)
 
+    a = sub.add_parser("backups", description=(
+        "Point-in-time snapshots of the whole graph, taken before consolidation "
+        f"and kept {BACKUP_KEEP_DAYS} days. Restore by copying one back over "
+        "graph.db."))
+    a.set_defaults(func=cmd_backups)
+    a.add_argument("--new", action="store_true", help="take a snapshot now")
+    a.add_argument("--label", help="name the snapshot (default: manual)")
+    a.add_argument("--prune", action="store_true", help="delete expired snapshots")
+
     sub.add_parser("disable", help=(
         "turn the ledger off machine-wide (writes <home>/.disabled); "
         "idempotent")).set_defaults(func=cmd_disable)
@@ -5371,6 +5654,10 @@ def build_parser():
     a.add_argument("--day", help="YYYY-MM-DD (default: every day with captures)")
     a.add_argument("--older-than", type=int, dest="older_than",
                    help="only days at least N days old")
+    a.add_argument("--dry-run", action="store_true", dest="dry_run",
+                   help="report what would change and write nothing")
+    a.add_argument("--no-backup", action="store_true", dest="no_backup",
+                   help="skip the pre-run snapshot (the daily hook uses this)")
 
     a = sub.add_parser("suggest-links"); a.set_defaults(func=cmd_suggest_links)
     a.add_argument("text", help="free text to scan for mentions of known nodes")
@@ -5420,6 +5707,10 @@ def build_parser():
     a.set_defaults(func=cmd_maintain)
     a.add_argument("--keep-days", type=int, dest="keep_days", default=2,
                    help="leave the last N days of captures loose (default 2)")
+    a.add_argument("--dry-run", action="store_true", dest="dry_run",
+                   help="report what would change and write nothing")
+    a.add_argument("--no-backup", action="store_true", dest="no_backup",
+                   help="skip the pre-run snapshot")
 
     a = sub.add_parser("list"); a.set_defaults(func=cmd_list)
     a.add_argument("--type"); a.add_argument("--status")

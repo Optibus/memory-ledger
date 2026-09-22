@@ -49,3 +49,22 @@ export function humanize(token: string): string {
   const s = token.replace(/[-_]+/g, " ").trim();
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : "";
 }
+
+/**
+ * A byte count a person can read at a glance.
+ *
+ * Binary units (1024), because these are file sizes reported by `stat` and a
+ * snapshot that `ls` calls 100K should not be labelled 102 KB here.
+ */
+export function bytes(n: number): string {
+  if (!Number.isFinite(n) || n < 0) return "—";
+  if (n < 1024) return `${n} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
+}

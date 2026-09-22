@@ -341,25 +341,61 @@ export interface Settings extends Envelope {
   env: Record<string, string>;
   path: string;
   effective: EffectiveSettings;
+  capture: CaptureState;
 }
 
 export interface StoredSettings {
   tz: string;
   realm: string;
+  /** Who "me" is — what `--mine` filters on. */
+  owner: string;
+  backend: string;
+  /** Push each write to the neo4j mirror, instead of only queueing it. */
+  autosync: boolean;
+  /** Let the daily hook fold closed days into digests. */
+  consolidate: boolean;
+  /** Keep this browser's view preferences in the brain, not just locally. */
+  ui_sync: boolean;
   map_poll_seconds: number;
   dash_refresh_seconds: number;
 }
 
+/** Where a resolved value came from. The page says so, because a setting whose
+ *  env var has taken over is a field that cannot do what it looks like it does. */
+export type SettingSource = "env" | "settings" | "default";
+
 export interface EffectiveSettings {
   tz: string;
-  tz_source: "env" | "settings" | "system";
+  tz_source: SettingSource | "system";
   system_tz: string;
   now: string;
   realm: string;
+  owner: string;
+  owner_source: SettingSource;
   backend: string;
   backends: string[];
+  autosync: boolean;
+  autosync_source: SettingSource;
+  consolidate: boolean;
+  consolidate_source: SettingSource;
+  ui_sync: boolean;
+  ui_sync_source: SettingSource;
   map_poll_seconds: number;
   dash_refresh_seconds: number;
+}
+
+/**
+ * Whether the ledger is recording, and which switch decided it.
+ *
+ * `env_off` matters: $MEMORY_LEDGER_OFF outranks the marker file, so when it is
+ * set the UI must not offer to turn capture back on — it cannot.
+ */
+export interface CaptureState {
+  enabled: boolean;
+  marker: string;
+  marker_present: boolean;
+  env_off: boolean;
+  source: "env" | "marker" | "on";
 }
 
 export interface Neo4jStatus {
@@ -391,9 +427,116 @@ export interface Timezones extends Envelope {
   zones: string[];
 }
 
+/** One person node in a duplicate group, with how much history it carries. */
+export interface DuplicateCandidate {
+  id: string;
+  title: string;
+  edges: number;
+  /** How sure the name match is. Only on the duplicates, not the canonical. */
+  confidence?: "certain" | "likely";
+}
+
+/**
+ * A group of person nodes that look like one human.
+ *
+ * The canonical is the most connected node, because merging into it moves the
+ * fewest edges. Detected by name matching over every alias — no model call.
+ */
 export interface PersonDuplicate {
-  a: Person;
-  b: Person;
-  reason?: string;
-  score?: number;
+  canonical: DuplicateCandidate;
+  duplicates: DuplicateCandidate[];
+}
+
+export interface PersonDuplicates extends Envelope {
+  duplicates: PersonDuplicate[];
+}
+
+// ---------------------------------------------------------------------------
+// Upkeep: consolidation, its preview, and the snapshots it leaves
+// ---------------------------------------------------------------------------
+
+/** What one day's consolidation would do. Computed by the engine, not guessed. */
+export interface ConsolidationDay {
+  day: string;
+  digest: string;
+  digest_exists: boolean;
+  action: "create" | "update";
+  captures: number;
+  prompts: number;
+  newly_consolidated: number;
+  already_consolidated: number;
+  chars_behind_it: number;
+}
+
+export interface ConsolidationPreview extends Envelope {
+  dry_run: true;
+  keep_days: number;
+  cutoff: string;
+  still_loose: number;
+  backup_keep_days: number;
+  days: ConsolidationDay[];
+  totals: {
+    captures: number;
+    new_digests: number;
+    updated_digests: number;
+    newly_consolidated: number;
+    chars: number;
+  };
+}
+
+export interface Backup {
+  name: string;
+  path: string;
+  bytes: number;
+  created: string;
+  expires: string;
+  expired: boolean;
+}
+
+export interface BackupList extends Envelope {
+  dir: string;
+  keep_days: number;
+  backups: Backup[];
+}
+
+export interface MaintainResult extends Envelope {
+  keep_days?: number;
+  cutoff?: string;
+  days_consolidated?: number;
+  newly_consolidated?: number;
+  still_loose?: number;
+  read_reduction?: string;
+  backup?: { path: string; bytes: number } | null;
+  /** Set when the write was refused for want of an explicit confirmation. */
+  needs_confirmation?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Doctor — the health check, in the browser
+// ---------------------------------------------------------------------------
+
+export interface DoctorReport extends Envelope {
+  /** The verdict. Distinct from `ok`, which only says the call succeeded. */
+  healthy: boolean;
+  problems: string[];
+  status: Record<string, unknown>;
+  paths: Record<string, unknown>;
+  config: Record<string, unknown>;
+  content: Record<string, unknown>;
+  hooks: Record<string, unknown>;
+  mirror: Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// UI preferences — the browser's own state, optionally kept in the brain
+// ---------------------------------------------------------------------------
+
+/** An opaque blob: the shape belongs to the frontend, and the server stores it
+ *  without opinions so a new toggle needs no server change. */
+export type UiPrefs = Record<string, unknown>;
+
+export interface UiPrefsPayload extends Envelope {
+  synced: boolean;
+  path: string;
+  prefs: UiPrefs;
 }

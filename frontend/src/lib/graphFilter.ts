@@ -118,3 +118,50 @@ export function matchesQuery(node: GraphNode, query: string): boolean {
     node.id.toLowerCase().includes(q)
   );
 }
+
+/**
+ * The filter as something JSON can hold.
+ *
+ * `Set` does not survive `JSON.stringify` — it serialises as `{}` — so a filter
+ * stored naively comes back with every facet switched on and looks like the
+ * preference simply failed to save. These two functions are the only place that
+ * conversion happens.
+ */
+export interface StoredFilter {
+  typesOff: string[];
+  realmsOff: string[];
+  kindsOff: string[];
+  hideDone: boolean;
+  cascade: boolean;
+  shade: boolean;
+}
+
+export function serializeFilter(f: FilterState): StoredFilter {
+  return {
+    typesOff: [...f.typesOff].sort(),
+    realmsOff: [...f.realmsOff].sort(),
+    kindsOff: [...f.kindsOff].sort(),
+    hideDone: f.hideDone,
+    cascade: f.cascade,
+    shade: f.shade,
+  };
+}
+
+/** Tolerant on purpose: a hand-edited or half-written blob must degrade to the
+ *  empty filter, never to a map with nodes missing for no visible reason. */
+export function deserializeFilter(raw: unknown): FilterState {
+  const f = emptyFilter();
+  if (!raw || typeof raw !== "object") return f;
+  const s = raw as Partial<StoredFilter>;
+  if (Array.isArray(s.typesOff)) f.typesOff = new Set(s.typesOff.filter(isStr));
+  if (Array.isArray(s.realmsOff)) f.realmsOff = new Set(s.realmsOff.filter(isStr));
+  if (Array.isArray(s.kindsOff)) f.kindsOff = new Set(s.kindsOff.filter(isStr));
+  f.hideDone = s.hideDone === true;
+  f.cascade = s.cascade === true;
+  f.shade = s.shade === true;
+  return f;
+}
+
+function isStr(v: unknown): v is string {
+  return typeof v === "string";
+}

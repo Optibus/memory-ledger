@@ -12,6 +12,7 @@ export interface SectionLink {
 export const SECTIONS: SectionLink[] = [
   { to: "/map", label: "Map", icon: "🗺" },
   { to: "/dashboard", label: "Dashboard", icon: "📋" },
+  { to: "/people", label: "People", icon: "👥" },
   { to: "/skills", label: "Skills", icon: "🧩" },
   { to: "/settings", label: "Settings", icon: "⚙", foot: true },
 ];
@@ -52,7 +53,27 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           <button type="button" className="ml-side__x" onClick={onClose} aria-label="close sections">✕</button>
         </div>
         <nav className="ml-side__nav">{main.map(item)}</nav>
-        <div className="ml-side__foot">{foot.map(item)}</div>
+        <div className="ml-side__foot">
+          {/*
+            Not a NavLink: /api/docs is the Swagger UI the SERVER renders, not a
+            route this app owns, so it has to be a real navigation. It opens in
+            its own tab because reading the API is something you do BESIDE the
+            brain, not instead of it — and because coming "back" from a page
+            React never rendered would drop whatever you had open here.
+          */}
+          <a
+            className="ml-side__link ml-side__link--out"
+            href="./api/docs"
+            target="_blank"
+            rel="noreferrer"
+            onClick={onClose}
+          >
+            <span aria-hidden="true">📖</span>
+            <span>API docs</span>
+            <span className="ml-side__ext" aria-hidden="true">↗</span>
+          </a>
+          {foot.map(item)}
+        </div>
       </aside>
     </>
   );

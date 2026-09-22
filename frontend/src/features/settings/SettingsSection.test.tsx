@@ -4,7 +4,7 @@ import { http, HttpResponse } from "msw";
 import { SettingsSection } from "./SettingsSection";
 import { renderApp } from "@/test/utils";
 import { failWith, resetWrites, server, writes } from "@/test/server";
-import { settingsFixture, statusFixture } from "@/test/fixtures";
+import { doctorFixture, settingsFixture, statusFixture } from "@/test/fixtures";
 
 beforeEach(resetWrites);
 
@@ -65,7 +65,103 @@ describe("Settings", () => {
     server.use(http.get("/api/settings", () => HttpResponse.json({ ...settingsFixture, writable: false })));
     renderApp(<SettingsSection />, { route: "/settings" });
     expect(await screen.findByRole("button", { name: "Save" })).toBeDisabled();
-    expect(screen.getByText("read-only server")).toBeInTheDocument();
+    // Every card that writes says so, so this is a count, not a lookup.
+    expect(screen.getAllByText("read-only server").length).toBeGreaterThan(0);
+  });
+
+  it("writes the owner, because who 'me' is used to be a constant in the source", async () => {
+    const { user } = renderApp(<SettingsSection />, { route: "/settings" });
+    const field = await screen.findByLabelText("Your name");
+    await user.clear(field);
+    await user.type(field, "Ana Silva");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(writes.find((w) => w.path === "/api/settings")?.body).toMatchObject({
+        owner: "Ana Silva",
+      }),
+    );
+  });
+
+  it("offers the realms the graph actually has, rather than a typed-in string", async () => {
+    renderApp(<SettingsSection />, { route: "/settings" });
+    const select = (await screen.findByLabelText("Default realm")) as HTMLSelectElement;
+    const values = [...select.options].map((o) => o.value);
+    expect(values).toContain("optibus");
+    // "" is the "fall back to the default" option, not a realm.
+    expect(values).toContain("");
+  });
+
+  it("says when an env var has taken a switch over, instead of offering a dead box", async () => {
+    server.use(
+      http.get("/api/settings", () =>
+        HttpResponse.json({
+          ...settingsFixture,
+          effective: {
+            ...settingsFixture.effective,
+            autosync: false,
+            autosync_source: "env" as const,
+          },
+        }),
+      ),
+    );
+    renderApp(<SettingsSection />, { route: "/settings" });
+    const box = await screen.findByRole("checkbox", { name: /Push every write to the mirror/ });
+    expect(box).toBeDisabled();
+    expect(box).not.toBeChecked();
+    expect(screen.getByText(/MEMORY_LEDGER_NO_AUTOSYNC is set/)).toBeInTheDocument();
+  });
+});
+
+describe("Settings — capture", () => {
+  it("says whether the brain is recording, and can stop it", async () => {
+    const { user } = renderApp(<SettingsSection />, { route: "/settings" });
+    expect(await screen.findByText("recording")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Turn capture off" }));
+    await waitFor(() =>
+      expect(writes.find((w) => w.path === "/api/capture")?.body).toMatchObject({ enabled: false }),
+    );
+  });
+
+  it("refuses to offer a switch the environment has already won", async () => {
+    server.use(
+      http.get("/api/settings", () =>
+        HttpResponse.json({
+          ...settingsFixture,
+          capture: { ...settingsFixture.capture, enabled: false, env_off: true, source: "env" as const },
+        }),
+      ),
+    );
+    renderApp(<SettingsSection />, { route: "/settings" });
+    expect(await screen.findByRole("button", { name: "Turn capture on" })).toBeDisabled();
+    expect(screen.getByText(/outranks the marker file/)).toBeInTheDocument();
+  });
+});
+
+describe("Settings — health", () => {
+  it("runs the health check on demand, not on load", async () => {
+    const { user } = renderApp(<SettingsSection />, { route: "/settings" });
+    const button = await screen.findByRole("button", { name: "Run the health check" });
+    expect(screen.queryByText("healthy")).not.toBeInTheDocument();
+    await user.click(button);
+    expect(await screen.findByText("healthy")).toBeInTheDocument();
+    expect(screen.getByText("Nothing actionable is wrong.")).toBeInTheDocument();
+  });
+
+  it("lists the problems when there are any", async () => {
+    server.use(
+      http.get("/api/doctor", () =>
+        HttpResponse.json({
+          ...doctorFixture,
+          healthy: false,
+          problems: ["one or more hooks reference a missing script"],
+        }),
+      ),
+    );
+    const { user } = renderApp(<SettingsSection />, { route: "/settings" });
+    await user.click(await screen.findByRole("button", { name: "Run the health check" }));
+    expect(
+      await screen.findByText("one or more hooks reference a missing script"),
+    ).toBeInTheDocument();
   });
 });
 
@@ -120,12 +216,45 @@ describe("Settings — where the data lives", () => {
     expect(await screen.findByRole("button", { name: "Flush queue (7)" })).toBeInTheDocument();
   });
 
-  it("runs prune, and says it deletes nothing", async () => {
+  it("will not consolidate until it has shown what that would change", async () => {
     const { user } = renderApp(<SettingsSection />, { route: "/settings" });
     await screen.findByText("/home/brain/graph.db");
-    expect(screen.getByText(/consolidates old captures and deletes nothing/)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Prune" }));
-    await waitFor(() => expect(writes.some((w) => w.path === "/api/prune")).toBe(true));
+
+    // Nothing has been previewed, so the button that writes is not available.
+    expect(screen.getByRole("button", { name: "Consolidate" })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Preview" }));
+    expect(await screen.findByText("What this would change")).toBeInTheDocument();
+    expect(screen.getByText("2026-09-19")).toBeInTheDocument();
+    // A preview writes nothing at all.
+    expect(writes.some((w) => w.path === "/api/prune")).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: "Consolidate" }));
+    // And still nothing, until the dialog is answered.
+    expect(writes.some((w) => w.path === "/api/prune")).toBe(false);
+    await user.click(await screen.findByRole("button", { name: "Consolidate 12 captures" }));
+    await waitFor(() =>
+      expect(writes.find((w) => w.path === "/api/prune")?.body).toMatchObject({ confirm: true }),
+    );
+  });
+
+  it("changing the cutoff drops the plan, so a stale preview cannot be confirmed", async () => {
+    const { user } = renderApp(<SettingsSection />, { route: "/settings" });
+    await screen.findByText("/home/brain/graph.db");
+    await user.click(screen.getByRole("button", { name: "Preview" }));
+    await screen.findByText("What this would change");
+
+    await user.clear(screen.getByLabelText("Keep the last N days loose"));
+    await user.type(screen.getByLabelText("Keep the last N days loose"), "30");
+
+    expect(screen.queryByText("What this would change")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Consolidate" })).toBeDisabled();
+  });
+
+  it("lists the snapshots consolidation leaves behind", async () => {
+    renderApp(<SettingsSection />, { route: "/settings" });
+    expect(await screen.findByText("maintain-20260922T120000Z.db")).toBeInTheDocument();
+    expect(screen.getByText(/expires 2026-09-27/)).toBeInTheDocument();
   });
 
   it("reports an unreachable master rather than staying quiet", async () => {

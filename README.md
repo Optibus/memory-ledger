@@ -320,6 +320,11 @@ alias, and the duplicate stays in the graph as a resolver (`superseded_by` plus 
 edge to follow). A capture that said "Isa" still says "Isa" — and still resolves to
 the right human, because identity is resolved when **read**.
 
+All of that is also a page: **People** in the web UI lists the roster, expands any
+person to what they connect to, and puts the duplicate groups at the top with the
+merge one click away. Same matching, same merge, no model call — the CLI is no
+longer the only place identity gets tidied.
+
 ## Recall behaves like memory
 
 `recall` is the retrieval path — prefer it over `search`. It seeds on full-text,
@@ -444,7 +449,7 @@ done
 
 ## Visualize the brain
 
-A dependency-free local server serves one page with **four sections**, behind a
+A dependency-free local server serves one page with **five sections**, behind a
 hamburger menu on the left (`m` toggles it):
 
 - **Map** — the live force-directed graph: zoom/pan, a search you can clear, and
@@ -469,17 +474,34 @@ hamburger menu on the left (`m` toggles it):
   week / closed / range) as cards, over the same store. It is also a **full
   editor**: create tasks, tick them off, change status/assignee/due, rename them,
   and add or remove relations — all token-free (see below).
+- **People** — every person node as a card, expanding to everything one hop away
+  grouped by relation, and above them the groups that look like **one human
+  twice**. Detection is name matching across every alias a node answers to, with
+  **no model call**; merging moves the edges onto the node you keep, pins the
+  other spelling as an alias, and leaves the duplicate pointing at its
+  replacement, so a capture that said "Isa" still resolves to Isadora. The engine
+  proposes the most connected node as canonical — a radio overrules it, because
+  only a human can say which spelling is the real person.
 - **Skills** — the two contract trees (built-in and learned), nested by the
   `requires` edge, beside the rule catalogue, with one filter over both. Open a
   skill to see what it reads and writes in the graph, the rules it answers to,
   and **its relations one level deep**; open a rule to read it in full. The `+`
   button authors a new skill or rule — see
   [Grow the brain from the page](#grow-the-brain-from-the-page).
-- **Settings** — timezone (which day "today" means), default realm, poll
-  intervals, the database connection (local mirror + neo4j master, with a test
-  and a queue flush), and **prune**. Preferences are saved to
-  `~/.second_brain/settings.json`, so the CLI, the hooks and any cron read the
-  same answer as the page — not to the browser.
+- **Settings** — **your name** (who `--mine` means), timezone (which day "today"
+  means), default realm, read backend, poll intervals, and three switches: mirror
+  autosync, daily consolidation, and whether this browser's view preferences are
+  kept in the brain. Plus **is it capturing?** with the switch to change it,
+  **doctor** on demand, the database connection (local mirror + neo4j master,
+  with a test and a queue flush), and **consolidation** — which shows what it
+  would change, asks, and snapshots the whole graph first (kept 5 days).
+
+  Preferences are saved to `~/.second_brain/settings.json`, so the CLI, the hooks
+  and any cron read the same answer as the page — not to the browser. What you
+  were *looking at* is a different question: the open view, the filters, the map's
+  display toggles are this browser's, kept in `localStorage` and restored when you
+  come back, and syncing those to the brain is the one opt-in switch, for when you
+  use the same brain from a second machine.
 
 ### Feed the brain without the model
 

@@ -114,9 +114,12 @@ and `doctor` reports the other, never merging or deleting either. The home holds
 ```
 ~/.second_brain/
   graph.db            the memory graph (single portable file) — skills live here too, as nodes
+  backups/            point-in-time snapshots taken before consolidation, kept 5 days
   learned_skills/     OPTIONAL local SKILL.md exports (only if add-skill --with-file); not the source of truth
   exports/            export-memory output
   neo4j.json          optional graph-mirror config (secret — never commit)
+  settings.json       preferences the CLI, hooks, cron and the web UI all read
+  ui_prefs.json       the browser's own view state, only when `ui_sync` is on
   (routines, definitions live here too)
 ```
 
@@ -280,6 +283,30 @@ should pay for the machinery they switched off. Toggle the marker with `graph.py
 whether the brain is currently enabled, where the DB lives, and whether anything
 looks mis-wired — reach for it before assuming a broken install.
 
+**The other switches resolve the same way, in the same module.** `autosync`
+(push each write to the mirror) and `consolidate` (let the daily hook fold closed
+days into digests) are `_switch.flag()`, read on the same cheap path for the same
+reason — a SessionStart hook asking "should I consolidate?" must not import the
+engine to be told no. Each is spelled POSITIVELY in `settings.json` and
+overridden by a NEGATIVE env var (`$MEMORY_LEDGER_NO_AUTOSYNC`,
+`$MEMORY_LEDGER_NO_CONSOLIDATE`), because that is the spelling every existing rc
+file and cron already uses; a truthy one wins over the file exactly as
+`$MEMORY_LEDGER_OFF` wins over the marker. `flag_source()` says which layer
+answered, so the Settings page can grey out a box it cannot change and say why.
+
+**Consolidation is undoable by snapshot, not by unpicking.** It is
+non-destructive (§2a) — every capture is kept and linked to its digest — which
+makes it safe but not reversible: undoing a run means removing a props key from
+every capture it touched. So a run triggered by a person snapshots the whole
+graph to `<home>/backups/` first (sqlite's backup API, never a file copy of a
+live database), keeps it `BACKUP_KEEP_DAYS` days, and you restore by copying one
+back over `graph.db`. Expiring a snapshot is **not** the delete §2a forbids: that
+rule is about the graph's own content, this is retention on a copy whose purpose
+is to be temporary. The daily hook passes `--no-backup` — a snapshot every
+morning for a run nobody asked for is just disk. `graph.py backups [--new]
+[--prune]` reaches all of it from the CLI, because a recovery path that exists
+only in a browser is not a recovery path.
+
 **Optional graph mirror.** If a `graph` backend is configured, every mutation also
 pushes there, so several machines can share one brain. Configure it with
 `~/.second_brain/neo4j.json` or the `SECOND_BRAIN_NEO4J_*` env vars — any
@@ -423,12 +450,20 @@ guarantee as the read layer.
 | Create a relation | `POST /api/link` | Search for the other end, pick the relation, done. |
 | Remove a relation | `POST /api/unlink` | The `×` on any row under **Related**. |
 | Read the vocabulary | `GET /api/meta` | Relations + statuses + `writable`; the UI never hardcodes them. |
-| Read the API itself | `GET /api/docs` | Swagger UI over `GET /api/openapi.json`, built by the running process so it cannot describe a different server. |
+| Read the API itself | `GET /api/docs` | Swagger UI over `GET /api/openapi.json`, built by the running process so it cannot describe a different server. Linked from the drawer, above Settings — it opens in its own tab, because the server renders it and it is read beside the brain rather than instead of it. |
 | Find a node to link | `GET /api/search?q=` | Title substring, for the relation picker. |
-| Change a preference | `POST /api/settings` | `tz`, `realm`, `backend`, `map_poll_seconds`, `dash_refresh_seconds` → `<home>/settings.json`. |
+| Change a preference | `POST /api/settings` | `tz`, `realm`, `owner`, `backend`, `autosync`, `consolidate`, `ui_sync`, `map_poll_seconds`, `dash_refresh_seconds` → `<home>/settings.json`. |
+| Stop or resume capture | `POST /api/capture` | `{enabled}` — writes the same `.disabled` marker `graph.py disable` writes. Refused while `$MEMORY_LEDGER_OFF` is set, because that outranks it. |
+| See everyone, and who is who | `GET /api/people` / `/api/person-duplicates` | Person nodes, and the groups that look like one human. Name matching over every alias — **no model call**. |
+| Merge two spellings of a person | `POST /api/merge-person` | `{canonical, duplicate}`. Edges move, the other name becomes an alias, the duplicate stays as a resolver (§2a). |
+| Pin another spelling | `POST /api/add-alias` | `{id, alias}`. A name they already answer to is a no-op. |
+| Check the install | `GET /api/doctor` | The same report `doctor` prints. `ok` is "the call worked"; `healthy` is the verdict. |
+| Preview consolidation | `GET /api/consolidate-preview` | What a run **would** change, computed by the same function the run uses. Writes nothing. |
+| Snapshot / list snapshots | `POST /api/backup` / `GET /api/backups` | Point-in-time copies of the graph, kept 5 days. |
+| Remember a view preference | `GET`/`POST /api/ui-prefs` | The browser's own state, stored here only when `ui_sync` is on — see below. |
 | Point at the master | `POST /api/neo4j-config` / `/api/neo4j-test` | Writes `<home>/neo4j.json` (mode 600) and probes it. Empty url = sqlite only, and resets `backend` to `sqlite`. The **default read backend** select (§2d) sits in this card. |
 | Drain the queue | `POST /api/flush` | Pushes the outbox to neo4j. |
-| Prune | `POST /api/prune` | Runs `maintain` — consolidates old captures, deletes nothing (§2a). |
+| Prune | `POST /api/prune` | Runs `maintain` — consolidates old captures, deletes nothing (§2a). **Refused without `confirm: true`**: it still rewrites props on every capture it touches, so the page previews first. Snapshots the graph before the first write. |
 
 **Link recognition — the brain guesses the relation, you confirm it.** As you
 type a task title the composer calls `suggest-links`, which scans the text for
@@ -459,13 +494,14 @@ expose the UI (`--host 0.0.0.0` for phone access), pass **`--no-write`**: every
 `POST` then returns 403 and the UI hides its editing controls (`/api/meta`
 reports `writable: false`).
 
-**Four sections, behind one hamburger: Map, Dashboard, Skills, Settings.** The UI
+**Five sections, behind one hamburger: Map, Dashboard, People, Skills, Settings.** The UI
 is a React single-page app (`frontend/`, built to a committed `frontend/dist`
 that `scripts/serve.py` serves, and rebuilds when your source is newer — see
 [the frontend](docs/frontend.md)). The
 sections live in a left drawer (`m` toggles it, Settings pinned at the bottom) so
 nothing sits on top of the search bar, each section owns the whole viewport, and
-**the section is in the URL** (`/map`, `/dashboard`, `/skills`, `/settings`), so
+**the section is in the URL** (`/map`, `/dashboard`, `/people`, `/skills`,
+`/settings`), so
 a reload lands where you were and a link to a section is a link to that section. The map's
 facet filters — node types, realms, kinds, and the display toggles — are one
 dropdown each, multi-select, with an **all** / **none** that applies to that scope
@@ -483,15 +519,39 @@ and their edges and lose their label, because a few thousand dimmed labels over 
 handful you isolated is noise rather than context; a search hit keeps both, since
 dimming what you just asked for by name reads as "no results".
 
-**Settings are server-side, in `<home>/settings.json`.** `tz`, `realm`,
-`map_poll_seconds`, `dash_refresh_seconds` — read by the CLI, the hooks and any
-cron over the same brain, because a preference only one browser knows is not a
-preference. Precedence is the engine's usual **flag > env > file > default**, and
-`GET /api/settings` reports which keys an env var has taken over so the page can
-say the save will not take effect. The Settings section also manages the store
-(db path, master reachability, queued writes, credentials — the password is never
-sent to the browser) and runs **prune**, which is `maintain`: consolidating, never
-deleting (§2a).
+**Settings are server-side, in `<home>/settings.json`.** `tz`, `realm`, `owner`,
+`backend`, the three switches, `map_poll_seconds`, `dash_refresh_seconds` — read
+by the CLI, the hooks and any cron over the same brain, because a preference only
+one browser knows is not a preference. Precedence is the engine's usual **flag >
+env > file > default**, and `GET /api/settings` reports which keys an env var has
+taken over so the page can say the save will not take effect.
+
+**A setting changes what the ENGINE computes; a view preference does not.** That
+is the line the Settings page is grouped by. `owner` decides what `--mine`
+returns, so it has to be server-side or the CLI and the page disagree about whose
+work it is. Which dashboard view you had open decides nothing, so it lives in the
+browser's `localStorage` — instant, and never a disk write on the brain for a
+value no other reader cares about. Mirroring those into `<home>/ui_prefs.json` is
+**opt-in** (`ui_sync`) and covers the one case `localStorage` cannot: the same
+person on a second machine. Local is authoritative while you work and the push is
+debounced, so an unreachable brain costs you cross-machine sync and never your own
+UI. The blob is opaque to the server on purpose — its shape belongs to the
+frontend, so a new toggle needs no server change.
+
+The Settings section also answers **"is it capturing?"** (the marker and the env
+var, with the env var's precedence stated rather than hidden), runs **doctor** in
+the browser, manages the store (db path, master reachability, queued writes,
+credentials — the password is never sent to the browser), and runs
+**consolidation**: preview first, confirm second, snapshot before the first write.
+
+**The People section** is where person nodes stop decaying. Every person is a
+card that expands to everything one hop away, grouped by relation and fetched
+only on expand — a hundred people must not be a hundred reads. Duplicates are
+detected by name matching across every alias each node answers to, **with no
+model call**, and the canonical is the most connected node because merging into
+it moves the fewest edges. That is a default, not a verdict: the radio on any
+member re-points the merge, since only a human can say which spelling is the real
+person.
 
 **The Skills section** (`☰` › Skills) draws the two skill trees §5a put in the
 graph, built-in and user, nested by the `requires` edge. Opening a skill shows

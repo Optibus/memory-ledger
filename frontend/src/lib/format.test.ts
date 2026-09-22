@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDate, humanize, isOverdue, pluralize, toDateInput, truncate } from "./format";
+import { bytes, formatDate, humanize, isOverdue, pluralize, toDateInput, truncate } from "./format";
 
 describe("formatDate", () => {
   it("is empty for nothing, rather than 'Invalid Date'", () => {
@@ -55,5 +55,27 @@ describe("small text helpers", () => {
     expect(humanize("set-due")).toBe("Set due");
     expect(humanize("map_poll_seconds")).toBe("Map poll seconds");
     expect(humanize("")).toBe("");
+  });
+});
+
+describe("bytes", () => {
+  it("counts small sizes exactly", () => {
+    expect(bytes(0)).toBe("0 B");
+    expect(bytes(512)).toBe("512 B");
+  });
+
+  it("uses binary units, so a 100K file does not read as 102 KB", () => {
+    expect(bytes(102400)).toBe("100 KB");
+    expect(bytes(1024)).toBe("1.0 KB");
+  });
+
+  it("keeps one decimal only while it carries information", () => {
+    expect(bytes(1536)).toBe("1.5 KB");
+    expect(bytes(20 * 1024 * 1024)).toBe("20 MB");
+  });
+
+  it("refuses to invent a size for a value that is not one", () => {
+    expect(bytes(-1)).toBe("—");
+    expect(bytes(Number.NaN)).toBe("—");
   });
 });

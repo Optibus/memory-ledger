@@ -34,7 +34,7 @@ import sys
 import threading
 import time
 import webbrowser
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
@@ -485,14 +485,99 @@ def settings_payload() -> dict:
             "now": datetime.now(brain_query._local_tz(None)).isoformat(
                 timespec="seconds"),
             "realm": graph.DEFAULT_REALM,
+            # Who "me" is: what --mine filters on and what an unassigned task
+            # falls back to. Hardcoded until this page could set it.
+            "owner": graph.owner(),
+            "owner_source": ("env" if "owner" in env else
+                             "settings" if stored.get("owner") else "default"),
             # what a CLI read (`brain_query.py`) uses when given no --backend.
             # This page and the map always ask for "auto", so they are unaffected.
             "backend": brain_query.default_backend(),
             "backends": list(graph.BACKENDS),
+            # The switches. Each reports its source too, because the env var is
+            # the NEGATIVE ($MEMORY_LEDGER_NO_AUTOSYNC) and a page that shows
+            # only "off" leaves the user editing a file that cannot win.
+            "autosync": graph.flag("autosync"),
+            "autosync_source": graph.flag_source("autosync"),
+            "consolidate": graph.flag("consolidate"),
+            "consolidate_source": graph.flag_source("consolidate"),
+            "ui_sync": graph.flag("ui_sync"),
+            "ui_sync_source": graph.flag_source("ui_sync"),
             "map_poll_seconds": _int_setting("map_poll_seconds", 2),
             "dash_refresh_seconds": _int_setting("dash_refresh_seconds", 120),
         },
+        # Capture's own switch is not a setting — it is a marker file plus an env
+        # var (§2d), and disable/enable write it. Reported here so one page can
+        # answer "is it capturing?" without a second round trip.
+        "capture": capture_payload(),
     }
+
+
+def capture_payload() -> dict:
+    """Whether the ledger is recording, and which switch decided that.
+
+    Two switches, and they are not equal: $MEMORY_LEDGER_OFF is per-process and
+    OUTRANKS the marker, so a UI that offers to "turn it back on" while the
+    server's own shell exports that var would be promising something it cannot
+    deliver. Hence `env_off` — the page greys the toggle out and says why."""
+    marker = graph.home_dir() / graph.DISABLE_MARKER
+    env_off = graph._env("OFF").strip().lower() in graph._OFF_TRUTHY
+    return {
+        "enabled": graph.enabled(),
+        "marker": str(marker),
+        "marker_present": marker.exists(),
+        "env_off": env_off,
+        "source": "env" if env_off else "marker" if marker.exists() else "on",
+    }
+
+
+def doctor_payload() -> dict:
+    """The health check, as JSON, for the Settings page.
+
+    Imported and called rather than shelled out: `doctor` is written to never
+    traceback and to report each section's own failure, so there is nothing a
+    subprocess boundary would protect the server from — and in-process it cannot
+    pick up a different $MEMORY_LEDGER_HOME than the one this server is serving.
+    """
+    try:
+        import doctor
+        report = doctor.run()
+    except Exception as e:                  # a health check that 500s is useless
+        return {"ok": False,
+                "error": f"doctor failed: {type(e).__name__}: {e}"}
+    # doctor's own `ok` means HEALTHY; the envelope's means the call worked.
+    # Collapsing them would make an unhealthy brain look like a failed request,
+    # and the page would show a fetch error instead of the diagnosis.
+    return {**report, "ok": True, "healthy": bool(report.get("ok"))}
+
+
+def consolidate_preview(keep_days: str = "") -> dict:
+    """What `maintain` would do, without doing any of it.
+
+    The page shows this BEFORE offering the button, because consolidation
+    rewrites props on every capture it touches and "non-destructive" is not the
+    same promise as "you will like the result"."""
+    try:
+        keep = max(0, min(365, int(keep_days))) if str(keep_days).strip() else 2
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "keep_days must be a whole number"}
+    con = graph.connect()
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=keep)).date().isoformat()
+        days = [r["d"] for r in con.execute(
+            "SELECT DISTINCT substr(created,1,10) d FROM nodes WHERE type='capture'"
+            " AND substr(created,1,10)<=? ORDER BY d", (cutoff,)).fetchall()]
+        plan = graph.consolidation_plan(con, days)
+        loose = con.execute(
+            "SELECT COUNT(*) n FROM nodes WHERE type='capture'"
+            " AND substr(created,1,10)<=?"
+            " AND json_extract(props,'$.consolidated_into') IS NULL",
+            (cutoff,)).fetchone()["n"]
+        return {"ok": True, "dry_run": True, "keep_days": keep, "cutoff": cutoff,
+                "still_loose": loose, "backup_keep_days": graph.BACKUP_KEEP_DAYS,
+                **plan}
+    finally:
+        con.close()
 
 
 def status_payload() -> dict:
@@ -602,6 +687,26 @@ class Handler(BaseHTTPRequestHandler):
                      "aliases": graph.person_aliases(d)[1:],
                      "realm": d.get("realm", "")}
                     for d in sorted(people, key=lambda x: x["title"].lower())]}),
+                    "application/json")
+            elif path == "/api/capture":  # is the ledger recording? (§2d)
+                self._send(200, json.dumps(capture_payload()), "application/json")
+            elif path == "/api/ui-prefs":  # the browser's own state, if synced
+                self._send(200, json.dumps({
+                    "ok": True, "synced": graph.flag("ui_sync"),
+                    "path": str(graph.ui_prefs_path()),
+                    "prefs": graph.ui_prefs()}), "application/json")
+            elif path == "/api/backups":  # the snapshots consolidation leaves
+                self._send(200, json.dumps({
+                    "ok": True, "dir": str(graph.backups_dir()),
+                    "keep_days": graph.BACKUP_KEEP_DAYS,
+                    "backups": graph.list_backups()}), "application/json")
+            elif path == "/api/doctor":   # the health check, in the browser
+                self._send(200, json.dumps(doctor_payload()), "application/json")
+            elif path == "/api/consolidate-preview":
+                # A GET because it is a read: it reports what a run WOULD do and
+                # writes nothing, so it is safe to reload, link and cache-bust.
+                self._send(200, json.dumps(consolidate_preview(
+                    (parse_qs(parsed.query).get("keep_days") or [""])[0])),
                     "application/json")
             elif path == "/api/person-duplicates":   # the review list, read-only
                 self._send(200, json.dumps(
@@ -809,6 +914,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/set-assignee": self._set_assignee,
             "/api/assign": self._assign,
             "/api/merge-person": self._merge_person,
+            "/api/add-alias": self._add_alias,
             "/api/update-node": self._update_node,
             "/api/link": self._link,
             "/api/unlink": self._unlink,
@@ -817,6 +923,10 @@ class Handler(BaseHTTPRequestHandler):
             "/api/neo4j-test": self._test_neo4j,
             "/api/flush": self._flush,
             "/api/prune": self._prune,
+            "/api/capture": self._set_capture,
+            "/api/consolidate": self._consolidate,
+            "/api/ui-prefs": self._save_ui_prefs,
+            "/api/backup": self._backup,
             "/api/create-rule": self._create_rule,
             "/api/create-skill": self._create_skill,
             "/api/export-skills": self._export_skills,
@@ -1005,6 +1115,18 @@ class Handler(BaseHTTPRequestHandler):
         # dashboard's chips and the "mine" filter keep working unchanged
         return graph.api_update_node(con, nid,
                                      props_patch={"assignee": person["title"]})
+
+    def _add_alias(self, data):
+        """Pin another spelling onto a person.
+
+        The engine's own helper, so the dedupe rules are the ones that already
+        decide whether two names are one human — this does not get to have its
+        own opinion about what counts as a duplicate spelling."""
+        pid = self._str(data, "id", 200)
+        alias = self._str(data, "alias", 120)
+        if not pid or not alias:
+            return {"ok": False, "error": "id and alias are both required"}
+        return graph.api_add_alias(graph.connect(), pid, alias)
 
     def _merge_person(self, data):
         return graph.api_merge_person(graph.connect(),
@@ -1286,6 +1408,22 @@ class Handler(BaseHTTPRequestHandler):
                 return {"ok": False,
                         "error": "realm must be lowercase letters, digits and dashes"}
             patch["realm"] = realm
+        if "owner" in data:
+            # Deliberately permissive: a person's name is a person's name, and
+            # the only thing the engine does with it is compare it to whatever
+            # is written in an assignee field. Validating the SHAPE of a human
+            # name is how you refuse to store someone's actual name.
+            patch["owner"] = self._str(data, "owner", 80)
+        for key in graph.BOOL_SETTINGS:
+            if key not in data:
+                continue
+            raw = data.get(key)
+            if raw in (None, ""):
+                patch[key] = None          # back to the default
+            elif isinstance(raw, bool):
+                patch[key] = raw
+            else:
+                return {"ok": False, "error": f"{key} must be true or false"}
         if "backend" in data:
             be = self._str(data, "backend", 10).lower()
             if be and be not in graph.BACKENDS:
@@ -1370,15 +1508,88 @@ class Handler(BaseHTTPRequestHandler):
         res["was_pending"] = pending
         return res
 
+    def _set_capture(self, data):
+        """Turn capture on or off machine-wide, by writing the same `.disabled`
+        marker `graph.py disable` writes (§2d). One switch, two front doors.
+
+        Refused while $MEMORY_LEDGER_OFF is set: that env var OUTRANKS the
+        marker, so removing the file would leave the page claiming capture is
+        back on while every hook in that shell still stands down."""
+        want = data.get("enabled")
+        if not isinstance(want, bool):
+            return {"ok": False, "error": "enabled must be true or false"}
+        state = capture_payload()
+        if state["env_off"] and want:
+            return {"ok": False,
+                    "error": "$MEMORY_LEDGER_OFF is set in the server's "
+                             "environment and outranks this switch — unset it "
+                             "there (rc file, cron, launchd) and restart"}
+        marker = graph.home_dir() / graph.DISABLE_MARKER
+        try:
+            if want:
+                if marker.exists():
+                    marker.unlink()
+            else:
+                marker.parent.mkdir(parents=True, exist_ok=True)
+                marker.touch(exist_ok=True)
+        except OSError as e:
+            return {"ok": False, "error": f"could not write {marker}: {e}"}
+        return {"ok": True, "capture": capture_payload()}
+
+    def _save_ui_prefs(self, data):
+        """Store the browser's own view state in the brain (opt-in, `ui_sync`).
+
+        Accepted even when ui_sync is off, because the toggle that turns syncing
+        ON is itself a preference: refusing the write until the setting is saved
+        would make enabling it a two-step dance with a lost first step."""
+        prefs = data.get("prefs")
+        res = graph.save_ui_prefs(prefs if isinstance(prefs, dict) else None)
+        if not res.get("ok"):
+            return res
+        return {**res, "synced": graph.flag("ui_sync")}
+
+    def _backup(self, data):
+        """Take a snapshot now, and expire the ones past their window."""
+        res = graph.backup_db(self._str(data, "label", 40) or "manual")
+        if not res.get("ok"):
+            return res
+        return {"ok": True, "created": res, "removed": graph.prune_backups(),
+                "backups": graph.list_backups()}
+
+    def _consolidate(self, data):
+        """Fold closed days' captures into per-day digests.
+
+        This is `prune`'s engine, reached directly so the page can run it on the
+        keep_days the user previewed. `confirm: true` is required for the same
+        reason it is on prune — see there."""
+        return self._maintain(data, label="consolidate")
+
     def _prune(self, data):
         """Run `graph.py maintain` — consolidate old captures into per-day
         digests so reads stay small. NON-DESTRUCTIVE: nothing is deleted, the
         digest just stands in for the raw turns (CONVENTIONS §2a).
 
+        Never runs on its own and never on a bare POST: it rewrites props on
+        every capture it touches, and "non-destructive" is a promise about the
+        data, not about whether you wanted it. The page previews first
+        (`GET /api/consolidate-preview`) and sends `confirm: true` only after a
+        human has read what it would do."""
+        return self._maintain(data, label="maintain")
+
+    def _maintain(self, data, label="maintain"):
+        """The shared body of prune and consolidate.
+
         Shelled out rather than called in-process because cmd_maintain reports
         by printing JSON, and this way a long run can't wedge the server's own
         connection."""
         import subprocess
+        if data.get("confirm") is not True:
+            return {"ok": False,
+                    "error": "refused: this rewrites every capture it "
+                             "consolidates. Preview it first "
+                             "(GET /api/consolidate-preview), then send "
+                             "confirm: true.",
+                    "needs_confirmation": True}
         keep = data.get("keep_days", 2)
         try:
             keep = max(0, min(365, int(keep)))

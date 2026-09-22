@@ -144,25 +144,36 @@ def _is_closed(d: dict) -> bool:
     return status in graph.CLOSED_STATES or state in graph.CLOSED_STATES
 
 
-# who "me" is — the brain owner. Tasks with no assignee default to the owner.
-OWNER = graph._env("OWNER", "Gabriel")
+# Who "me" is comes from graph.owner() ($MEMORY_LEDGER_OWNER > the `owner`
+# setting > the built-in fallback), resolved at CALL time by the two functions
+# below rather than captured in a module constant here. A constant read at
+# import would pin the name for the life of the process, so a name changed in
+# the Settings page would not reach a long-running server until it restarted.
 # a task is NOT waiting on me if it's in one of these holding states
 _PARKED_STATES = {"waiting", "blocked", "delegated", "needs-review"}
 
 
-def norm_assignee(raw: str, owner: str = OWNER) -> str:
+def norm_assignee(raw: str, owner: str = "") -> str:
     """Normalize an assignee to a stable token for filtering/grouping:
-    '' -> 'unassigned'; the owner / me / gabriel -> 'me'; else the lowercased name."""
+    '' -> 'unassigned'; the owner (by any of their names) / me / self -> 'me';
+    else the lowercased name.
+
+    The owner's own first name counts as a match — "Gabriel Nori" and "gabriel"
+    are one person — which is what the hardcoded substring used to do for
+    exactly one user. It is derived from the configured owner now, so it does
+    the same job for whoever the brain actually belongs to."""
     a = (raw or "").strip()
     if a == "":
         return "unassigned"
-    o = owner.lower()
-    if a.lower() in (o, "me", "self") or "gabriel" in a.lower():
+    o = (owner or graph.owner()).strip().lower()
+    low = a.lower()
+    first = o.split()[0] if o else ""
+    if low in (o, "me", "self") or (first and first in low):
         return "me"
-    return a.lower()
+    return low
 
 
-def is_mine_actionable(d: dict, owner: str = OWNER) -> bool:
+def is_mine_actionable(d: dict, owner: str = "") -> bool:
     """True only if the OWNER must act on it NOW: assigned explicitly to the owner
     (NOT unassigned, NOT someone else), not delegated away, and not parked
     waiting/blocked. This is the strict 'my plate' definition."""
@@ -518,8 +529,9 @@ def main(argv=None):
                         "auto (neo4j when reachable, else the mirror). Default is "
                         "the `backend` setting, else sqlite.")
     p.add_argument("--mine", action="store_true",
-                   help="only tasks the owner ($SECOND_BRAIN_OWNER) needs to act on "
-                        "(assigned to me, not delegated, not parked waiting)")
+                   help="only tasks the owner needs to act on — assigned to me, "
+                        "not delegated, not parked waiting. Who 'me' is comes "
+                        "from $MEMORY_LEDGER_OWNER, else the `owner` setting")
     p.add_argument("--assignee",
                    help="comma list of assignee tokens to keep: me | unassigned | <name>")
     p.add_argument("--realm",

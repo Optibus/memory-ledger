@@ -28,3 +28,9 @@
 }
 .ml-side__link:hover { background: var(--hover); }
 .ml-side__link.is-active { background: var(--accent); color: var(--accent-fg); font-weight: 600; }
+
+/* The one link in the drawer that leaves the app. The arrow says so, and the
+   dimmer weight keeps it from competing with the sections above it. */
+.ml-side__link--out { color: var(--muted); }
+.ml-side__link--out:hover { color: var(--fg); }
+.ml-side__ext { margin-left: auto; font-size: 10px; opacity: .8; }

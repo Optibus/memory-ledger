@@ -1202,6 +1202,462 @@
         "description": "The neo4j password is NEVER sent to the browser; this reports `password_set` only."
       }
     },
+    "/api/capture": {
+      "get": {
+        "summary": "Is the ledger recording?",
+        "tags": [
+          "settings"
+        ],
+        "operationId": "getCapture",
+        "responses": {
+          "200": {
+            "description": "The read succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "enabled": {
+                          "type": "boolean"
+                        },
+                        "marker": {
+                          "type": "string"
+                        },
+                        "marker_present": {
+                          "type": "boolean"
+                        },
+                        "env_off": {
+                          "type": "boolean"
+                        },
+                        "source": {
+                          "type": "string",
+                          "enum": [
+                            "env",
+                            "marker",
+                            "on"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised; the reason is in `error`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "Two switches decide this and they are not equal: $MEMORY_LEDGER_OFF is per-process and OUTRANKS the `<home>/.disabled` marker, so `env_off` tells a client whether offering to turn capture back on would be a lie."
+      },
+      "post": {
+        "summary": "Turn capture on or off, machine-wide",
+        "tags": [
+          "settings"
+        ],
+        "operationId": "postCapture",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "enabled"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The write was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused. `error` says why, in the words a person can act on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server was started with --no-write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "Writes the same `<home>/.disabled` marker `graph.py disable` writes — one switch, two front doors. Refused while $MEMORY_LEDGER_OFF is set in the server's environment, because that outranks the marker and removing the file would not actually resume capture."
+      }
+    },
+    "/api/doctor": {
+      "get": {
+        "summary": "The health check, as JSON",
+        "tags": [
+          "settings"
+        ],
+        "operationId": "getDoctor",
+        "responses": {
+          "200": {
+            "description": "The read succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "healthy": {
+                          "type": "boolean"
+                        },
+                        "problems": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "status": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "paths": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "config": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "content": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "hooks": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "mirror": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised; the reason is in `error`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "The same report `scripts/doctor.py` prints. `ok` means the CALL succeeded; `healthy` is the verdict — an unhealthy brain is a successful request, not a failure. Being disabled is a choice and never counts as a problem."
+      }
+    },
+    "/api/consolidate-preview": {
+      "get": {
+        "summary": "What consolidation WOULD do",
+        "tags": [
+          "settings"
+        ],
+        "operationId": "getConsolidatePreview",
+        "responses": {
+          "200": {
+            "description": "The read succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "dry_run": {
+                          "type": "boolean"
+                        },
+                        "keep_days": {
+                          "type": "integer"
+                        },
+                        "cutoff": {
+                          "type": "string"
+                        },
+                        "still_loose": {
+                          "type": "integer"
+                        },
+                        "backup_keep_days": {
+                          "type": "integer"
+                        },
+                        "days": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": true
+                          }
+                        },
+                        "totals": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised; the reason is in `error`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "A read: it computes the plan and writes nothing, so it is safe to reload. The plan comes from the same `graph.consolidation_plan` the run itself consolidates from, so the preview cannot drift from the result.",
+        "parameters": [
+          {
+            "name": "keep_days",
+            "in": "query",
+            "required": false,
+            "description": "Leave the last N days of captures loose. Default 2.",
+            "schema": {
+              "type": "integer",
+              "default": 2
+            }
+          }
+        ]
+      }
+    },
+    "/api/backups": {
+      "get": {
+        "summary": "The snapshots consolidation leaves behind",
+        "tags": [
+          "settings"
+        ],
+        "operationId": "getBackups",
+        "responses": {
+          "200": {
+            "description": "The read succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "dir": {
+                          "type": "string"
+                        },
+                        "keep_days": {
+                          "type": "integer"
+                        },
+                        "backups": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": true
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised; the reason is in `error`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "Point-in-time copies of the whole graph, taken before a consolidation run and kept for a fixed window. Restore one by copying it back over graph.db."
+      }
+    },
+    "/api/ui-prefs": {
+      "get": {
+        "summary": "The browser's own view state, if it is being synced",
+        "tags": [
+          "settings"
+        ],
+        "operationId": "getUiPrefs",
+        "responses": {
+          "200": {
+            "description": "The read succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "synced": {
+                          "type": "boolean"
+                        },
+                        "path": {
+                          "type": "string"
+                        },
+                        "prefs": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised; the reason is in `error`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "NOT settings. A setting changes what the engine computes and must be server-side; which dashboard tab you had open changes nothing, so the browser owns it and storing it here is opt-in (`ui_sync`). The blob is opaque on purpose — its shape belongs to the frontend."
+      },
+      "post": {
+        "summary": "Store the browser's view state in the brain",
+        "tags": [
+          "settings"
+        ],
+        "operationId": "postUiPrefs",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "prefs": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                },
+                "required": [
+                  "prefs"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The write was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused. `error` says why, in the words a person can act on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server was started with --no-write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "REPLACES the stored blob rather than merging into it: the browser holds the whole thing, and a merge would resurrect a preference the person just cleared. Accepted even when `ui_sync` is off, because the toggle that enables syncing is itself one of these preferences."
+      }
+    },
     "/api/openapi.json": {
       "get": {
         "summary": "This document",
@@ -2429,7 +2885,7 @@
     },
     "/api/prune": {
       "post": {
-        "summary": "Run maintain",
+        "summary": "Run maintain — consolidate old captures",
         "tags": [
           "settings"
         ],
@@ -2441,9 +2897,158 @@
               "schema": {
                 "type": "object",
                 "properties": {
+                  "confirm": {
+                    "type": "boolean",
+                    "description": "Must be true. Without it the call returns ok:false and needs_confirmation:true."
+                  },
                   "keep_days": {
                     "type": "integer",
                     "default": 2
+                  }
+                },
+                "required": [
+                  "confirm"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The write was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused. `error` says why, in the words a person can act on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server was started with --no-write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "Non-destructive: every capture is kept and linked to the digest that now stands in for it (§2a). REFUSED without `confirm: true`, because it still rewrites props on every capture it touches and 'non-destructive' is a promise about the data, not about whether you wanted it — preview with GET /api/consolidate-preview first. A snapshot of the whole graph is taken before the first write."
+      }
+    },
+    "/api/consolidate": {
+      "post": {
+        "summary": "Consolidate (the same engine as prune)",
+        "tags": [
+          "settings"
+        ],
+        "operationId": "postConsolidate",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "confirm": {
+                    "type": "boolean"
+                  },
+                  "keep_days": {
+                    "type": "integer",
+                    "default": 2
+                  }
+                },
+                "required": [
+                  "confirm"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The write was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused. `error` says why, in the words a person can act on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server was started with --no-write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "Identical to /api/prune, reached under the name the CLI uses, so a client can run the plan it previewed without calling the operation something else. Same confirmation and the same pre-run snapshot."
+      }
+    },
+    "/api/backup": {
+      "post": {
+        "summary": "Snapshot the graph now",
+        "tags": [
+          "settings"
+        ],
+        "operationId": "postBackup",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "label": {
+                    "type": "string",
+                    "default": "manual"
                   }
                 }
               }
@@ -2492,7 +3097,81 @@
             }
           }
         },
-        "description": "Consolidates old captures. Non-destructive — deletes nothing."
+        "description": "Takes a point-in-time copy and expires the ones past their retention window. Uses sqlite's backup API, not a file copy, so the snapshot can never catch the database mid-transaction."
+      }
+    },
+    "/api/add-alias": {
+      "post": {
+        "summary": "Pin another spelling onto a person",
+        "tags": [
+          "people"
+        ],
+        "operationId": "postAddAlias",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "alias": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "alias"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The write was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused. `error` says why, in the words a person can act on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server was started with --no-write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler raised.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "Goes through the engine's `api_add_alias`, so the rules that decide whether two names are one human are the ones already in use. A spelling the person already answers to is a no-op, not a duplicate."
       }
     },
     "/api/create-rule": {

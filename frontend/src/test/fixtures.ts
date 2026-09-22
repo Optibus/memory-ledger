@@ -6,9 +6,14 @@
  * `tests/test_openapi.py` keeps the spec those came from honest.
  */
 import type {
+  BackupList,
+  CaptureState,
+  ConsolidationPreview,
+  DoctorReport,
   GraphPayload,
   Meta,
   NodeDetail,
+  PersonDuplicates,
   Settings,
   SkillsPayload,
   Status,
@@ -141,6 +146,28 @@ export const nodeDetailFixture: NodeDetail = {
   ],
 };
 
+/**
+ * A PERSON node with its neighbourhood — what `/api/node?id=person_…` answers.
+ *
+ * Separate from nodeDetailFixture, which is a task: a person's card is about
+ * what they are involved in, and reusing a task's edges made the test assert on
+ * a node that happened to share the person's name.
+ */
+export const personDetailFixture: NodeDetail = {
+  ok: true,
+  id: "person_gabriel",
+  type: "person",
+  title: "Gabriel",
+  body: "",
+  realm: "optibus",
+  props: { aliases: ["gabe"] },
+  edges: [
+    { dir: "in", rel: "assigned-to", id: "task_ship-ui_a1", title: "Ship the new UI", type: "task" },
+    { dir: "in", rel: "assigned-to", id: "task_docs_c3", title: "Write the docs", type: "task" },
+    { dir: "in", rel: "mentions", id: "note_retro_b2", title: "Retro notes", type: "note" },
+  ],
+};
+
 export const skillsFixture: SkillsPayload = {
   ok: true,
   trees: [
@@ -234,7 +261,17 @@ export const skillsFixture: SkillsPayload = {
 export const settingsFixture: Settings = {
   ok: true,
   writable: true,
-  keys: ["tz", "realm", "map_poll_seconds", "dash_refresh_seconds"],
+  keys: [
+    "tz",
+    "realm",
+    "owner",
+    "backend",
+    "autosync",
+    "consolidate",
+    "map_poll_seconds",
+    "dash_refresh_seconds",
+    "ui_sync",
+  ],
   settings: { tz: "America/Sao_Paulo", realm: "optibus" },
   env: {},
   path: "/home/brain/settings.json",
@@ -244,11 +281,95 @@ export const settingsFixture: Settings = {
     system_tz: "UTC",
     now: "2026-09-22T09:00:00-03:00",
     realm: "optibus",
+    owner: "Gabriel",
+    owner_source: "default",
     backend: "auto",
     backends: ["sqlite", "neo4j", "auto"],
+    autosync: true,
+    autosync_source: "default",
+    consolidate: true,
+    consolidate_source: "default",
+    ui_sync: false,
+    ui_sync_source: "default",
     map_poll_seconds: 2,
     dash_refresh_seconds: 120,
   },
+  capture: {
+    enabled: true,
+    marker: "/home/brain/.disabled",
+    marker_present: false,
+    env_off: false,
+    source: "on",
+  },
+};
+
+export const captureFixture: CaptureState = settingsFixture.capture;
+
+export const doctorFixture: DoctorReport = {
+  ok: true,
+  healthy: true,
+  problems: [],
+  status: { ok: true, enabled: true, disabled: false },
+  paths: { ok: true, home: "/home/brain", db: "/home/brain/graph.db", db_exists: true },
+  config: { ok: true, tz: "America/Sao_Paulo", realm: "optibus", owner: "Gabriel" },
+  content: { ok: true, nodes: 4, open_loops: 2 },
+  hooks: { ok: true, hooks_json: "/home/.claude/settings.json", events: {} },
+  mirror: { ok: true, configured: false },
+};
+
+export const consolidationPreviewFixture: ConsolidationPreview = {
+  ok: true,
+  dry_run: true,
+  keep_days: 2,
+  cutoff: "2026-09-20",
+  still_loose: 12,
+  backup_keep_days: 5,
+  days: [
+    {
+      day: "2026-09-19",
+      digest: "note_digest_2026-09-19",
+      digest_exists: false,
+      action: "create",
+      captures: 12,
+      prompts: 6,
+      newly_consolidated: 12,
+      already_consolidated: 0,
+      chars_behind_it: 4200,
+    },
+  ],
+  totals: {
+    captures: 12,
+    new_digests: 1,
+    updated_digests: 0,
+    newly_consolidated: 12,
+    chars: 4200,
+  },
+};
+
+export const backupsFixture: BackupList = {
+  ok: true,
+  dir: "/home/brain/backups",
+  keep_days: 5,
+  backups: [
+    {
+      name: "maintain-20260922T120000Z.db",
+      path: "/home/brain/backups/maintain-20260922T120000Z.db",
+      bytes: 102400,
+      created: "2026-09-22T12:00:00+00:00",
+      expires: "2026-09-27T12:00:00+00:00",
+      expired: false,
+    },
+  ],
+};
+
+export const personDuplicatesFixture: PersonDuplicates = {
+  ok: true,
+  duplicates: [
+    {
+      canonical: { id: "person_isadora", title: "Isadora", edges: 9 },
+      duplicates: [{ id: "person_isa", title: "Isa", edges: 2, confidence: "likely" }],
+    },
+  ],
 };
 
 export const statusFixture: Status = {

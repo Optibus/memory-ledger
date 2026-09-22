@@ -1,11 +1,18 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useBootReload } from "@/api/MetaContext";
 import { useIntervals } from "@/hooks/useIntervals";
+import { usePref } from "@/hooks/usePrefs";
 import { Panel, StatusMessage } from "@/components";
 import type { FacetOption } from "@/components";
 import { colorForType, realmPalette } from "@/lib/colors";
-import { computeCascade, emptyFilter, filteredOut } from "@/lib/graphFilter";
-import type { FilterState } from "@/lib/graphFilter";
+import {
+  computeCascade,
+  deserializeFilter,
+  emptyFilter,
+  filteredOut,
+  serializeFilter,
+} from "@/lib/graphFilter";
+import type { FilterState, StoredFilter } from "@/lib/graphFilter";
 import { GraphCanvas } from "./GraphCanvas";
 import { MapToolbar } from "./MapToolbar";
 import { NodeCard } from "./NodeCard";
@@ -14,8 +21,24 @@ import "./MapSection.css";
 
 /** The map: the whole brain as one force-directed graph you can read and edit. */
 export function MapSection() {
+  // What you have filtered out survives a reload. The query does NOT: a search
+  // is something you are doing right now, and coming back to a map silently
+  // narrowed to a word you typed yesterday reads as a broken map.
+  const [savedFilter, setSavedFilter, prefsReady] = usePref<StoredFilter | null>("map.filter", null);
   const [filter, setFilter] = useState<FilterState>(emptyFilter);
   const [query, setQuery] = useState("");
+  const hydrated = useRef(false);
+
+  // Applied once the provider has settled, and only once — see DashboardSection.
+  useEffect(() => {
+    if (!prefsReady || hydrated.current) return;
+    hydrated.current = true;
+    if (savedFilter) setFilter(deserializeFilter(savedFilter));
+  }, [prefsReady, savedFilter]);
+
+  useEffect(() => {
+    if (hydrated.current) setSavedFilter(serializeFilter(filter));
+  }, [filter, setSavedFilter]);
   const [selected, setSelected] = useState<string | null>(null);
   const [focusId, setFocusId] = useState<string | null>(null);
 

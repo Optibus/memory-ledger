@@ -54,7 +54,10 @@ def main():
         # it's the owner's — so the dashboard's assignee filter is meaningful and
         # someone-else's ingested to-dos don't masquerade as the owner's action.
         made = 0
-        owner = C.graph._env("OWNER", "Gabriel")
+        # Through graph.owner(), so a name set in Settings decides whose to-do
+        # this is. Reading the env var alone left the hook assigning work to a
+        # hardcoded name on every machine but one.
+        owner = C.graph.owner()
         people = C.known_people(con)
         for title in C.detect_tasks(prompt):
             who = C.infer_assignee(title, owner, people) or C.infer_assignee(prompt, owner, people)

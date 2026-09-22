@@ -15,7 +15,6 @@ import type {
   Meta,
   NodeDetail,
   Person,
-  PersonDuplicate,
   RealmCount,
   SearchHit,
   Settings,
@@ -109,11 +108,7 @@ export const api = {
   people: (signal?: AbortSignal) =>
     get<{ ok: boolean; people: Person[] }>("/api/people", undefined, signal),
   personDuplicates: (signal?: AbortSignal) =>
-    get<{ ok: boolean; duplicates: PersonDuplicate[] }>(
-      "/api/person-duplicates",
-      undefined,
-      signal,
-    ),
+    get<import("./types").PersonDuplicates>("/api/person-duplicates", undefined, signal),
   assignees: (signal?: AbortSignal) =>
     get<{ ok: boolean; assignees: Record<string, number> }>("/api/assignees", undefined, signal),
   realms: (signal?: AbortSignal) =>
@@ -142,6 +137,21 @@ export const api = {
   settings: (signal?: AbortSignal) => get<Settings>("/api/settings", undefined, signal),
   timezones: (signal?: AbortSignal) => get<Timezones>("/api/timezones", undefined, signal),
   status: (signal?: AbortSignal) => get<Status>("/api/status", undefined, signal),
+  capture: (signal?: AbortSignal) =>
+    get<import("./types").CaptureState>("/api/capture", undefined, signal),
+  doctor: (signal?: AbortSignal) =>
+    get<import("./types").DoctorReport>("/api/doctor", undefined, signal),
+  backups: (signal?: AbortSignal) =>
+    get<import("./types").BackupList>("/api/backups", undefined, signal),
+  uiPrefs: (signal?: AbortSignal) =>
+    get<import("./types").UiPrefsPayload>("/api/ui-prefs", undefined, signal),
+  /** What consolidation WOULD do. A read: it changes nothing. */
+  consolidatePreview: (keepDays: number, signal?: AbortSignal) =>
+    get<import("./types").ConsolidationPreview>(
+      "/api/consolidate-preview",
+      { keep_days: String(keepDays) },
+      signal,
+    ),
   bundleUrl: (name: string) => `${BASE}/api/bundle${queryString({ name })}`,
 
   // writes
@@ -155,12 +165,30 @@ export const api = {
   link: (src: string, dst: string, rel: string) => post("/api/link", { src, dst, rel }),
   unlink: (src: string, dst: string, rel: string) => post("/api/unlink", { src, dst, rel }),
   assign: (body: Record<string, unknown>) => post("/api/assign", body),
-  mergePerson: (body: Record<string, unknown>) => post("/api/merge-person", body),
+  /** Named, not a loose record: the server reads `canonical` and `duplicate`,
+   *  and an object literal is exactly the kind of thing that drifts silently. */
+  mergePerson: (canonical: string, duplicate: string) =>
+    post("/api/merge-person", { canonical, duplicate }),
+  addAlias: (id: string, alias: string) => post("/api/add-alias", { id, alias }),
   saveSettings: (body: Partial<import("./types").StoredSettings>) => post("/api/settings", body),
   saveNeo4j: (body: Record<string, unknown>) => post("/api/neo4j-config", body),
   testNeo4j: () => post("/api/neo4j-test", {}),
   flush: () => post("/api/flush", {}),
-  prune: (keep_days?: number) => post("/api/prune", { keep_days }),
+  /**
+   * Consolidate. Refused without `confirm`, by the server — the preview is not
+   * decoration, it is the step before this one.
+   */
+  prune: (keep_days: number, confirm: boolean) =>
+    post<import("./types").MaintainResult>("/api/prune", { keep_days, confirm }),
+  setCapture: (enabled: boolean) =>
+    post<{ ok: boolean; capture: import("./types").CaptureState }>("/api/capture", { enabled }),
+  saveUiPrefs: (prefs: import("./types").UiPrefs) =>
+    post<{ ok: boolean; synced: boolean }>("/api/ui-prefs", { prefs }),
+  backup: (label?: string) =>
+    post<import("./types").BackupList & { created: import("./types").Backup }>(
+      "/api/backup",
+      { label },
+    ),
   createRule: (body: Record<string, unknown>) => post("/api/create-rule", body),
   createSkill: (body: Record<string, unknown>) => post("/api/create-skill", body),
   exportSkills: (body: Record<string, unknown> = {}) => post<SyncResult>("/api/export-skills", body),

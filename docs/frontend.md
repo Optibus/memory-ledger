@@ -120,15 +120,59 @@ paint on one `requestAnimationFrame` loop against refs; React re-renders it only
 when the data or the filters change. Pushing 800 nodes through the virtual DOM
 sixty times a second is the one thing a canvas exists to avoid.
 
-**The section is in the URL.** `/map`, `/dashboard`, `/skills`, `/settings`, on a
+**The section is in the URL.** `/map`, `/dashboard`, `/people`, `/skills`, `/settings`, on a
 hash router. A reload lands where you were and a link to the dashboard is a link
 to the dashboard — neither was true of the old page, which kept the section in a
 body class. The hash means `serve.py` never has to learn about the app's routes.
 
+The drawer's one exception is **API docs**, a plain `<a>` rather than a
+`NavLink`: `/api/docs` is Swagger rendered by `serve.py`, so handing that URL to
+the router would match nothing and show the map. It opens in a new tab, which
+also means "back" cannot land on a page React never rendered.
+
+**The favicon is the map, not a brain.** `public/favicon.svg` draws a hub with
+three satellites in the app's own token colours — the one shape from the graph
+that survives being drawn at 16px, where a brain outline is a grey smudge. Its
+ground is painted rather than transparent so it holds up on a light tab strip;
+the `href` is relative, like every other asset here, so the same `dist` works
+from a sub-path.
+
+**A setting and a preference are different things, and they live in different
+places.** A setting changes what the engine computes — `owner` decides what
+`--mine` returns, `tz` decides which day a due date lands on — so it goes to
+`<home>/settings.json` through `/api/settings`, where the CLI, the hooks and any
+cron read the same answer. What you were *looking at* computes nothing, so
+`src/hooks/usePrefs.tsx` keeps it in `localStorage`: which dashboard view was
+open, which filters were on, what the map had hidden.
+
+`PrefsProvider` sits above the router, because those sections mount and unmount
+as you navigate and a provider held any lower would re-read on every change —
+each section spending its first render showing a default it is about to replace.
+`usePref(key, fallback)` is the whole API, shaped like `useState` plus a `ready`
+flag: a view that restores stored state waits for `ready` before applying it,
+since the brain's copy may still be in flight.
+
+Syncing to the brain (`ui_sync`) is opt-in and covers one case `localStorage`
+cannot — the same person on a second machine. Local always wins the race: every
+change is written to `localStorage` synchronously and pushed afterwards,
+debounced, so a brain that is unreachable costs you cross-machine sync and never
+your own UI. Writes are compared by content, not identity, because a view
+persisting a derived object hands the provider a fresh object every render and
+each one would otherwise be a write that says nothing.
+
+Two gotchas worth knowing: `Set` does not survive `JSON.stringify` — it comes
+back as `{}` — so the map's filter goes through `serializeFilter` /
+`deserializeFilter` in `src/lib/graphFilter.ts` rather than being stored
+directly; and the dashboard deliberately does not persist `from`/`to`, which are
+a rolling window, because storing the literal dates would restore a fortnight
+that ended weeks ago and call it your default.
+
 ## Testing
 
 Two suites, both with vitest and Testing Library, and one mock server (MSW)
-shared between them.
+shared between them. `vitest.setup.ts` clears `localStorage` after every test:
+preferences persisting between visits is the feature, and between *tests* it
+would mean one test's last filter silently becomes the next one's starting state.
 
 | Suite | What it covers |
 |---|---|

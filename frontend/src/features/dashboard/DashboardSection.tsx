@@ -1,17 +1,18 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/api/client";
 import { useMeta } from "@/api/MetaContext";
 import { usePolling } from "@/hooks/usePolling";
 import { useIntervals } from "@/hooks/useIntervals";
 import { useAsync } from "@/hooks/useAsync";
+import { usePref } from "@/hooks/usePrefs";
 import { Button, EmptyState, Spinner, StatusMessage } from "@/components";
 import { Section } from "@/features/shell/Section";
 import { DashboardFilters, ViewTabs } from "./DashboardFilters";
 import { TaskCard } from "./TaskCard";
 import { TaskComposer } from "./TaskComposer";
 import { useFacets } from "./useFacets";
-import { initialState, isoAdd, toQuery } from "./state";
-import type { DashboardState } from "./state";
+import { initialState, isoAdd, persistable, toQuery } from "./state";
+import type { DashboardState, PersistedDashboard } from "./state";
 import type { ViewPayload } from "@/api/types";
 
 const FALLBACK_VIEWS = ["agenda", "open", "today", "tomorrow", "week", "closed", "range"];
@@ -24,8 +25,26 @@ const FALLBACK_VIEWS = ["agenda", "open", "today", "tomorrow", "week", "closed",
  */
 export function DashboardSection() {
   const { writable, error: metaError } = useMeta();
-  const [state, setState] = useState<DashboardState>(() => initialState());
+  // Which view, which filters — remembered between visits (see `persistable`).
+  const [saved, setSaved, prefsReady] = usePref<Partial<PersistedDashboard>>("dashboard", {});
+  const [state, setState] = useState<DashboardState>(() => ({ ...initialState(), ...saved }));
   const [composing, setComposing] = useState(false);
+  const hydrated = useRef(false);
+
+  // The provider may still be fetching the brain's copy when this mounts, so
+  // the stored state is applied when it lands — once, so it can never clobber a
+  // filter the person changed while it was in flight.
+  useEffect(() => {
+    if (!prefsReady || hydrated.current) return;
+    hydrated.current = true;
+    setState((s) => ({ ...s, ...saved }));
+  }, [prefsReady, saved]);
+
+  // And written back on every change. Guarded on `hydrated` so the defaults this
+  // component starts with never overwrite what was stored before they arrive.
+  useEffect(() => {
+    if (hydrated.current) setSaved(persistable(state));
+  }, [state, setSaved]);
   const facets = useFacets();
   const { dashRefreshMs } = useIntervals();
 

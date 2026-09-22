@@ -10,6 +10,10 @@ beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
 afterEach(() => {
   cleanup();
   server.resetHandlers();
+  // View preferences persist in localStorage on purpose — that is the feature.
+  // Between TESTS it would mean one test's last filter silently becomes the
+  // next one's starting state, so each begins from a fresh browser.
+  window.localStorage.clear();
 });
 afterAll(() => server.close());
 
