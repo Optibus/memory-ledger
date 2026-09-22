@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { countSkills, emptySkillFilter, keepRule, keepSkill, ruleHaystack, skillHaystack } from "./filter";
+import {
+  countSkills,
+  effectiveRealms,
+  emptySkillFilter,
+  keepProcess,
+  keepRule,
+  keepSkill,
+  ruleHaystack,
+  skillHaystack,
+} from "./filter";
 import { skillsFixture } from "@/test/fixtures";
 import type { SkillNode } from "@/api/types";
 
@@ -91,5 +100,32 @@ describe("countSkills", () => {
       children: [{ ...recall, id: "b", children: [{ ...recall, id: "c", children: [] }] }],
     };
     expect(countSkills([keepSkill(deep, "plugin", f())!])).toBe(3);
+  });
+});
+
+describe("keepProcess", () => {
+  const [mine, theirs] = skillsFixture.processes!;
+  const cur = effectiveRealms(emptySkillFilter(), "optibus");
+
+  it("follows the current realm until the realm facet is touched", () => {
+    expect(keepProcess(mine!, f(), cur)).toBe(true);
+    expect(keepProcess(theirs!, f(), cur)).toBe(false);
+  });
+
+  it("reads another realm once it is picked", () => {
+    const picked = f({ realms: new Set(["personal"]) });
+    expect(keepProcess(theirs!, picked, effectiveRealms(picked, "optibus"))).toBe(true);
+    expect(keepProcess(mine!, picked, effectiveRealms(picked, "optibus"))).toBe(false);
+  });
+
+  it("matches words in the steps and the trigger", () => {
+    expect(keepProcess(mine!, f({ q: "catch up" }), cur)).toBe(true);
+    expect(keepProcess(mine!, f({ q: "my epics" }), cur)).toBe(true);
+    expect(keepProcess(mine!, f({ q: "invoice" }), cur)).toBe(false);
+  });
+
+  it("is never built-in or learned, so those sources hide it", () => {
+    expect(keepProcess(mine!, f({ src: "plugin" }), cur)).toBe(false);
+    expect(keepProcess(mine!, f({ src: "user" }), cur)).toBe(true);
   });
 });

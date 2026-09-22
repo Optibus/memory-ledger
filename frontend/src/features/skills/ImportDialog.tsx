@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Badge, Button, Checkbox, Modal } from "@/components";
+import { Badge, Button, Checkbox, Modal, Select } from "@/components";
 import type { ImportChoice, UploadBundleResult } from "@/api/types";
 import "./ImportDialog.css";
 
@@ -12,8 +12,12 @@ const MODES: [ImportChoice, string, string][] = [
 export interface ImportDialogProps {
   filename: string;
   staged: UploadBundleResult;
+  /** The realm processes land in by default — the brain's current one. */
+  realm?: string;
+  /** Every realm this brain knows, for landing processes somewhere else. */
+  realms?: string[];
   onCancel: () => void;
-  onConfirm: (select: Record<string, ImportChoice>) => void;
+  onConfirm: (select: Record<string, ImportChoice>, processRealm?: string) => void;
 }
 
 /**
@@ -24,7 +28,16 @@ export interface ImportDialogProps {
  * alone — rather than one silent policy applied to everything. Nothing is
  * written until confirm: the upload staged the file and read it, no more.
  */
-export function ImportDialog({ filename, staged, onCancel, onConfirm }: ImportDialogProps) {
+export function ImportDialog({
+  filename,
+  staged,
+  realm = "",
+  realms = [],
+  onCancel,
+  onConfirm,
+}: ImportDialogProps) {
+  const [target, setTarget] = useState(realm);
+  const hasProcesses = staged.items.some((i) => i.kind === "process");
   const [state, setState] = useState<Record<string, { on: boolean; mode: ImportChoice }>>(() =>
     Object.fromEntries(staged.items.map((i) => [i.id, { on: true, mode: "update" as ImportChoice }])),
   );
@@ -69,6 +82,7 @@ export function ImportDialog({ filename, staged, onCancel, onConfirm }: ImportDi
                     .filter(([, v]) => v.on)
                     .map(([id, v]) => [id, v.mode]),
                 ),
+                hasProcesses ? target : undefined,
               )
             }
           >
@@ -77,6 +91,22 @@ export function ImportDialog({ filename, staged, onCancel, onConfirm }: ImportDi
         </>
       }
     >
+      {hasProcesses ? (
+        <div className="ml-import__bulk">
+          <span>Processes land in the realm:</span>
+          <Select
+            aria-label="process realm"
+            value={target}
+            onChange={(e) => setTarget(e.target.value)}
+            options={[...new Set([realm, ...realms].filter(Boolean))].map((r) => ({
+              value: r,
+              label: r === realm ? `${r} (current)` : r,
+            }))}
+          />
+          <span className="ml-import__id">the realm each came from is kept as origin_realm</span>
+        </div>
+      ) : null}
+
       {clashes.length ? (
         <div className="ml-import__bulk">
           <span>For everything already here, set them all to:</span>
@@ -109,6 +139,7 @@ export function ImportDialog({ filename, staged, onCancel, onConfirm }: ImportDi
               <Badge tone={item.exists ? "warn" : "neutral"}>
                 {item.exists ? "already here" : item.kind}
               </Badge>
+              {item.kind === "process" && item.realm ? <Badge>{`from ${item.realm}`}</Badge> : null}
             </div>
             {item.exists && st.on ? (
               <div className="ml-import__modes">

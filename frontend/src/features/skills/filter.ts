@@ -1,14 +1,29 @@
-import type { RuleNode, SkillNode } from "@/api/types";
+import type { ProcessNode, RuleNode, SkillNode } from "@/api/types";
+
+/** The three kinds of thing the page lists. Multi-select: any mix is a view. */
+export type ItemType = "process" | "skill" | "rule";
+export const ITEM_TYPES: ItemType[] = ["process", "skill", "rule"];
 
 export interface SkillFilter {
   q: string;
-  show: "all" | "skills" | "rules";
+  types: Set<ItemType>;
   src: "all" | "plugin" | "user" | "learned";
   dom: string;
+  /**
+   * Which realms' processes are shown. `null` means "the current realm" — the
+   * page does not know which that is until the payload arrives, and a person who
+   * never touched the facet should keep following it if the setting changes.
+   */
+  realms: Set<string> | null;
 }
 
 export function emptySkillFilter(): SkillFilter {
-  return { q: "", show: "all", src: "all", dom: "all" };
+  return { q: "", types: new Set(ITEM_TYPES), src: "all", dom: "all", realms: null };
+}
+
+/** The realms a filter actually shows, with `null` resolved to the current one. */
+export function effectiveRealms(f: SkillFilter, current: string): Set<string> {
+  return f.realms ?? new Set(current ? [current] : []);
 }
 
 /**
@@ -77,6 +92,23 @@ export function keepRule(r: RuleNode, f: SkillFilter): boolean {
   if (f.src !== "all" && r.source !== f.src) return false;
   if (f.dom !== "all" && !(r.domains || []).includes(f.dom)) return false;
   return !f.q || ruleHaystack(r).includes(f.q.toLowerCase());
+}
+
+export function processHaystack(p: ProcessNode): string {
+  return [p.id, p.title, p.body, p.trigger, p.realm, p.category, p.domains.join(" ")]
+    .join(" ")
+    .toLowerCase();
+}
+
+/**
+ * A process has no built-in/learned tree, so only the `user` source keeps it:
+ * every process was written in some brain by a person, never shipped as a file.
+ */
+export function keepProcess(p: ProcessNode, f: SkillFilter, realms: Set<string>): boolean {
+  if (!realms.has(p.realm)) return false;
+  if (f.src === "plugin" || f.src === "learned") return false;
+  if (f.dom !== "all" && !p.domains.includes(f.dom)) return false;
+  return !f.q || processHaystack(p).includes(f.q.toLowerCase());
 }
 
 /** How many skills a filtered tree actually holds, counting every level. */

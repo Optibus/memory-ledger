@@ -193,12 +193,17 @@ export const api = {
   createSkill: (body: Record<string, unknown>) => post("/api/create-skill", body),
   exportSkills: (body: Record<string, unknown> = {}) => post<SyncResult>("/api/export-skills", body),
   ingestSkills: (body: Record<string, unknown> = {}) => post<SyncResult>("/api/ingest-skills", body),
-  exportBundle: (skills: string[], rules: string[]) =>
-    post<ExportBundleResult>("/api/export-bundle", { skills, rules }),
+  createProcess: (body: { title: string; body?: string; trigger?: string; realm?: string; id?: string }) =>
+    post<{ ok: boolean; node: { id: string; realm: string }; action: string }>("/api/create-process", body),
+  exportBundle: (skills: string[], rules: string[], processes: string[] = []) =>
+    post<ExportBundleResult>("/api/export-bundle", { skills, rules, processes }),
   uploadBundle: (filename: string, data: string) =>
     post<UploadBundleResult>("/api/upload-bundle", { filename, data }),
-  importBundle: (token: string, select: Record<string, ImportChoice>) =>
-    post<ImportBundleResult>("/api/import-bundle", { token, select }),
+  importBundle: (token: string, select: Record<string, ImportChoice>, processRealm?: string) =>
+    post<ImportBundleResult>(
+      "/api/import-bundle",
+      processRealm ? { token, select, process_realm: processRealm } : { token, select },
+    ),
   deleteContracts: (ids: string[], force = false) =>
     post<import("./types").DeleteContractsResult>("/api/delete-contracts", { ids, force }),
 };

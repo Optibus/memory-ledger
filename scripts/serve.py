@@ -724,6 +724,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, json.dumps({
                     "ok": True, "trees": graph.skill_trees(con),
                     "rules": graph.rule_catalog(con),
+                    # processes are realm-scoped: every realm is sent and the
+                    # page narrows, defaulting to the realm new ones land in
+                    "processes": graph.process_catalog(con),
+                    "realm": graph.current_realm(),
                     # what the pickers offer, so a card can show more than a
                     # bare token the person is expected to already recognise
                     "node_types": graph.node_type_catalog(con),
@@ -929,6 +933,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/backup": self._backup,
             "/api/create-rule": self._create_rule,
             "/api/create-skill": self._create_skill,
+            "/api/create-process": self._create_process,
             "/api/export-skills": self._export_skills,
             "/api/ingest-skills": self._ingest_skills,
             "/api/export-bundle": self._export_bundle,
@@ -1238,6 +1243,17 @@ class Handler(BaseHTTPRequestHandler):
             res["created_rules"] = created
         return res
 
+    def _create_process(self, data):
+        realm = self._str(data, "realm", 40).lower()
+        if realm and realm != graph.slugify(realm):
+            return {"ok": False,
+                    "error": "realm must be lowercase letters, digits and dashes"}
+        return graph.api_add_process(
+            graph.connect(), title=self._str(data, "title", 300),
+            body=self._str(data, "body", 20000),
+            trigger=self._str(data, "trigger", 1000), realm=realm,
+            node_id=self._str(data, "id", 200))
+
     # ------------------------------------------------ markdown sync (§5a)
     def _export_skills(self, data):
         """Write the learned tree out as markdown — the file route between two
@@ -1280,7 +1296,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _export_bundle(self, data):
         spec = self._spec_file({"skills": self._ids(data, "skills"),
-                                "rules": self._ids(data, "rules")})
+                                "rules": self._ids(data, "rules"),
+                                "processes": self._ids(data, "processes")})
         try:
             res = self._graph_cmd(["export-bundle", "--spec", str(spec)])
         finally:
@@ -1347,9 +1364,14 @@ class Handler(BaseHTTPRequestHandler):
         if not select:
             return {"ok": False, "error": "nothing was selected to import"}
         spec = self._spec_file({"select": select})
+        realm = self._str(data, "process_realm", 40).lower()
+        if realm and realm != graph.slugify(realm):
+            return {"ok": False,
+                    "error": "realm must be lowercase letters, digits and dashes"}
         try:
             res = self._graph_cmd(["import-bundle", "--zip", str(path),
-                                   "--spec", str(spec)])
+                                   "--spec", str(spec)] +
+                                  (["--process-realm", realm] if realm else []))
         finally:
             spec.unlink(missing_ok=True)
             # the staged zip has served its purpose; leaving it behind would

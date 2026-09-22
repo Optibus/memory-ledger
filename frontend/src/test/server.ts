@@ -128,6 +128,9 @@ export const handlers = [
   write("/api/add-alias", () => ok({ added: true })),
   write("/api/create-rule"),
   write("/api/create-skill"),
+  write("/api/create-process", () =>
+    ok({ node: { id: "process_new_0001", realm: "optibus" }, action: "created" }),
+  ),
   write("/api/export-skills", () => ok({ dir: "/home/brain/learned_skills", skills: 2, rules: 1 })),
   write("/api/ingest-skills", () => ok({ count: 2, ingested: [], rules: [] })),
   write("/api/export-bundle", () =>

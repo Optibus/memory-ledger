@@ -251,6 +251,21 @@ export interface RuleNode {
   [key: string]: unknown;
 }
 
+/** A way of working: a `process` node, part-of `hub_process`, scoped to a realm. */
+export interface ProcessNode {
+  id: string;
+  title: string;
+  body: string;
+  realm: string;
+  /** When this process applies. */
+  trigger: string;
+  established: string;
+  category: string;
+  domains: string[];
+  edges: number;
+  updated: string;
+}
+
 export interface NodeTypeInfo {
   type: string;
   description?: string;
@@ -262,6 +277,10 @@ export interface NodeTypeInfo {
 export interface SkillsPayload extends Envelope {
   trees: SkillTree[];
   rules: RuleNode[];
+  /** Every realm's processes; the page narrows, defaulting to `realm`. */
+  processes?: ProcessNode[];
+  /** The realm a new or imported process lands in. */
+  realm?: string;
   node_types: NodeTypeInfo[];
   /** hub id -> the human title a filter labels itself with. */
   areas: Record<string, string>;
@@ -274,6 +293,7 @@ export interface SkillsPayload extends Envelope {
 export interface ExportBundleResult extends Envelope {
   skills: number;
   rules: number;
+  processes?: number;
   /** Where the zip landed on disk — the "two machines" case wants this. */
   path: string;
   name: string;
@@ -288,14 +308,16 @@ export interface BundleItem {
   id: string;
   title: string;
   description?: string;
-  kind: "skill" | "rule";
+  kind: "skill" | "rule" | "process";
+  /** For a process: the realm it was exported from. */
+  realm?: string;
   /** The only interesting case: this brain already holds it. */
   exists: boolean;
 }
 
 export interface UploadBundleResult extends Envelope {
   token: string;
-  counts: { skills?: number; rules?: number };
+  counts: { skills?: number; rules?: number; processes?: number };
   items: BundleItem[];
 }
 

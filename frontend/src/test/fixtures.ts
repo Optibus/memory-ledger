@@ -256,6 +256,33 @@ export const skillsFixture: SkillsPayload = {
     { type: "person", description: "A human.", count: 4, readers: ["skill_recall"], writers: [] },
   ],
   areas: { hub_process: "Process", hub_writing: "Writing" },
+  realm: "optibus",
+  processes: [
+    {
+      id: "process_epic-refinement_854d",
+      title: "Epic-lead refinement process",
+      body: "1. CATCH UP FIRST.\n2. Refine each child.",
+      realm: "optibus",
+      trigger: "refine the issues in my epics",
+      established: "2026-09-09",
+      category: "process",
+      domains: ["hub_process"],
+      edges: 3,
+      updated: "2026-09-10T10:00:00+00:00",
+    },
+    {
+      id: "process_weekly-review_aa11",
+      title: "Weekly personal review",
+      body: "Look back at the week.",
+      realm: "personal",
+      trigger: "sunday evening",
+      established: "",
+      category: "process",
+      domains: ["hub_process"],
+      edges: 1,
+      updated: "2026-09-01T10:00:00+00:00",
+    },
+  ],
 };
 
 export const settingsFixture: Settings = {

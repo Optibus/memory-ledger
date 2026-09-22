@@ -177,9 +177,10 @@ Commands:
 | `sync-skill-tree [--realm R] [--no-node-types]` | Project the skill contracts into the graph as **two trees** (§5a): built-in skills under `hub_skills_builtin`, user skills under `hub_skills_user`. Built-in skills declare in their `SKILL.md` `## Depends on` block, user skills in props (`add-skill --requires/--reads/--writes`). Idempotent, and a **true sync**: generated edges that stopped being declared are pruned. Hand-made edges carry no marker and are never touched. |
 | `ingest-skills [--dir D]... [--realm R] [--no-rules]` | Pull existing markdown skills (plugin `skills/` + `learned_skills/`) into the DB as `skill` nodes (idempotent; re-run to refresh). A `rules/` folder beside them is read **first**, so the skills landing next to it can link to the rules that travelled with them, and a rule this brain already holds is **kept**, never overwritten. Re-projects the tree when anything changed. |
 | `export-skills [--dir D] [--kind learned\|plugin\|all] [--no-rules]` | The other direction (§5a): write skill nodes back out as `D/<name>/SKILL.md` plus `D/rules/<rule id>.md` for every rule they honor, so a brain can move between machines by file when there is no master to mirror through. A round trip is lossless — contract, declarations and `honors` edges all survive. |
-| `export-bundle [--skill ID]... [--rule ID]... [--spec F] [--out Z]` | A **selection** as one zip (§5a): a directory per kind plus an `import-plan.json` naming the order it can be read back in. Rules a selected skill honors travel with it; a skill it *requires* that was not selected is **named in the report**, never pulled in silently. |
+| `add-process --title T [--body B] [--trigger W] [--realm R] [--id ID]` | Record a way of working as a `process` node part-of `hub_process`, in the configured realm unless `--realm` says otherwise. `processes` lists every realm's. |
+| `export-bundle [--skill ID]... [--rule ID]... [--process ID]... [--spec F] [--out Z]` | A **selection** as one zip (§5a): a directory per kind plus an `import-plan.json` naming the order it can be read back in. Rules a selected skill honors travel with it; a skill it *requires* that was not selected is **named in the report**, never pulled in silently. |
 | `inspect-bundle --zip Z` | What is inside a bundle and which of it this brain already holds. Read-only, so it is safe to run on a zip you were sent. |
-| `import-bundle --zip Z [--select ID:MODE]... [--spec F] [--mode M]` | Apply a bundle in its plan's order. An item already here is left alone unless you name it: `update` refreshes it, `replace` deletes it first, `ignore` skips it. An item you never mentioned is created when new and untouched when it exists. |
+| `import-bundle --zip Z [--select ID:MODE]... [--spec F] [--mode M] [--process-realm R]` | Apply a bundle in its plan's order. Processes land in `--process-realm` (default: the configured realm), keeping the realm they left as `origin_realm`. An item already here is left alone unless you name it: `update` refreshes it, `replace` deletes it first, `ignore` skips it. An item you never mentioned is created when new and untouched when it exists. |
 | `del-contracts [--id ID]... [--spec F] [--force]` | Delete skill and rule nodes, edges included. §2a's archive-never-delete is about **work**; a contract nobody should fire again has to actually stop firing. A built-in needs `--force`, since its file re-ingests it anyway. |
 | `match-skills "situation" [--limit N]` | Find skills matching the situation — ranked by **relevance first**, with reinforcement (usage) as a bounded booster. Read the procedure from the node body (`get-node`). |
 | `use-skill --id ID` | **Reinforce** a skill after it fires (usage_count↑, confidence↑, last_used stamped). |
@@ -600,10 +601,11 @@ pre-commit checker.
 | Write a skill | `POST /api/create-skill` | `{name, title, description, realm, sections{}, requires, waits_for, enriched_by, reads, writes, rules[], new_rules[]}`. Refused unless the six typed sections of §5.1 are filled. |
 | Export the learned tree | `POST /api/export-skills` | `graph.py export-skills` — SKILL.md per skill, plus every rule they honor. |
 | Read markdown back in | `POST /api/ingest-skills` | `graph.py ingest-skills` — idempotent; a rule this brain already holds is kept. |
-| Bundle a selection | `POST /api/export-bundle` | `{skills[], rules[]}` → one zip under `<home>/bundles`, plus a `download` URL. |
+| Record a process | `POST /api/create-process` | `{title, body, trigger, realm, id}`. A `process` node part-of `hub_process`; `realm` defaults to the configured one. |
+| Bundle a selection | `POST /api/export-bundle` | `{skills[], rules[], processes[]}` → one zip under `<home>/bundles`, plus a `download` URL. |
 | Download a bundle | `GET /api/bundle?name=` | The zip, as an attachment. `name` is reduced to a bare filename, so it cannot point out of that directory. |
 | Preview someone's bundle | `POST /api/upload-bundle` | `{filename, data}` (base64, ≤32MB). Stages it and reports every item and whether this brain already holds it. **Writes nothing.** |
-| Import what was ticked | `POST /api/import-bundle` | `{token, select{id: update\|replace\|ignore}}`. The staged zip is consumed, so a token works once. |
+| Import what was ticked | `POST /api/import-bundle` | `{token, select{id: update\|replace\|ignore}, process_realm}`. The staged zip is consumed, so a token works once. |
 | Delete what was ticked | `POST /api/delete-contracts` | `{ids[], force?}` → `graph.py del-contracts`. A built-in is refused unless `force`. |
 | Read the contract shapes | `GET /api/meta` | `skill_sections`, `rule_sections`, `decl_labels`, `node_types`. The form is generated from these, never from headings typed into the page. |
 
@@ -1258,6 +1260,14 @@ the one order in which every link can be made — rules first, then each skill
 after the skills it declares — so the importer never guesses and two importers
 cannot guess differently. A cycle cannot be ordered, so it is **reported** in
 the plan rather than resolved arbitrarily and silently.
+
+**Processes travel too** (`processes/`, `--process ID`), read after the rules
+and before the skills. Unlike a contract, a process is **realm-scoped**: it lands
+in the importer's configured realm, or the one they pick in the import dialog,
+and keeps the realm it came from as `props.origin_realm` — so a teammate's way
+of working arrives in *your* work realm and still says whose it was. The Skills
+page lists processes beside skills and rules, filters by type (multi-select:
+process, skill, rule) and by realm, defaulting to the current realm.
 
 Selection is respected in both directions. Exporting a skill carries the rules
 it honors, for the reason above — but a skill it *requires* and you did not pick

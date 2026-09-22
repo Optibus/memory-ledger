@@ -217,6 +217,23 @@ SCHEMAS: dict[str, dict] = {
             "chars": {"type": "integer"},
         },
     },
+    "Process": {
+        "type": "object",
+        "description": "A way of working: a `process` node, part-of `hub_process`, "
+                       "scoped to a realm.",
+        "properties": {
+            "id": {"type": "string"},
+            "title": {"type": "string"},
+            "body": {"type": "string"},
+            "realm": {"type": "string"},
+            "trigger": {"type": "string", "description": "When this process applies."},
+            "established": {"type": "string"},
+            "category": {"type": "string"},
+            "domains": {"type": "array", "items": {"type": "string"}},
+            "edges": {"type": "integer"},
+            "updated": {"type": "string"},
+        },
+    },
     "NodeTypeInfo": {
         "type": "object",
         "properties": {
@@ -244,7 +261,9 @@ SCHEMAS: dict[str, dict] = {
             "id": {"type": "string"},
             "title": {"type": "string"},
             "description": {"type": "string"},
-            "kind": {"type": "string", "enum": ["skill", "rule"]},
+            "kind": {"type": "string", "enum": ["skill", "rule", "process"]},
+            "realm": {"type": "string",
+                      "description": "For a process: the realm it was exported from."},
             "exists": {"type": "boolean",
                        "description": "This brain already holds it — the only interesting case."},
         },
@@ -388,6 +407,9 @@ GET_ROUTES: dict[str, dict] = {
                                "title": {"type": "string"}, "count": {"type": "integer"},
                                "skills": {"type": "array", "items": _ref("Skill")}}}},
             rules={"type": "array", "items": _ref("Rule")},
+            processes={"type": "array", "items": _ref("Process")},
+            realm={"type": "string",
+                   "description": "The realm a new or imported process lands in."},
             node_types={"type": "array", "items": _ref("NodeTypeInfo")},
             areas={"type": "object", "additionalProperties": {"type": "string"}}),
     },
@@ -760,6 +782,14 @@ POST_ROUTES: dict[str, dict] = {
                       rules={"type": "array", "items": _STR},
                       new_rules={"type": "array", "items": {"type": "object"}}),
     },
+    "/api/create-process": {
+        "summary": "Record a process in a realm",
+        "description": "A `process` node, part-of `hub_process`. `realm` defaults "
+                       "to the configured one; an existing process `id` is refreshed "
+                       "rather than duplicated.",
+        "tags": ["contracts"],
+        "body": _body(["title"], title=_STR, body=_STR, trigger=_STR, realm=_STR, id=_ID),
+    },
     "/api/export-skills": {
         "summary": "Write the skill tree out as markdown",
         "tags": ["contracts"],
@@ -779,9 +809,11 @@ POST_ROUTES: dict[str, dict] = {
                        "links cannot form on the other brain.",
         "tags": ["contracts"],
         "body": _body([], skills={"type": "array", "items": _STR},
-                      rules={"type": "array", "items": _STR}),
+                      rules={"type": "array", "items": _STR},
+                      processes={"type": "array", "items": _STR}),
         "response": _envelope_with(
             skills={"type": "integer"}, rules={"type": "integer"},
+            processes={"type": "integer"},
             path={"type": "string", "description": "Where the zip landed on disk."},
             name={"type": "string"},
             download={"type": "string",
@@ -811,6 +843,9 @@ POST_ROUTES: dict[str, dict] = {
                        "when it exists.",
         "tags": ["contracts"],
         "body": _body(["token", "select"], token=_STR,
+                      process_realm={"type": "string",
+                                     "description": "Realm the bundle's processes land "
+                                                    "in; default the configured realm."},
                       select={"type": "object",
                               "additionalProperties": {"type": "string",
                                                        "enum": ["update", "replace", "ignore"]}}),
@@ -847,8 +882,9 @@ TAGS = [
     {"name": "dashboard", "description": "The token-free date views."},
     {"name": "tasks", "description": "Creating and moving work."},
     {"name": "people", "description": "Person nodes and assignment."},
-    {"name": "contracts", "description": "Skills and rules — the two trees, and the "
-                                         "file and bundle routes between machines."},
+    {"name": "contracts", "description": "Skills, rules and processes — the two trees, "
+                                         "the realm-scoped processes, and the file and "
+                                         "bundle routes between machines."},
     {"name": "vocabulary", "description": "The open and closed sets a client must "
                                           "read rather than hard-code."},
     {"name": "settings", "description": "Preferences, store health, and upkeep."},

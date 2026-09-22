@@ -1730,6 +1730,153 @@ def area_titles(con) -> dict:
         "SELECT id, title FROM nodes WHERE type=? AND id LIKE 'hub_%'", (AREA_TYPE,))}
 
 
+# ---------------------------------------------------------------------------
+# processes: the ways of working the brain has been told, beside the contracts
+#
+# A process is a node of type `process`, part-of `hub_process` (§2e). Unlike a
+# skill or a rule it is REALM-scoped: a team's refinement process belongs to the
+# work realm it was written in, so a new one lands in the brain's configured
+# realm and the UI reads every realm, defaulting its filter to the current one.
+# ---------------------------------------------------------------------------
+
+PROCESS_TYPE = "process"
+PROCESS_AREA = "hub_process"
+# props a process carries as named frontmatter; anything else rides as `props:`
+PROCESS_FIELDS = ("trigger", "established", "category")
+
+
+def current_realm() -> str:
+    """The realm new work lands in, read NOW rather than at import: the server
+    is long-lived and the Settings page can change the realm under it."""
+    return setting("realm", DEFAULT_REALM)
+
+
+def process_catalog(con) -> list:
+    """Every live process, in every realm — the filter narrows, not the query."""
+    areas = {}
+    for r in con.execute(
+            "SELECT e.src, e.dst FROM edges e JOIN nodes n ON n.id=e.src"
+            " WHERE n.type=? AND e.rel='part-of' AND e.dst LIKE 'hub_%'",
+            (PROCESS_TYPE,)):
+        areas.setdefault(r["src"], set()).add(r["dst"])
+    degree = {r["id"]: r["c"] for r in con.execute(
+        "SELECT n.id, COUNT(e.src) c FROM nodes n JOIN edges e"
+        " ON (e.src=n.id OR e.dst=n.id) WHERE n.type=? GROUP BY n.id",
+        (PROCESS_TYPE,))}
+    rows = []
+    for row in con.execute(
+            "SELECT * FROM nodes WHERE type=? AND status NOT IN ('superseded','archived')"
+            " ORDER BY title", (PROCESS_TYPE,)):
+        n = _node_dict(row)
+        p = n["props"]
+        rows.append({
+            "id": n["id"], "title": n["title"], "body": n["body"] or "",
+            "realm": n.get("realm") or "",
+            "trigger": p.get("trigger", ""), "established": p.get("established", ""),
+            "category": p.get("category", ""),
+            "domains": sorted(areas.get(n["id"], [])),
+            "edges": degree.get(n["id"], 0),
+            "updated": n.get("updated", ""),
+        })
+    return rows
+
+
+def api_add_process(con, *, title, body="", trigger="", realm="", node_id="",
+                    props=None) -> dict:
+    """Create (or, given an existing id, refresh) a process in a realm.
+
+    Always part-of `hub_process`, so it is findable as the domain rather than by
+    guessing full-text (§2e)."""
+    title = (title or "").strip()
+    if not title:
+        return {"ok": False, "error": "a process needs a title"}
+    realm = slugify(realm) if realm else current_realm()
+    extra = {k: v for k, v in (props or {}).items() if v not in (None, "")}
+    extra.setdefault("category", "process")
+    if trigger:
+        extra["trigger"] = trigger.strip()
+    nid = node_id.strip() if node_id else ""
+    if nid and not nid.startswith(PROCESS_TYPE + "_"):
+        nid = f"{PROCESS_TYPE}_{slugify(nid)}"
+    existing = con.execute("SELECT type FROM nodes WHERE id=?", (nid,)).fetchone() if nid else None
+    if existing and existing["type"] != PROCESS_TYPE:
+        return {"ok": False, "error": f"{nid} exists and is a {existing['type']}, not a process"}
+    if existing:
+        res = api_update_node(con, nid, title=title, body=body or "", realm=realm,
+                              props_patch=extra)
+        res["action"] = "updated"
+    else:
+        res = api_create_node(con, PROCESS_TYPE, title, body or "", extra, "", "",
+                              realm, nid)
+        res["action"] = "created"
+    if res.get("ok"):
+        _ensure_area(con, PROCESS_AREA, DEFAULT_REALM)
+        if not con.execute("SELECT 1 FROM edges WHERE src=? AND dst=? AND rel=?",
+                           (res["node"]["id"], PROCESS_AREA, AREA_REL)).fetchone():
+            api_link(con, res["node"]["id"], PROCESS_AREA, AREA_REL)
+    return res
+
+
+def cmd_add_process(args):
+    out(api_add_process(connect(), title=args.title, body=args.body or "",
+                        trigger=args.trigger or "", realm=args.realm or "",
+                        node_id=args.id or ""))
+
+
+def process_markdown(con, process_id: str) -> str:
+    """One process as a portable .md: frontmatter plus the body, verbatim."""
+    row = con.execute("SELECT * FROM nodes WHERE id=? AND type=?",
+                      (process_id, PROCESS_TYPE)).fetchone()
+    if not row:
+        return ""
+    n = _node_dict(row)
+    p = n["props"]
+    fm = [f"id: {n['id']}", f"title: {_fm_value(n['title'])}",
+          f"realm: {n.get('realm', '')}"]
+    fm += [f"{k}: {_fm_value(p[k])}" for k in PROCESS_FIELDS if p.get(k)]
+    # the rest of props travels too, as one JSON line the frontmatter parser keeps
+    # whole; usage counters are this brain's history, not the process
+    rest = {k: v for k, v in p.items() if k not in PROCESS_FIELDS
+            and k not in ("access_count", "last_accessed", "strength", "origin_realm")}
+    if rest:
+        fm.append("props: " + json.dumps(rest, ensure_ascii=False, sort_keys=True))
+    return "---\n" + "\n".join(fm) + "\n---\n\n" + (n["body"] or "").strip() + "\n"
+
+
+def _import_process_text(con, pid: str, text: str, mode: str, realm: str) -> str:
+    """Land one process from a bundle in `realm`. Returns what was done."""
+    meta, body = _parse_frontmatter(text)
+    pid = meta.get("id") or pid
+    if not meta.get("title"):
+        return "skipped (no title)"
+    row = con.execute("SELECT type FROM nodes WHERE id=?", (pid,)).fetchone()
+    if row and row["type"] != PROCESS_TYPE:
+        return f"failed: {pid} exists here as a {row['type']}"
+    if row and mode == "ignore":
+        return "kept"
+    if row and mode == "replace":
+        con.execute("DELETE FROM nodes WHERE id=?", (pid,))
+        con.commit()
+    props = {}
+    try:
+        props = json.loads(meta.get("props") or "{}")
+        if not isinstance(props, dict):
+            props = {}
+    except ValueError:
+        props = {}
+    for k in PROCESS_FIELDS:
+        if meta.get(k):
+            props[k] = meta[k]
+    if meta.get("realm") and meta["realm"] != realm:
+        # where it came from is worth keeping: it says whose way of working it is
+        props["origin_realm"] = meta["realm"]
+    res = api_add_process(con, title=meta["title"], body=body.strip(),
+                          realm=realm, node_id=pid, props=props)
+    if not res.get("ok"):
+        return f"failed: {res.get('error')}"
+    return "replaced" if (row and mode == "replace") else res["action"]
+
+
 def sync_skill_tree(con, realm="shared", no_node_types=False) -> dict:
     """Project the skill contracts into the graph as two trees (CONVENTIONS §5a).
 
@@ -2340,7 +2487,7 @@ BUNDLE_FORMAT = "memory-ledger-bundle"
 BUNDLE_VERSION = 1
 BUNDLE_PLAN = "import-plan.json"
 # one directory per kind, named for the kind — the whole layout of a bundle
-BUNDLE_DIRS = {"skill": "skills", "rule": "rules"}
+BUNDLE_DIRS = {"skill": "skills", "rule": "rules", "process": "processes"}
 
 
 def bundles_dir() -> Path:
@@ -2372,8 +2519,11 @@ def _bundle_order(items: dict) -> tuple:
     rather than hidden, because an import that silently picked one arbitrary
     entry point is an import nobody can reproduce."""
     rules = sorted(p for p, it in items.items() if it["kind"] == "rule")
+    # a process depends on nothing either; it sits between the two so a bundle
+    # reads rules, then ways of working, then the skills that act on them
+    procs = sorted(p for p, it in items.items() if it["kind"] == "process")
     skills = {it["id"]: p for p, it in items.items() if it["kind"] == "skill"}
-    order, state, cycles = list(rules), {}, []
+    order, state, cycles = list(rules) + procs, {}, []
 
     def visit(sid, trail):
         if state.get(sid) == "done":
@@ -2395,8 +2545,10 @@ def _bundle_order(items: dict) -> tuple:
     return order, cycles
 
 
-def build_bundle(con, skill_ids=(), rule_ids=(), dest: Path = None) -> dict:
-    """Write the selected skills and rules to one zip and return the report.
+def build_bundle(con, skill_ids=(), rule_ids=(), dest: Path = None,
+                 process_ids=()) -> dict:
+    """Write the selected skills, rules and processes to one zip and return the
+    report.
 
     Rules a selected skill honors travel with it even when they were not
     picked, for the reason §5a gives the directory export: a skill that arrives
@@ -2449,6 +2601,19 @@ def build_bundle(con, skill_ids=(), rule_ids=(), dest: Path = None) -> dict:
             "non_negotiable": bool(props.get("non_negotiable")),
             "picked": rid in picked_rules, "depends_on": []}
 
+    for pid in dict.fromkeys(p for p in process_ids if p):
+        row = con.execute("SELECT * FROM nodes WHERE id=? AND type=?",
+                          (pid, PROCESS_TYPE)).fetchone()
+        if not row:
+            return {"ok": False, "error": f"no process {pid}"}
+        props = json.loads(row["props"] or "{}")
+        path = f"{BUNDLE_DIRS['process']}/{slugify(pid)}.md"
+        files[path] = process_markdown(con, pid)
+        items[path] = {
+            "kind": "process", "id": pid, "title": row["title"],
+            "description": props.get("trigger", ""),
+            "realm": row["realm"] or "", "picked": True, "depends_on": []}
+
     if not files:
         return {"ok": False, "error": "nothing selected to export"}
 
@@ -2460,7 +2625,9 @@ def build_bundle(con, skill_ids=(), rule_ids=(), dest: Path = None) -> dict:
     plan = {"format": BUNDLE_FORMAT, "version": BUNDLE_VERSION,
             "created": now(), "realm": DEFAULT_REALM,
             "counts": {"skills": sum(1 for i in items.values() if i["kind"] == "skill"),
-                       "rules": sum(1 for i in items.values() if i["kind"] == "rule")},
+                       "rules": sum(1 for i in items.values() if i["kind"] == "rule"),
+                       "processes": sum(1 for i in items.values()
+                                        if i["kind"] == "process")},
             # THE point of the file: read these paths in this order and every
             # link the bundle carries can be made as it lands
             "order": order,
@@ -2482,6 +2649,7 @@ def build_bundle(con, skill_ids=(), rule_ids=(), dest: Path = None) -> dict:
     return {"ok": True, "path": str(dest), "name": dest.name,
             "bytes": dest.stat().st_size, "plan": plan,
             "skills": plan["counts"]["skills"], "rules": plan["counts"]["rules"],
+            "processes": plan["counts"]["processes"],
             "missing_skills": missing_skills, "missing_rules": sorted(missing_rules),
             "cycles": cycles}
 
@@ -2489,11 +2657,14 @@ def build_bundle(con, skill_ids=(), rule_ids=(), dest: Path = None) -> dict:
 def cmd_export_bundle(args):
     con = connect()
     skills, rules = list(args.skill or []), list(args.rule or [])
+    procs = list(args.process or [])
     if args.spec:
         spec = json.loads(Path(args.spec).expanduser().read_text(encoding="utf-8"))
         skills += [str(s) for s in spec.get("skills", [])]
         rules += [str(r) for r in spec.get("rules", [])]
-    out(build_bundle(con, skills, rules, Path(args.out).expanduser() if args.out else None))
+        procs += [str(p) for p in spec.get("processes", [])]
+    out(build_bundle(con, skills, rules, Path(args.out).expanduser() if args.out else None,
+                     procs))
 
 
 def _safe_member(name: str) -> bool:
@@ -2558,11 +2729,12 @@ def inspect_bundle(con, path: Path) -> dict:
             continue
         it["path"] = member
         it["readable"] = member in texts
-        row = con.execute("SELECT title, props FROM nodes WHERE id=?",
+        row = con.execute("SELECT title, props, realm FROM nodes WHERE id=?",
                           (it["id"],)).fetchone()
         it["exists"] = bool(row)
         if row:
             it["existing_title"] = row["title"]
+            it["existing_realm"] = row["realm"] or ""
             props = json.loads(row["props"] or "{}")
             it["existing_kind"] = props.get("kind") or props.get("source", "")
         rows.append(it)
@@ -2606,8 +2778,13 @@ def _import_rule_text(con, rid: str, text: str, mode: str) -> str:
 
 
 def import_bundle(con, path: Path, select=None, default_mode="update",
-                  realm="shared") -> dict:
+                  realm="shared", process_realm="") -> dict:
     """Apply a bundle, in the order its plan states.
+
+    Skills and rules are realm-independent contracts and land in `realm`
+    (shared). A process belongs to a realm, so it lands in `process_realm` —
+    the importer's current realm unless the person picked another — and keeps
+    the realm it left as `origin_realm`.
 
     `select` is {node id: mode}, where mode is update | replace | ignore. An id
     the caller never mentioned is imported when it is NEW and left alone when it
@@ -2634,6 +2811,10 @@ def import_bundle(con, path: Path, select=None, default_mode="update",
             continue
         if it.get("kind") == "rule":
             action = _import_rule_text(con, nid, text, mode)
+        elif it.get("kind") == "process":
+            action = _import_process_text(con, nid, text, mode,
+                                          slugify(process_realm) if process_realm
+                                          else current_realm())
         else:
             if exists and mode == "replace":
                 con.execute("DELETE FROM nodes WHERE id=?", (nid,))
@@ -2677,7 +2858,8 @@ def cmd_import_bundle(args):
         nid, _, mode = pair.partition(":")
         select[nid.strip()] = (mode.strip() or "update")
     out(import_bundle(connect(), Path(args.zip).expanduser(), select,
-                      args.mode, getattr(args, "realm", None) or "shared"))
+                      args.mode, getattr(args, "realm", None) or "shared",
+                      getattr(args, "process_realm", None) or ""))
 
 
 def delete_contracts(con, ids=(), force=False) -> dict:
@@ -2696,12 +2878,13 @@ def delete_contracts(con, ids=(), force=False) -> dict:
     for nid in dict.fromkeys(str(i) for i in ids if i):
         row = con.execute("SELECT id,type,title,props FROM nodes WHERE id=?",
                           (nid,)).fetchone()
-        if not row or row["type"] not in ("skill", RULE_TYPE):
+        if not row or row["type"] not in ("skill", RULE_TYPE, PROCESS_TYPE):
             absent.append(nid)
             continue
         props = json.loads(row["props"] or "{}")
         builtin = (props.get("kind") == "plugin" if row["type"] == "skill"
-                   else props.get("source") == "plugin")
+                   else props.get("source") == "plugin" if row["type"] == RULE_TYPE
+                   else False)
         if builtin and not force:
             refused.append({"id": nid, "title": row["title"],
                             "why": "built-in: it ships as a file and would come "
@@ -5808,8 +5991,10 @@ def build_parser():
     a.set_defaults(func=cmd_export_bundle)
     a.add_argument("--skill", action="append", help="skill node id (repeatable)")
     a.add_argument("--rule", action="append", help="rule node id (repeatable)")
-    a.add_argument("--spec", help="JSON file with {skills:[ids], rules:[ids]} — for "
-                                  "selections too long to pass as flags")
+    a.add_argument("--process", action="append", help="process node id (repeatable)")
+    a.add_argument("--spec", help="JSON file with {skills:[ids], rules:[ids], "
+                                  "processes:[ids]} — for selections too long to "
+                                  "pass as flags")
     a.add_argument("--out", help="destination zip (default: <home>/bundles/skills-<stamp>.zip)")
 
     a = sub.add_parser("inspect-bundle", description=(
@@ -5830,6 +6015,24 @@ def build_parser():
     a.add_argument("--mode", choices=["update", "replace", "ignore"], default="update",
                    help="mode for selected ids that did not name one (default update)")
     a.add_argument("--realm", default="shared")
+    a.add_argument("--process-realm", dest="process_realm", default="",
+                   help="realm the bundle's processes land in (default: the "
+                        "configured realm)")
+
+    a = sub.add_parser("add-process", description=(
+        "Record a way of working as a process node in a realm, part-of "
+        "hub_process. Given an existing process id, refreshes it."))
+    a.set_defaults(func=cmd_add_process)
+    a.add_argument("--title", required=True)
+    a.add_argument("--body", default="")
+    a.add_argument("--trigger", default="", help="when this process applies")
+    a.add_argument("--realm", default="", help="default: the configured realm")
+    a.add_argument("--id", default="")
+
+    a = sub.add_parser("processes", description=(
+        "Every process in every realm (the UI's Processes list)."))
+    a.set_defaults(func=lambda args: out({"ok": True, "realm": current_realm(),
+                                          "processes": process_catalog(connect())}))
 
     a = sub.add_parser("del-contracts", description=(
         "Delete skill and rule nodes. §2a's archive-never-delete is about work, "

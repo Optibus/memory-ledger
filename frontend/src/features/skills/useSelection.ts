@@ -1,8 +1,10 @@
 import { useCallback, useMemo, useState } from "react";
 
 /** Which corpus an id belongs to, from the id alone. */
-export function kindOf(id: string): "skills" | "rules" {
-  return id.startsWith("skill_") ? "skills" : "rules";
+export function kindOf(id: string): "skills" | "rules" | "processes" {
+  if (id.startsWith("skill_")) return "skills";
+  if (id.startsWith("process_")) return "processes";
+  return "rules";
 }
 
 export interface Selection {
@@ -13,7 +15,7 @@ export interface Selection {
   selectAll: (ids: string[]) => void;
   clear: () => void;
   /** The two lists the bundle endpoints want. */
-  split: () => { skills: string[]; rules: string[] };
+  split: () => { skills: string[]; rules: string[]; processes: string[] };
 }
 
 /** Selection mode: checkboxes on every card, then export or delete what you ticked. */
@@ -42,7 +44,7 @@ export function useSelection(): Selection {
   const clear = useCallback(() => setPicked(new Set()), []);
 
   const split = useCallback(() => {
-    const out = { skills: [] as string[], rules: [] as string[] };
+    const out = { skills: [] as string[], rules: [] as string[], processes: [] as string[] };
     for (const id of picked) out[kindOf(id)].push(id);
     return out;
   }, [picked]);

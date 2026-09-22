@@ -1,10 +1,12 @@
 import { useMemo, useRef, useState } from "react";
 import { api } from "@/api/client";
+import { useMeta } from "@/api/MetaContext";
 import { useAsync } from "@/hooks/useAsync";
 import {
   Button,
   ConfirmDialog,
   EmptyState,
+  FacetDropdown,
   Menu,
   Pills,
   SearchInput,
@@ -18,8 +20,19 @@ import { SkillCard, NoSkills } from "./SkillCard";
 import { RuleRow } from "./RuleRow";
 import { ImportDialog } from "./ImportDialog";
 import { PromptDialog } from "./PromptDialog";
-import { countSkills, emptySkillFilter, keepRule, keepSkill } from "./filter";
-import type { KeptSkill, SkillFilter } from "./filter";
+import { ProcessRow } from "./ProcessRow";
+import { ProcessDialog } from "./ProcessDialog";
+import type { ProcessDraft } from "./ProcessDialog";
+import {
+  ITEM_TYPES,
+  countSkills,
+  effectiveRealms,
+  emptySkillFilter,
+  keepProcess,
+  keepRule,
+  keepSkill,
+} from "./filter";
+import type { ItemType, KeptSkill, SkillFilter } from "./filter";
 import { useSelection } from "./useSelection";
 import type { ImportChoice, SkillsPayload, UploadBundleResult } from "@/api/types";
 import "./SkillsSection.css";
@@ -39,8 +52,16 @@ const TREE_SUB: Record<string, JSX.Element> = {
   ),
 };
 
+const TYPE_LABEL: Record<ItemType, string> = {
+  process: "Processes",
+  skill: "Skills",
+  rule: "Rules",
+};
+
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
 /**
- * The two skill trees and the rule catalogue beside them.
+ * The processes, the two skill trees, and the rule catalogue beside them.
  *
  * Every skill is a contract: what must be true when it finishes, what it reads
  * and writes in the graph, and the rules it answers to. Nesting is the
@@ -55,6 +76,9 @@ export function SkillsSection() {
   const [forceBuiltins, setForceBuiltins] = useState(false);
   const [prompt, setPrompt] = useState<null | "export-tree" | "ingest-tree">(null);
   const [busy, setBusy] = useState(false);
+  const [newProcess, setNewProcess] = useState(false);
+  const [processError, setProcessError] = useState<string | null>(null);
+  const { writable } = useMeta();
   const fileRef = useRef<HTMLInputElement>(null);
   const sel = useSelection();
 
@@ -81,6 +105,28 @@ export function SkillsSection() {
     [data, filter],
   );
 
+  const show = (t: ItemType) => filter.types.has(t);
+  const currentRealm = data?.realm ?? "";
+  const shownRealms = effectiveRealms(filter, currentRealm);
+  const allProcesses = data?.processes ?? [];
+  const keptProcesses = useMemo(() => {
+    const realms = effectiveRealms(filter, currentRealm);
+    return allProcesses.filter((p) => keepProcess(p, filter, realms));
+  }, [allProcesses, filter, currentRealm]);
+
+  /** Every realm that holds a process, and the current one even when it holds none. */
+  const realmOptions = useMemo(() => {
+    const counts = new Map<string, number>();
+    if (currentRealm) counts.set(currentRealm, 0);
+    for (const p of allProcesses) counts.set(p.realm, (counts.get(p.realm) ?? 0) + 1);
+    return [...counts.entries()]
+      .sort(([a], [b]) => (a === currentRealm ? -1 : b === currentRealm ? 1 : a.localeCompare(b)))
+      .map(([value, count]) => ({
+        value,
+        label: value === currentRealm ? `${value} (current)` : value,
+        count,
+      }));
+  }, [allProcesses, currentRealm]);
   const domains = useMemo(() => {
     const seen = new Set<string>();
     for (const r of data?.rules ?? []) for (const d of r.domains || []) seen.add(d);
@@ -101,29 +147,36 @@ export function SkillsSection() {
         walk(s.children);
       }
     };
-    if (filter.show !== "rules") for (const t of trees) walk(t.kept);
-    if (filter.show !== "skills") for (const r of keptRules) ids.push(r.id);
+    if (filter.types.has("process")) for (const p of keptProcesses) ids.push(p.id);
+    if (filter.types.has("skill")) for (const t of trees) walk(t.kept);
+    if (filter.types.has("rule")) for (const r of keptRules) ids.push(r.id);
     return ids;
-  }, [trees, keptRules, filter.show]);
+  }, [trees, keptRules, keptProcesses, filter.types]);
 
   const nSkills = trees.reduce((n, t) => n + countSkills(t.kept), 0);
-  const counts = [
-    filter.show !== "rules" ? `${nSkills} skill${nSkills === 1 ? "" : "s"}` : null,
-    filter.show !== "skills" ? `${keptRules.length} rule${keptRules.length === 1 ? "" : "s"}` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const counts =
+    [
+      show("process") ? plural(keptProcesses.length, "process", "processes") : null,
+      show("skill") ? plural(nSkills, "skill") : null,
+      show("rule") ? plural(keptRules.length, "rule") : null,
+    ]
+      .filter(Boolean)
+      .join(" · ") || "nothing shown";
+  const narrowed = Boolean(filter.q) || filter.src !== "all" || filter.dom !== "all";
 
   // ---- the actions behind the Options menu --------------------------------
   const exportSelected = async () => {
-    const { skills: s, rules: r } = sel.split();
+    const { skills: s, rules: r, processes: p } = sel.split();
     say("Building the bundle…");
     try {
-      const d = await api.exportBundle(s, r);
+      const d = await api.exportBundle(s, r, p);
+      const parts = [
+        d.processes ? plural(d.processes, "process", "processes") : null,
+        plural(d.skills, "skill"),
+        plural(d.rules, "rule"),
+      ].filter(Boolean);
       say(
-        `Bundled ${d.skills} skill${d.skills === 1 ? "" : "s"} and ${d.rules} rule${
-          d.rules === 1 ? "" : "s"
-        } into\n${d.path}\n\nThe zip holds one directory per kind and an import-plan.json naming the order they can be read back in — rules first, then each skill after the skills it requires.` +
+        `Bundled ${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]} into\n${d.path}\n\nThe zip holds one directory per kind and an import-plan.json naming the order they can be read back in — rules first, then processes, then each skill after the skills it requires.` +
           (d.missing_skills?.length
             ? `\n\nThese are REQUIRED by something you exported and did not travel:\n${d.missing_skills
                 .map((x) => `  ${x}`)
@@ -183,7 +236,7 @@ export function SkillsSection() {
       const b64 = await toBase64(file);
       const got = await api.uploadBundle(file.name, b64);
       say(
-        `${file.name}: ${got.counts.skills || 0} skill(s), ${got.counts.rules || 0} rule(s). Choose what to bring in.`,
+        `${file.name}: ${got.counts.processes || 0} process(es), ${got.counts.skills || 0} skill(s), ${got.counts.rules || 0} rule(s). Choose what to bring in.`,
       );
       setStaged({ file: file.name, data: got });
     } catch (err) {
@@ -191,14 +244,14 @@ export function SkillsSection() {
     }
   };
 
-  const runImport = async (select: Record<string, ImportChoice>) => {
+  const runImport = async (select: Record<string, ImportChoice>, processRealm?: string) => {
     if (!staged) return;
     const name = staged.file;
     const token = staged.data.token;
     setStaged(null);
     say("Importing…");
     try {
-      const d = await api.importBundle(token, select);
+      const d = await api.importBundle(token, select, processRealm);
       const words: Record<string, string> = {
         created: "created",
         updated: "updated",
@@ -207,7 +260,9 @@ export function SkillsSection() {
         kept: "left alone",
       };
       say(
-        `Imported from ${name}.\n${d.applied
+        `Imported from ${name}.` +
+          (processRealm ? ` Processes landed in the ${processRealm} realm.` : "") +
+          `\n${d.applied
           .map(
             (a) =>
               `  ${(words[a.action] || a.action).padEnd(10)} ${a.id}` +
@@ -267,13 +322,41 @@ export function SkillsSection() {
     }
   };
 
+  const saveProcess = async (draft: ProcessDraft) => {
+    setBusy(true);
+    setProcessError(null);
+    try {
+      const d = await api.createProcess(draft);
+      setNewProcess(false);
+      say(`Saved "${draft.title}" in the ${d.node.realm} realm as ${d.node.id}.`, "success");
+      // A process saved outside the realms on screen would otherwise vanish on save.
+      if (!shownRealms.has(d.node.realm))
+        setFilter((f) => ({ ...f, realms: new Set([...shownRealms, d.node.realm]) }));
+      skills.reload();
+    } catch (err) {
+      setProcessError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const menu: MenuGroup[] = [
     {
       heading: "This brain",
       items: [
+        ...(writable
+          ? [
+              {
+                id: "new-process",
+                label: "New process…",
+                description: `Record a way of working, in the ${currentRealm || "current"} realm unless you pick another.`,
+                onSelect: () => setNewProcess(true),
+              },
+            ]
+          : []),
         {
           id: "select",
-          label: "Select skills and rules",
+          label: "Select processes, skills and rules",
           description: "Checkboxes on every card, then export or delete what you ticked.",
           onSelect: () => sel.setPicking(!sel.picking),
         },
@@ -314,9 +397,9 @@ export function SkillsSection() {
       title="Skills"
       lead={
         <>
-          Every skill is a contract: what must be true when it finishes, what it reads and writes in
-          the graph, and the rules it answers to. Nesting is the <code>requires</code> edge. Click a
-          skill to open it, then a rule to read it.
+          Processes are the ways of working this brain was told, kept per realm. Every skill is a
+          contract: what must be true when it finishes, what it reads and writes in the graph, and the
+          rules it answers to. Nesting is the <code>requires</code> edge. Click anything to open it.
         </>
       }
       actions={<Menu label="Options" groups={menu} />}
@@ -364,16 +447,35 @@ export function SkillsSection() {
           onChange={(q) => setFilter((f) => ({ ...f, q }))}
           placeholder="filter by name, trigger, rule text, node type…"
         />
-        <Pills
-          aria-label="show"
-          value={filter.show}
-          onChange={(show) => setFilter((f) => ({ ...f, show }))}
-          options={[
-            { value: "all", label: "Both" },
-            { value: "skills", label: "Skills" },
-            { value: "rules", label: "Rules" },
-          ]}
+        <FacetDropdown
+          name="Types"
+          options={ITEM_TYPES.map((t) => ({
+            value: t,
+            label: TYPE_LABEL[t],
+            count:
+              t === "process"
+                ? allProcesses.filter((p) => shownRealms.has(p.realm)).length
+                : t === "skill"
+                  ? (data?.trees ?? []).reduce((n, tr) => n + tr.count, 0)
+                  : (data?.rules?.length ?? 0),
+          }))}
+          selected={filter.types as Set<string>}
+          onChange={(next) => setFilter((f) => ({ ...f, types: next as Set<ItemType> }))}
         />
+        {show("process") ? (
+          <FacetDropdown
+            name="Realms"
+            options={realmOptions}
+            selected={shownRealms}
+            onChange={(next) => setFilter((f) => ({ ...f, realms: next }))}
+            note={
+              <>
+                Processes only: skills and rules are shared contracts. New and imported processes land
+                in <code>{currentRealm}</code>.
+              </>
+            }
+          />
+        ) : null}
         <Pills
           aria-label="source"
           value={filter.src}
@@ -405,11 +507,53 @@ export function SkillsSection() {
         </StatusMessage>
       ) : null}
 
-      {filter.show !== "rules"
+      {show("process") && data ? (
+        <section className="ml-skills__tree">
+          <h2 className="ml-skills__treeh">
+            Processes
+            <span className="ml-skills__ct">
+              {keptProcesses.length}
+              {keptProcesses.length !== allProcesses.length ? ` of ${allProcesses.length}` : ""}
+            </span>
+          </h2>
+          <p className="ml-skills__sub">
+            Ways of working: <code>process</code> nodes part-of <code>hub_process</code>, each in one
+            realm. Showing {[...shownRealms].join(", ") || "no realm"}; use the Realms filter to read
+            another realm&rsquo;s.
+          </p>
+          {keptProcesses.length ? (
+            keptProcesses.map((p) => (
+              <ProcessRow
+                key={p.id}
+                process={p}
+                currentRealm={currentRealm}
+                query={filter.q}
+                selectable={sel.picking}
+                selected={sel.picked.has(p.id)}
+                onSelect={(on) => sel.toggle(p.id, on)}
+              />
+            ))
+          ) : (
+            <EmptyState
+              title={
+                allProcesses.length
+                  ? "No process matches this filter."
+                  : "No processes recorded yet."
+              }
+            />
+          )}
+          {writable ? (
+            <Button size="sm" onClick={() => setNewProcess(true)}>
+              New process…
+            </Button>
+          ) : null}
+        </section>
+      ) : null}
+
+      {show("skill")
         ? trees.map((t) => {
             const n = countSkills(t.kept);
-            if (!t.kept.length && (filter.q || filter.src !== "all" || filter.dom !== "all"))
-              return null;
+            if (!t.kept.length && narrowed) return null;
             return (
               <section className="ml-skills__tree" key={t.hub}>
                 <h2 className="ml-skills__treeh">
@@ -440,7 +584,7 @@ export function SkillsSection() {
           })
         : null}
 
-      {filter.show !== "skills" ? (
+      {show("rule") ? (
         <section className="ml-skills__tree">
           <h2 className="ml-skills__treeh">
             Rules
@@ -477,6 +621,8 @@ export function SkillsSection() {
         <ImportDialog
           filename={staged.file}
           staged={staged.data}
+          realm={currentRealm}
+          realms={realmOptions.map((r) => r.value)}
           onCancel={() => {
             setStaged(null);
             say("Import cancelled. Nothing was written.");
@@ -522,6 +668,19 @@ export function SkillsSection() {
               </p>
             </>
           }
+        />
+      ) : null}
+
+      {newProcess ? (
+        <ProcessDialog
+          realm={currentRealm}
+          busy={busy}
+          error={processError}
+          onCancel={() => {
+            setNewProcess(false);
+            setProcessError(null);
+          }}
+          onSubmit={(d) => void saveProcess(d)}
         />
       ) : null}
 

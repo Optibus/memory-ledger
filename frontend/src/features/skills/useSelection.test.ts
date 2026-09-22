@@ -6,6 +6,7 @@ describe("kindOf", () => {
   it("reads the corpus off the id", () => {
     expect(kindOf("skill_recall")).toBe("skills");
     expect(kindOf("rule_user_no-emoji")).toBe("rules");
+    expect(kindOf("process_refine-an-epic_0693")).toBe("processes");
   });
 });
 
@@ -28,7 +29,8 @@ describe("useSelection", () => {
   it("splits the selection the way the bundle endpoints want it", () => {
     const { result } = renderHook(() => useSelection());
     act(() => result.current.selectAll(["skill_a", "rule_b", "skill_c"]));
-    expect(result.current.split()).toEqual({ skills: ["skill_a", "skill_c"], rules: ["rule_b"] });
+    act(() => result.current.selectAll(["skill_a", "rule_b", "skill_c", "process_d"]));
+    expect(result.current.split()).toEqual({ skills: ["skill_a", "skill_c"], rules: ["rule_b"], processes: ["process_d"] });
   });
 
   it("drops the selection when selection mode is left, so no hidden tick survives", () => {
