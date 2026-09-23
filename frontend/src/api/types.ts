@@ -628,7 +628,25 @@ export interface UiPrefsPayload extends Envelope {
 // secrets: for those the server only ever says whether one is set, and where
 // from, so a page that shows "one is stored" never holds the token itself.
 
-export type TriggerService = "claude" | "slack" | "jira";
+export type TriggerService = "claude" | "slack" | "jira" | "github";
+
+/** What a GitHub poll can notice. Each has its own switch and instruction. */
+export type GitHubEventKind =
+  | "mention"
+  | "review_requested"
+  | "review"
+  | "comment"
+  | "pushed"
+  | "ci_failed"
+  | "merged"
+  | "closed"
+  | "assigned";
+
+export interface GitHubEventSetting {
+  on: boolean;
+  /** What the session is told to do. Empty for a mention: the comment is the request. */
+  do: string;
+}
 
 export interface TriggerSecret {
   set: boolean;
@@ -676,6 +694,22 @@ export interface TriggerConfig {
     jql: string;
     max_catchup_hours: number;
   };
+  github: {
+    enabled: boolean;
+    active: boolean;
+    api_url: string;
+    /** Empty: looked up from the token. */
+    login: string;
+    marker: string;
+    poll_seconds: number;
+    /** owner/name for a repo, a bare name for a whole org. Empty is everything. */
+    repos: string[];
+    trusted_associations: string[];
+    /** A refusal on GitHub is a public comment, so it is off unless asked for. */
+    refusal_notice: boolean;
+    max_catchup_hours: number;
+    events: Record<GitHubEventKind, GitHubEventSetting>;
+  };
   secrets: Record<string, TriggerSecret>;
 }
 
@@ -692,11 +726,12 @@ export interface TriggerRuntime {
   started_at: string;
   slack: TriggerWatcher;
   jira: TriggerWatcher;
+  github: TriggerWatcher;
 }
 
 export interface TriggerRequestRow {
   id: string;
-  source: "slack" | "jira";
+  source: "slack" | "jira" | "github";
   scope: string;
   requester_name: string;
   requester_id: string;

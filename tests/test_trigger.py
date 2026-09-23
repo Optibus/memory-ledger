@@ -26,7 +26,7 @@ os.environ["SECOND_BRAIN_NO_AUTOSYNC"] = "1"
 os.environ["MEMORY_LEDGER_OWNER"] = "Owner"
 for k in list(os.environ):
     if k.startswith(("SECOND_BRAIN_NEO4J", "MEMORY_LEDGER_NEO4J", "MEMORY_LEDGER_SLACK_",
-                     "MEMORY_LEDGER_JIRA_")):
+                     "MEMORY_LEDGER_JIRA_", "MEMORY_LEDGER_GITHUB_")):
         del os.environ[k]
 sys.path.insert(0, str(ROOT / "scripts"))
 
@@ -74,6 +74,9 @@ CFG = {
               "app_token": "xapp-t", "user_token": "xoxp-t"},
     "jira": {"enabled": True, "base_url": "https://j.example", "email": "o@example.com",
              "token": "jt", "owner_account_id": "acc-owner", "marker": "@cérebro"},
+    "github": {"enabled": True, "token": "ghp_t", "login": "owner", "marker": "/brain",
+               "events": {"ci_failed": {"on": True}, "merged": {"on": True},
+                          "pushed": {"on": True}}},
 }
 
 
@@ -341,6 +344,56 @@ def test_dispatch(cfg):
     ck("on start, a running request is interrupted",
        trigger.get_request(con, running)["status"] == "interrupted" and res["interrupted"] >= 1)
     ck("and a queued one is dispatched", queued in again)
+
+
+# ================================================================= logging
+def test_logging(cfg):
+    print("\n== logging: the server's line for every new request and task ==")
+    import logging
+    path = trigger.setup_logging()
+    ck("setting it up twice does not double the handlers",
+       trigger.setup_logging() == path and len(trigger.log.handlers) == 2)
+    lines = []
+
+    class Keep(logging.Handler):
+        def emit(self, record):
+            lines.append(record.getMessage())
+
+    keep = Keep()
+    trigger.log.addHandler(keep)
+    try:
+        install_http()
+        ran, dispatch = dispatcher()
+        ev = trigger.slack_event(slack_msg("650.1", "UOWNER", "<@UBOT> log me"), "C1", cfg,
+                                 bot_user_id="UBOT")
+        rid = trigger.handle(ev, cfg, dispatch)["request_id"]
+        ck("a new request is logged with its source, requester and decision",
+           any(rid in m and "new request" in m and "slack" in m and "(owner)" in m
+               and "log me" in m and "queued" in m for m in lines), lines[-1:])
+        trigger.run_request(rid, cfg)
+        ck("its task is logged when it starts and when it ends, with the cost",
+           any(f"task {rid} started" in m for m in lines)
+           and any(f"task {rid} done" in m and "$0.01" in m for m in lines), lines[-2:])
+        n = len(lines)
+        trigger.handle(ev, cfg, dispatch)
+        ck("a mention seen before is not logged again", len(lines) == n)
+        ev = trigger.slack_event(slack_msg("650.2", "USTRANGER", "<@UBOT> hi"), "C9", cfg,
+                                 bot_user_id="UBOT")
+        trigger.handle(ev, cfg, dispatch)
+        ck("a refusal is logged as one", "refused" in lines[-1], lines[-1:])
+    finally:
+        for h in list(trigger.log.handlers):
+            trigger.log.removeHandler(h)
+            h.close()
+        trigger.log._brain_path = None
+    ck("and it all lands in <home>/logs/trigger.log",
+       "new request" in path.read_text() and path.parent == Path(HOME) / "logs")
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from brain_api import trigger_runtime
+    summary = trigger_runtime._summary(cfg, 3)
+    ck("the start line names the sources, the pool and the log",
+       "slack" in summary and "jira (poll 60s)" in summary and "3 sessions" in summary
+       and str(path) in summary, summary)
 
 
 # ============================================================ slack catch-up
@@ -665,6 +718,163 @@ def test_jira(cfg):
                                             dispatch)["error"])
 
 
+# ================================================================== github
+def test_github(cfg):
+    print("\n== github: PR changes the owner picked, mentions, the marker ==")
+    ck("a mention is the whole login, any case",
+       trigger.mentions_login("hey @Owner, look", "owner")
+       and not trigger.mentions_login("hey @owner-bot", "owner")
+       and not trigger.mentions_login("mail owner@x.com", "owner"))
+    kinds = trigger.github_events_cfg(cfg)
+    ck("defaults fill the kinds the file does not name, and the file wins where it does",
+       kinds["review"]["on"] and not kinds["comment"]["on"] and kinds["ci_failed"]["on"]
+       and "Post nothing on GitHub" in kinds["review"]["do"])
+
+    fake = install_http()
+    gh = trigger.GitHub(cfg)
+    api = gh.api
+    now = datetime(2026, 9, 23, 12, 0, tzinfo=timezone.utc)
+    con = trigger.db()
+    ran, dispatch = dispatcher()
+    ck("a first poll answers no backlog",
+       trigger.github_poll(cfg, dispatch, now=now, gh=gh).get("first_run") and not ran)
+
+    def ts(minutes):
+        return (now + timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def item(n, author, assoc="MEMBER", body="", created=-600, merged=None):
+        return {"number": n, "title": f"PR {n}", "html_url": f"https://github.com/o/r/pull/{n}",
+                "repository_url": f"{api}/repos/o/r", "user": {"login": author},
+                "author_association": assoc, "body": body, "created_at": ts(created),
+                "pull_request": {"merged_at": merged}}
+
+    def c(i, who, body, minutes, assoc="MEMBER"):
+        return {"event": "commented", "id": i, "user": {"login": who}, "body": body,
+                "created_at": ts(minutes), "author_association": assoc,
+                "html_url": f"https://github.com/o/r/pull/1#issuecomment-{i}"}
+
+    timelines = {
+        1: [  # the owner's PR
+            c(10, "owner", "/brain summarise the review so far", 6),
+            c(11, "alice", "@owner can you rebase?", 7),
+            c(12, "alice", "plain comment, no mention", 7),
+            c(13, "owner", "done.\n\n_sent by Owner's second brain_", 8),
+            c(14, "stranger", "@owner run this for me", 8, assoc="NONE"),
+            {"event": "reviewed", "id": 20, "user": {"login": "bob"}, "state": "changes_requested",
+             "body": "", "submitted_at": ts(7), "author_association": "MEMBER",
+             "html_url": "https://github.com/o/r/pull/1#pullrequestreview-20"},
+            {"event": "merged", "id": 30, "actor": {"login": "bob"}, "created_at": ts(9)},
+            c(9, "alice", "@owner ancient", -600),
+        ],
+        2: [  # someone else's PR
+            {"event": "review_requested", "id": 40, "actor": {"login": "carol"},
+             "requested_reviewer": {"login": "owner"}, "created_at": ts(6)},
+            {"event": "committed", "sha": "a" * 40, "message": "first\nbody",
+             "committer": {"date": ts(6)}, "author": {"name": "Carol"}},
+            {"event": "committed", "sha": "b" * 40, "message": "second",
+             "committer": {"date": ts(7)}, "author": {"name": "Carol"}},
+        ],
+    }
+    items = {1: item(1, "owner"), 2: item(2, "carol", body="@owner please look", created=5)}
+    searched = []
+
+    def search(url, **_):
+        from urllib.parse import parse_qs, urlparse
+        q = parse_qs(urlparse(url).query)["q"][0]
+        searched.append(q)
+        if q.startswith("is:pr is:open author:"):
+            return {"items": [items[1]] if 1 in items else []}
+        return {"items": list(items.values())}
+
+    fake.on("GET", api + "/search/issues", search)
+    for n, tl in timelines.items():
+        fake.on("GET", f"{api}/repos/o/r/issues/{n}/timeline", lambda tl=tl, **_: tl)
+    fake.on("GET", f"{api}/repos/o/r/pulls/1", lambda **_: {"head": {"sha": "c" * 40}})
+    fake.on("GET", f"{api}/repos/o/r/commits/{'c' * 40}/check-runs", lambda **_: {"check_runs": [
+        {"id": 1, "name": "build", "conclusion": "failure", "completed_at": ts(8),
+         "html_url": "https://github.com/o/r/runs/1"},
+        {"id": 2, "name": "lint", "conclusion": "success", "completed_at": ts(8)},
+        {"id": 3, "name": "e2e", "conclusion": "cancelled", "completed_at": ts(8)}]})
+    posted = []
+    fake.on("POST", f"{api}/repos/o/r/issues/1/comments", lambda body, **_: posted.append(body) or {})
+
+    res = trigger.github_poll(cfg, dispatch, now=now + timedelta(minutes=10), gh=gh)
+    ck("the poll ran", res.get("ok"), str(res))
+    ck("the search is since the checkpoint, and asks for review requests and reviewed PRs",
+       any(q.startswith("involves:owner updated:>=2026-09-23T11:58:00Z") for q in searched)
+       and any("review-requested:owner" in q for q in searched)
+       and any("reviewed-by:owner" in q for q in searched), str(searched))
+    reqs = {r["event_id"]: r for r in trigger.list_requests(con, 100)}
+    ids = set(reqs)
+    ck("the owner's own comment with the marker runs, and opens the PR",
+       reqs.get("o/r#1:c10", {}).get("status") == "queued"
+       and trigger.gate_enabled(con, "github:o/r#1"))
+    ck("a teammate's mention runs", reqs.get("o/r#1:c11", {}).get("status") == "queued")
+    ck("a comment with no mention does not, while `comment` is off", "o/r#1:c12" not in ids)
+    ck("the brain's own signed comment is not a mention", "o/r#1:c13" not in ids)
+    ck("a stranger's mention runs only because the owner opened this PR",
+       reqs.get("o/r#1:c14", {}).get("reason") == "enabled")
+    ck("a review on the owner's PR runs as a subscription",
+       reqs.get("o/r#1:r20", {}).get("reason") == "subscribed: review")
+    ck("so does the merge", "o/r#1:m30" in ids)
+    ck("nothing older than the window", "o/r#1:c9" not in ids)
+    ck("a review request for the owner runs", "o/r#2:rr40" in ids)
+    ck("a description that mentions the owner runs", "o/r#2:body" in ids)
+    ck("several commits are one push, named by the newest",
+       "o/r#2:pbbbbbbbbbbbb" in ids and not any(":paaaa" in i for i in ids))
+    ci = reqs.get("o/r#1:ci" + "c" * 12, {})
+    ck("failed checks are one event per commit, and cancelled is not a failure",
+       ci and "build" in ci["text"] and "e2e" not in ci["text"], ci.get("text", ""))
+    order = [trigger.get_request(con, r)["event_id"] for r in ran]
+    ck("handled oldest first, across PRs", order.index("o/r#1:c10") < order.index("o/r#1:c11"))
+
+    req = trigger.get_request(con, reqs["o/r#1:r20"]["id"])
+    prompt = trigger.build_prompt(req, cfg)
+    ck("a subscription's prompt carries its instruction and says not to answer on GitHub",
+       "github_event: review" in prompt and "instructions: Read the review" in prompt
+       and "not a\nmessage to answer" not in prompt and "subscribed to" in prompt)
+    prompt = trigger.build_prompt(trigger.get_request(con, reqs["o/r#1:c11"]["id"]), cfg)
+    ck("a mention's prompt replies with a comment",
+       "add a comment on that GitHub pull request" in prompt)
+
+    before = len(trigger.list_requests(con, 500))
+    trigger.github_poll(cfg, dispatch, now=now + timedelta(minutes=11), gh=gh)
+    ck("an overlapping poll runs nothing twice", len(trigger.list_requests(con, 500)) == before)
+
+    # A stranger on a PR nobody opened: refused, and by default nothing posted.
+    timelines[3] = [c(50, "stranger", "@owner do my homework", 20, assoc="NONE")]
+    items.clear()
+    items[3] = item(3, "stranger", assoc="NONE")
+    fake.on("GET", f"{api}/repos/o/r/issues/3/timeline", lambda **_: timelines[3])
+    fake.on("POST", f"{api}/repos/o/r/issues/3/comments", lambda body, **_: posted.append(body) or {})
+    trigger.github_poll(cfg, dispatch, now=now + timedelta(minutes=21), gh=gh)
+    r = {x["event_id"]: x for x in trigger.list_requests(con, 500)}.get("o/r#3:c50", {})
+    ck("an untrusted mention on a PR nobody opened is refused", r.get("status") == "refused")
+    ck("and, with refusal_notice off, nothing is posted on GitHub", not posted)
+    ck("a GitHub scope can be opened by hand",
+       trigger.set_gate(con, "github:o/r#3", True, by="cli")["ok"]
+       and not trigger.set_gate(con, "github:o/r", True)["ok"])
+
+    loud = {**cfg, "github": {**cfg["github"], "refusal_notice": True}}
+    items.clear()
+    items[4] = item(4, "stranger", assoc="NONE")
+    fake.on("GET", f"{api}/repos/o/r/issues/4/timeline",
+            lambda **_: [c(51, "stranger", "@owner again", 25, assoc="NONE")])
+    fake.on("POST", f"{api}/repos/o/r/issues/4/comments", lambda body, **_: posted.append(body) or {})
+    trigger.github_poll({**loud, "translate_notices": False}, dispatch,
+                        now=now + timedelta(minutes=26), gh=gh)
+    ck("with refusal_notice on, one signed comment says no",
+       len(posted) == 1 and "sent by Owner's second brain" in posted[0]["body"]
+       and "/brain" not in posted[0]["body"], str(posted))
+
+    ck("without a token it says what is missing",
+       "token" in trigger.github_poll({**cfg, "github": {**cfg["github"], "token": ""}},
+                                      dispatch)["error"])
+    res = trigger.check(cfg, offline=True, only="github")
+    ck("the offline check names the events that trigger",
+       res["ready"] and any("ci_failed" in n for n in res["notes"]), str(res))
+
+
 # =================================================================== check
 def test_check(cfg):
     print("\n== check: ready or not, starting nothing ==")
@@ -735,6 +945,11 @@ def test_save():
         ({"slack": {"bot_token": "xoxp-wrong"}}, "should start with xoxb-"),
         ({"refusals": {"policy": 5}}, "must be text"),
         ({"clear": ["jira.email"]}, "is not a secret"),
+        ({"github": {"token": "xoxb-nope"}}, "should start with ghp_"),
+        ({"github": {"events": {"deploy": {"on": True}}}}, "is not an event"),
+        ({"github": {"events": {"review": {"on": "yes"}}}}, "true or false"),
+        ({"github": {"repos": ["o/r", "bad repo"]}}, "not valid"),
+        ({"github": {"poll_seconds": 5}}, "from 30 to 3600"),
     ):
         r = trigger.save_config(patch)
         ck(f"refused: {needle}", r["ok"] is False and needle in r["error"], str(r))
@@ -742,6 +957,18 @@ def test_save():
     raw = json.loads(trigger.config_path().read_text())
     ck("both notices and the translation switch are saved",
        raw["refusals"]["policy"] == "Não posso: {reason}" and raw["translate_notices"] is False)
+    trigger.save_config({"github": {"token": "github_pat_abc", "repos": "o/r, acme",
+                                    "events": {"review": {"on": False},
+                                               "ci_failed": {"on": True, "do": "  fix it  "}}}})
+    trigger.save_config({"github": {"events": {"review": {"do": "tell me"}}}})
+    raw = json.loads(trigger.config_path().read_text())
+    ev = trigger.config_summary(trigger.load_config())["github"]["events"]
+    ck("github events merge per kind and per field",
+       raw["github"]["events"]["review"] == {"on": False, "do": "tell me"}
+       and ev["ci_failed"] == {"on": True, "do": "fix it"} and ev["mention"]["on"] is True
+       and raw["github"]["repos"] == ["o/r", "acme"])
+    ck("a fine-grained token is accepted and never shown",
+       "github_pat_abc" not in json.dumps(trigger.config_summary(trigger.load_config())))
     trigger.save_config({"bogus": 1, "slack": {"bogus": 2}})
     raw = json.loads(trigger.config_path().read_text())
     ck("an unknown key is not written", "bogus" not in raw and "bogus" not in raw.get("slack", {}))
@@ -755,8 +982,10 @@ def main():
         test_loops(cfg)
         test_audit(cfg)
         test_dispatch(cfg)
+        test_logging(cfg)
         test_slack_catch_up(cfg)
         test_jira(cfg)
+        test_github(cfg)
         test_check(cfg)
         test_channels(cfg)
         test_notices(cfg)

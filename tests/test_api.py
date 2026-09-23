@@ -820,6 +820,16 @@ def test_trigger_routes(s: Server):
                                                 {"jira": {"poll_seconds": 2}}), 400, "from 15"))
     ck("so is a config that is not an object",
        s.post("/api/trigger-config", raw_body=b"[1]").status == 400)
+    c = s.post("/api/trigger-config", {"github": {"enabled": True, "token": "ghp_secret-gh",
+                                                  "events": {"ci_failed": {"on": True}}}})
+    ck("trigger-config takes the GitHub section and its events",
+       c.status == 200 and c.json()["config"]["github"]["events"]["ci_failed"]["on"] is True
+       and b"ghp_secret-gh" not in c.raw, str(c.raw[:200]))
+    k = s.post("/api/trigger-check", {"only": "github", "offline": True}).json()
+    ck("trigger-check knows GitHub", k.get("ok") and k["target"] == "github" and k["ready"],
+       str(k)[:200])
+    ck("a GitHub PR is a conversation the gate keeps",
+       s.post("/api/trigger-gate", {"scope": "github:o/r#7", "enabled": True}).json().get("ok"))
     k = s.post("/api/trigger-check", {"only": "jira", "offline": True}).json()
     ck("trigger-check checks one service", k.get("ok") and k["target"] == "jira"
        and k["ready"] is True, str(k)[:200])

@@ -1,7 +1,9 @@
-# Triggers — summoning the brain from Slack and Jira
+# Triggers — summoning the brain from Slack, Jira and GitHub
 
 Mention the brain in a Slack thread or a Jira comment and it answers there, as
-you, without anyone opening Claude Code and pasting a link. Everything runs on
+you, without anyone opening Claude Code and pasting a link. On GitHub a mention
+of you works the same way, and so do the pull request changes you pick: a
+review on your PR, a review request, failing checks, a merge. Everything runs on
 your own machine. Nothing is exposed to the internet, and no bot ever speaks.
 
 This page is the design and the reference. Setup is in
@@ -14,8 +16,10 @@ This page is the design and the reference. Setup is in
 Slack (Socket Mode) ──┐                                 ┌─► your MCPs (Slack, Jira, Gmail, Drive)
   app_mention events  │                                 │   authenticated as YOU
                       ├─► trigger engine ─► claude -p ──┤
-Jira (HTTP polling) ──┘   (inside serve.py)  headless,  └─► the `respond` skill:
+Jira (HTTP polling) ──┤   (inside serve.py)  headless,  └─► the `respond` skill:
   comments w/ marker      │                  one per        rules → act → reply → sign
+GitHub (HTTP polling) ┘   │                  event
+  mentions, PR changes    │
                           │                  mention
                           ▼
                   graph.db: request log, actions, gates, checkpoints
@@ -46,9 +50,11 @@ A conversation is **closed until you open it**.
 | you (the owner) | anywhere | runs, and that conversation is **enabled** from then on |
 | someone else | an enabled conversation | runs |
 | someone else | not enabled | **refused**: nothing runs, and one short notice says so |
+| GitHub: a change you switched on | anywhere the token sees | runs, **as a subscription**. It opens nothing for anyone else |
 
 A conversation is a Slack thread (`slack:<channel>:<thread_ts>`), a Jira issue
-(`jira:<KEY>`), or a **whole Slack channel**. Threads and issues are opened by
+(`jira:<KEY>`), a GitHub pull request or issue (`github:<owner>/<repo>#<n>`), or a
+**whole Slack channel**. Threads and issues are opened by
 your own mention and live in `trigger_gate`. Whole channels are a list you keep
 by hand, in `trigger_channel`: an open channel runs everyone's mentions in every
 thread. Both are in `graph.db`, so they survive restarts.
@@ -174,6 +180,78 @@ the brain" — e.g. `@Your Name @brain can you move this to review?`.
 It is plain HTTPS with an API token, so it is stdlib and can also run without the
 server: `python3 scripts/trigger.py poll-jira` does one pass (useful from cron).
 
+### GitHub — polling
+
+GitHub is polled like Jira, with a token you add in Settings. There is no app
+and no webhook, so nothing needs a public endpoint.
+
+**What it notices.** Each kind is its own switch, and each carries the
+instruction the session gets when it happens (`do`). Change both in
+Settings → Triggers → GitHub.
+
+| Kind | When | On by default |
+|---|---|---|
+| `mention` | someone writes `@you` in a comment, a review, a line comment or a description, on a PR or an issue | yes |
+| `review_requested` | someone asks you to review a PR | yes |
+| `review` | someone reviews **your** PR (approved, changes requested, commented) | yes |
+| `comment` | any new comment on your PR, mention or not | no |
+| `pushed` | new commits on a PR you are involved in but did not open; one event per push | no |
+| `ci_failed` | checks fail on your open PR; one event per head commit, however many checks fail. `cancelled` and `skipped` do not count | no |
+| `merged` | your PR is merged | no |
+| `closed` | your PR or issue is closed unmerged, by someone else | no |
+| `assigned` | someone assigns you a PR or an issue | no |
+
+**The default instructions only write to the brain.** They add a task or a note
+("add a task to my brain listing each change asked for") and say *post nothing
+on GitHub*. An answer on GitHub is something you ask for by rewriting the
+instruction, never a default. A `mention` has no default instruction: the
+comment is the request, and it is answered with a comment, like a Jira mention.
+
+**Your own comments.** A comment of yours carrying the marker (default
+`/brain`, which is not an `@word`, so nobody gets pinged) runs, and it opens
+that PR to everyone's mentions, like your mention in a Slack thread does. Your
+comments without it are ignored.
+
+**Who counts: `trusted_associations`.** A switch runs for comments from
+`OWNER`, `MEMBER` and `COLLABORATOR` by default, the `author_association` GitHub
+gives every comment. A stranger on a public repo who mentions you does not get a
+session with your MCPs. Their mention goes to the gate like any other: it runs
+in a PR you opened, and is refused elsewhere. For a change with no comment of
+its own (a review request, a push), the PR author's association decides.
+
+**Refusing is quiet.** On GitHub a refusal would be a public comment, and people
+mention each other there all day for human reasons. So a refused GitHub mention
+is logged and nothing is posted, unless `github.refusal_notice` is on. Then the
+not-enabled notice goes out as a comment, once per PR, as with Jira.
+
+**How a pass works:**
+
+- Every `poll_seconds` (default 120) it searches `involves:<you> updated:>=<since>`,
+  plus `review-requested:<you>` when that kind is on and `reviewed-by:<you>` when
+  `pushed` is. `repos` narrows all of them: `owner/name` for one repo, a bare
+  name for a whole org.
+- For each hit it reads the timeline (`/issues/<n>/timeline`), which has the
+  comments, reviews, line comments, requests, commits, merges and closes, each
+  with its time. Only what happened since the checkpoint counts.
+- `ci_failed` reads your open PRs every pass (up to 30), whatever the window,
+  because a check finishing does not change a PR's `updated`. For each it reads
+  the head commit's check runs.
+- Everything found is handled oldest first, across PRs. The checkpoint and the
+  catch-up cap (`max_catchup_hours`) work as they do for Jira, and so does the
+  two-minute margin. `(source, event_id)` keeps an overlapping poll from running
+  anything twice.
+- The brain's own signed comments are ignored, so its answers never trigger it.
+
+A subscription's session is told that it is not answering anyone. It gets
+`github_event: <kind>` and `instructions: <do>`, and posts on GitHub only if the
+instruction says to. It reads the PR with `gh` or a GitHub MCP, **with the
+session's own GitHub auth**, not the polling token, so the polling token can
+stay read-only.
+
+GitHub Enterprise: set `api_url` to `https://<host>/api/v3`.
+
+`python3 scripts/trigger.py poll-github` does one pass without the server.
+
 ### The headless session
 
 Each allowed mention runs:
@@ -189,8 +267,9 @@ prompt. The prompt carries the three things the session cannot work without:
 - **the text** of the mention,
 - **the permalink** to that exact message or comment — the session reads the
   thread or issue from there with its own MCP, instead of being handed a channel,
-- **the source** (`slack` or `jira`), which decides the reply convention: a
-  thread reply, or a comment on the issue.
+- **the source** (`slack`, `jira` or `github`), which decides the reply
+  convention: a thread reply, or a comment on the issue or PR. A GitHub
+  subscription has none by default: it does what its instruction says.
 
 It also carries the request id, in the prompt and as `$MEMORY_LEDGER_REQUEST_ID`,
 tells the session to use the [`respond`](../skills/respond/SKILL.md) skill, to
@@ -210,7 +289,7 @@ Two tables in `graph.db`, and one node per request:
 
 | Where | What |
 |---|---|
-| `trigger_request` | one row per mention noticed: `id` (UUID), `source`, `event_id`, `scope`, requester id and name, permalink, text, `received_at`, `status` (`queued` → `running` → `done` / `declined` / `failed` / `timeout` / `interrupted`, or `refused`), exit code, result, cost |
+| `trigger_request` | one row per mention or GitHub event noticed: `id` (UUID), `source`, `event_id`, `scope`, requester id and name, permalink, text, `received_at`, `status` (`queued` → `running` → `done` / `declined` / `failed` / `timeout` / `interrupted`, or `refused`), exit code, result, cost |
 | `trigger_action` | append-only: every action taken for a request — `kind` (`reply`, `reply-dm`, `declined`, `refusal-notice`, `refusal-notice-dm`, `jira-transition`, …), `target`, `detail`, `at` |
 | `trigger_channel` | the Slack channels open to everyone, with who opened and closed each and when. Closed ones are kept |
 | a `request` node | the same request in the graph, so `recall "who asked me to …"` finds it, and it mirrors to neo4j like any other node |
@@ -227,13 +306,36 @@ python3 scripts/trigger.py show --id <request-id>
 
 or `GET /api/trigger` and `GET /api/trigger-request?id=` on a running server.
 
+### The server log
+
+The audit log is the record. The server log is what you watch: one line per
+event, on the server's stderr and in `<home>/logs/trigger.log` (rotated at 2 MB,
+three kept).
+
+```
+2026-09-23 18:39:06 INFO    trigger  triggers running — sources: slack, jira (poll 60s); up to 3 sessions at once; log: ~/.second_brain/logs/trigger.log
+2026-09-23 18:39:07 INFO    trigger  slack: connected
+2026-09-23 18:39:40 INFO    trigger  new request 0a255d52-6c1e-4f0b-9a57-2f3e8d41c9b0  slack slack:C1:650.1 from Ana (owner): 'summarise this'  -> queued (owner)
+2026-09-23 18:39:40 INFO    trigger  task 0a255d52-6c1e-4f0b-9a57-2f3e8d41c9b0 started  slack slack:C1:650.1 from Ana
+2026-09-23 18:40:52 INFO    trigger  task 0a255d52-6c1e-4f0b-9a57-2f3e8d41c9b0 done  in 72s, exit 0, $0.14
+2026-09-23 18:41:03 INFO    trigger  new request aa92e015-3b7d-4e62-8f10-5c9a2d7e6b41  slack slack:C9:650.2 from Bo: 'hi'  -> refused: conversation not enabled, notice sent
+```
+
+It logs the state on every start, restart and stop (or why the triggers are not
+running), each new request with its decision, the start and end of each task
+(the headless session), and a watcher that changes state or hits a new error.
+A mention seen before and a poll that went like the last one are not logged.
+The id is the request id, so `trigger.py show --id` takes it as it is. The
+CLI logs nothing: only the server attaches the log.
+
 ## Setting it up
 
 All of it is **per person** and lives in the brain home, never in this repo:
 `<home>/trigger.json`, written mode 600 because it may hold tokens.
 
 **The easy way is the web UI: Settings → Triggers.** It has a master switch, and
-one panel each for Slack, Jira and Claude. Each panel has its own on/off switch,
+one panel each for Slack, Jira, GitHub and Claude. The GitHub panel also lists
+every event kind, each with its switch and its instruction. Each panel has its own on/off switch,
 its fields, a **Save** and a **Check** that proves the stored tokens against the
 real service without starting anything. Saving restarts the watchers on the new
 file, so a switch flipped there takes effect at once. Tokens are write-only: the
@@ -276,6 +378,21 @@ The file itself, for editing by hand or scripting:
     "poll_seconds": 60,
     "jql": "",
     "max_catchup_hours": 72
+  },
+  "github": {
+    "enabled": true,
+    "api_url": "https://api.github.com",
+    "login": "",
+    "marker": "/brain",
+    "poll_seconds": 120,
+    "repos": ["acme/api", "acme"],
+    "trusted_associations": ["OWNER", "MEMBER", "COLLABORATOR"],
+    "refusal_notice": false,
+    "max_catchup_hours": 72,
+    "events": {
+      "review": {"on": true, "do": "Add a task to my brain listing each change asked for."},
+      "ci_failed": {"on": true, "do": "Read the failing log and add a task with the fix."}
+    }
   }
 }
 ```
@@ -290,6 +407,7 @@ from the page, and the page says so:
 | Slack bot token (`xoxb-…`, reads only) | `MEMORY_LEDGER_SLACK_BOT_TOKEN` | `slack.bot_token` |
 | Slack user token (`xoxp-…`, **optional**: posts refusal notices directly; without it they go through your Slack MCP). Needs `chat:write` and `im:write` for the DM fallback | `MEMORY_LEDGER_SLACK_USER_TOKEN` | `slack.user_token` |
 | Jira API token | `MEMORY_LEDGER_JIRA_TOKEN` | `jira.token` |
+| GitHub token (`github_pat_…` fine-grained, or `ghp_…` classic). Read: Pull requests, Issues, Checks, Metadata (classic: `repo`). Write to issues and PRs only for `refusal_notice` | `MEMORY_LEDGER_GITHUB_TOKEN` | `github.token` |
 
 - `signature` — `{owner}` is the brain's `owner` setting. Keep it distinctive: it
   is also the loop guard.
@@ -300,6 +418,9 @@ from the page, and the page says so:
   from the UI or `trigger.py channels`.
 - `jira.owner_account_id` — left empty, it is looked up once (`/myself`).
 - `jira.jql` — ANDed onto the search, e.g. `project in (PROJ, OPS)`.
+- `github.login` — left empty, it is looked up once (`/user`).
+- `github.events` — only the kinds you name change; the rest keep their
+  defaults. See [GitHub — polling](#github--polling).
 - `claude.mcp_config` — the MCP servers the session may use. Empty means the
   ones Claude Code would load anyway.
 
@@ -308,11 +429,14 @@ Then:
 1. Create the Slack app (Socket Mode on, the scopes above, `app_mention` event
    subscription), install it to the workspace — that may need a workspace admin.
 2. Invite it to the channels where it should listen.
-3. **Check** each service in Settings → Triggers, or
-   `python3 scripts/trigger.py check [--only slack|jira|claude]`. It validates
-   the file, calls Slack and Jira with the tokens, and runs `claude --version`,
+3. For GitHub, create a token (fine-grained, read-only is enough; see the
+   secrets table), paste it in Settings → Triggers → GitHub, and switch on the
+   events you want.
+4. **Check** each service in Settings → Triggers, or
+   `python3 scripts/trigger.py check [--only slack|jira|github|claude]`. It validates
+   the file, calls Slack, Jira and GitHub with the tokens, and runs `claude --version`,
    without starting anything.
-4. `python3 scripts/serve.py` — the watchers start with the server.
+5. `python3 scripts/serve.py` — the watchers start with the server.
    `--no-trigger` keeps them off; `--no-write` does too, since a read-only server
    must not be acting on your behalf.
 
@@ -325,12 +449,20 @@ Then:
   crosses to an outward surface without your say-so
   (`rule_user_nothing-personal-goes-out-without-explic` in a brain that has it).
   Open channels deliberately, not by habit.
+- **On GitHub, text from strangers.** A public repo lets anyone comment, and a
+  PR description or a review is input to the session like a mention is.
+  `trusted_associations` keeps the switches to members and collaborators, the
+  gate keeps everyone else to PRs you opened, and the default instructions post
+  nothing on GitHub.
 - **It acts while you are away.** That is the point; the audit log is what makes
   it answerable afterwards.
 - **Tokens on disk.** Prefer the env vars; the file is mode 600 either way.
 
 ## Not done yet
 
+- GitHub webhooks. Polling is slower (a minute or two), but it needs no public
+  endpoint.
+- GitHub team review requests: only a request for you by name counts.
 - A dedicated Jira bot user, so a mention does not have to be of you.
 - A full Requests view in the web UI. Settings → Triggers lists only the newest
   five; `trigger.py requests` and `show` have the rest.

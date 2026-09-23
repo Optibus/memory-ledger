@@ -178,7 +178,8 @@ class Backup(Body):
 
 # ---------------------------------------------------------------- trigger
 class TriggerGate(Body):
-    scope: Text = T("`slack:<channel>`, `slack:<channel>:<thread_ts>` or `jira:<ISSUE-KEY>`.")
+    scope: Text = T("`slack:<channel>`, `slack:<channel>:<thread_ts>`, `jira:<ISSUE-KEY>` "
+                    "or `github:<owner>/<repo>#<number>`.")
     enabled: Any = Field(None, description="true opens the conversation to other people's "
                                            "mentions, false closes it again.")
 
@@ -205,6 +206,10 @@ class TriggerConfig(Body):
     jira: _obj = Field(None, description="`enabled`, `base_url`, `email`, `owner_account_id`, "
                                          "`marker`, `poll_seconds`, `jql`, `max_catchup_hours`, "
                                          "and the write-only `token`.")
+    github: _obj = Field(None, description="`enabled`, `api_url`, `login`, `marker`, "
+                                           "`poll_seconds`, `repos`, `trusted_associations`, "
+                                           "`refusal_notice`, `max_catchup_hours`, `events` "
+                                           "(`{kind: {on, do}}`), and the write-only `token`.")
     clear: Optional[list[LooseStr]] = Field(None, description="Secrets to remove, e.g. "
                                                               "`[\"slack.user_token\"]`.")
 
@@ -223,7 +228,7 @@ class TriggerDecline(Body):
 
 
 class TriggerCheck(Body):
-    only: Text = T("`claude`, `slack` or `jira`; empty checks everything switched on.")
+    only: Text = T("`claude`, `slack`, `jira` or `github`; empty checks everything switched on.")
     offline: Any = Field(False, description="true skips the calls to Slack and Jira.")
 
 

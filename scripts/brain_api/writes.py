@@ -493,8 +493,8 @@ def trigger_config(data: m.TriggerConfig = body(m.TriggerConfig)):
 
 
 @router.post("/trigger-check", tags=["trigger"], summary="Check that a service is ready",
-             description="Validates the configuration, and unless `offline`, calls Slack and "
-                         "Jira with the stored tokens to prove they work. Starts nothing and "
+             description="Validates the configuration, and unless `offline`, calls Slack, "
+                         "Jira and GitHub with the stored tokens to prove they work. Starts nothing and "
                          "writes nothing. `ready` is the verdict; `ok` means the check ran.")
 def trigger_check(data: m.TriggerCheck = body(m.TriggerCheck)):
     return reply(trigger.check(trigger.load_config(), offline=data.offline is True,

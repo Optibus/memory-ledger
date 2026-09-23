@@ -2,9 +2,11 @@ import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { api } from "@/api/client";
 import { useAsync } from "@/hooks/useAsync";
-import { Badge, Button, Card, Checkbox, Field, Spinner, StatusMessage, TextInput } from "@/components";
+import { Badge, Button, Card, Checkbox, Field, Spinner, StatusMessage, TextArea, TextInput } from "@/components";
 import type { BadgeTone } from "@/components";
 import type {
+  GitHubEventKind,
+  GitHubEventSetting,
   TriggerChannelRow,
   TriggerChannels,
   TriggerCheck,
@@ -19,7 +21,7 @@ import "./SettingsSection.css";
 type Out = { text: string; tone: "info" | "error" | "success" } | null;
 
 /**
- * Summoning the brain from Slack and Jira (docs/trigger.md).
+ * Summoning the brain from Slack, Jira and GitHub (docs/trigger.md).
  *
  * Everything here writes `<home>/trigger.json` through the server, which
  * restarts its watchers on the new file — so a switch flipped here is a watcher
@@ -50,8 +52,9 @@ export function TriggerCard({ writable }: { writable: boolean }) {
       </h2>
       <p className="ml-settings__hint">
         Mention the brain in a Slack thread, or in a Jira comment that mentions you with the marker,
-        and a headless Claude Code session answers there as you, signed as your second brain. Only
-        conversations you opened with your own mention accept anyone else&rsquo;s. Saved to{" "}
+        and a headless Claude Code session answers there as you, signed as your second brain. On
+        GitHub, the pull request changes you pick below start one too. Only conversations you opened
+        with your own mention accept anyone else&rsquo;s. Saved to{" "}
         <code>{config.path}</code>, mode 600.
       </p>
 
@@ -73,6 +76,7 @@ export function TriggerCard({ writable }: { writable: boolean }) {
         onSaved={reload}
       />
       <JiraPanel config={config} watcher={runtime.jira} writable={writable} onSaved={reload} />
+      <GitHubPanel config={config} watcher={runtime.github} writable={writable} onSaved={reload} />
       <ClaudePanel config={config} writable={writable} onSaved={reload} />
       <Recent status={status.data} />
 
@@ -579,6 +583,165 @@ function JiraPanel({
   );
 }
 
+/** The GitHub events, in the order the panel lists them, and how each reads. */
+const GITHUB_EVENTS: { kind: GitHubEventKind; label: string; hint: string }[] = [
+  { kind: "mention", label: "You are @mentioned", hint: "In a comment, a review or a description, on a pull request or an issue. The comment is the request; the instruction below is optional." },
+  { kind: "review_requested", label: "Your review is requested", hint: "Someone asks you to review a pull request." },
+  { kind: "review", label: "Your pull request is reviewed", hint: "Approved, changes requested, or commented." },
+  { kind: "comment", label: "A comment on your pull request", hint: "Any new comment or line comment, mention or not." },
+  { kind: "pushed", label: "New commits on a pull request you review", hint: "One event per push, not per commit." },
+  { kind: "ci_failed", label: "Checks fail on your pull request", hint: "One event per commit, however many checks fail. Cancelled and skipped do not count." },
+  { kind: "merged", label: "Your pull request is merged", hint: "" },
+  { kind: "closed", label: "Your pull request is closed unmerged", hint: "By someone else." },
+  { kind: "assigned", label: "You are assigned", hint: "A pull request or an issue." },
+];
+
+const list = (v: string) =>
+  v
+    .split(/[\s,]+/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+
+function GitHubPanel({
+  config,
+  watcher,
+  writable,
+  onSaved,
+}: {
+  config: TriggerConfig;
+  watcher: TriggerWatcher;
+  writable: boolean;
+  onSaved: () => void;
+}) {
+  const g = config.github;
+  const { busy, out, save } = useSave(onSaved);
+  const [apiUrl, setApiUrl] = useState(g.api_url ?? "");
+  const [login, setLogin] = useState(g.login ?? "");
+  const [marker, setMarker] = useState(g.marker ?? "");
+  const [poll, setPoll] = useState(String(g.poll_seconds ?? 120));
+  const [catchUp, setCatchUp] = useState(String(g.max_catchup_hours ?? 72));
+  const [repos, setRepos] = useState((g.repos ?? []).join(", "));
+  const [trusted, setTrusted] = useState((g.trusted_associations ?? []).join(", "));
+  const [notice, setNotice] = useState(!!g.refusal_notice);
+  const [events, setEvents] = useState(g.events);
+  const [token, setToken] = useState("");
+  useEffect(() => {
+    setApiUrl(g.api_url ?? "");
+    setLogin(g.login ?? "");
+    setMarker(g.marker ?? "");
+    setPoll(String(g.poll_seconds ?? 120));
+    setCatchUp(String(g.max_catchup_hours ?? 72));
+    setRepos((g.repos ?? []).join(", "));
+    setTrusted((g.trusted_associations ?? []).join(", "));
+    setNotice(!!g.refusal_notice);
+    setEvents(g.events);
+  }, [g.api_url, g.login, g.marker, g.poll_seconds, g.max_catchup_hours, g.repos, g.trusted_associations, g.refusal_notice, g.events]);
+
+  const setEvent = (kind: GitHubEventKind, patch: Partial<GitHubEventSetting>) =>
+    setEvents((cur) => ({ ...cur, [kind]: { ...cur[kind], ...patch } }));
+
+  const submit = async () => {
+    const github: Record<string, unknown> = {
+      api_url: apiUrl,
+      login,
+      marker,
+      poll_seconds: Number(poll),
+      max_catchup_hours: Number(catchUp),
+      repos: list(repos),
+      trusted_associations: list(trusted).map((x) => x.toUpperCase()),
+      refusal_notice: notice,
+      events,
+    };
+    if (token) github.token = token;
+    if (await save({ github }, "GitHub saved.")) setToken("");
+  };
+
+  const on = GITHUB_EVENTS.filter((e) => events[e.kind]?.on).length;
+  return (
+    <Panel
+      title="GitHub"
+      service="github"
+      watcher={watcher}
+      switchLabel="Poll GitHub"
+      switchHint="Reads the pull requests and issues you are involved in on a timer, with your token. Nothing is exposed; nothing is posted unless an instruction asks for it."
+      enabled={g.enabled}
+      writable={writable}
+      busy={busy}
+      onToggle={(v) => save({ github: { enabled: v } }, v ? "GitHub polling on." : "GitHub polling off.")}
+      onSave={submit}
+      out={out}
+      after={
+        <div className="ml-trigger__events" role="group" aria-label="GitHub events">
+          <h4 className="ml-trigger__events-h">
+            What starts the flow <Badge tone={on ? "accent" : "neutral"}>{on}</Badge>
+          </h4>
+          <p className="ml-settings__hint">
+            Your own comment with the marker always runs, and opens that pull request to everyone&rsquo;s
+            mentions. Each change below is its own switch, with what the brain does when it happens.
+          </p>
+          {GITHUB_EVENTS.map((e) => {
+            const ev = events[e.kind] ?? { on: false, do: "" };
+            return (
+              <div key={e.kind} className="ml-trigger__event">
+                <Checkbox
+                  label={e.label}
+                  checked={ev.on}
+                  disabled={!writable || busy}
+                  onChange={(v) => setEvent(e.kind, { on: v })}
+                />
+                {e.hint ? <p className="ml-settings__hint ml-settings__hint--switch">{e.hint}</p> : null}
+                {ev.on ? (
+                  <Field label="What the brain does" hint={e.kind === "mention" ? "Optional: how to handle a mention, on top of what it asks." : "The instruction the session gets."}>
+                    {(id) => (
+                      <TextArea
+                        id={id}
+                        rows={2}
+                        value={ev.do}
+                        disabled={!writable}
+                        onChange={(x) => setEvent(e.kind, { do: x.target.value })}
+                      />
+                    )}
+                  </Field>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      }
+    >
+      <SecretField
+        label="Token"
+        secret={config.secrets["github.token"]}
+        value={token}
+        onChange={setToken}
+        onRemove={() => save({ clear: ["github.token"] }, "Removed github.token.")}
+        writable={writable}
+        placeholder="github_pat_… or ghp_…"
+        hint="A fine-grained token with read access to Pull requests, Issues, Checks and Metadata, or a classic one with repo. Write access only if refusal comments are on."
+      />
+      {txt("Your login", login, setLogin, "Left empty, it is looked up from the token.", "optional")}
+      {txt("Marker", marker, setMarker, "Put it in your own comment to hand that pull request to the brain. Not an @word: that would ping someone.", "/brain")}
+      {txt("Repositories", repos, setRepos, "owner/name for one repo, a bare name for a whole org, comma-separated. Empty is everything the token sees.", "acme/api, acme")}
+      {txt("Trusted", trusted, setTrusted, "Whose comments a switch below runs for. Anyone else only in a pull request you opened.", "OWNER, MEMBER, COLLABORATOR")}
+      {num("Poll every (seconds)", poll, setPoll, "30 to 3600. GitHub's search allows about 30 a minute.", 30, 3600)}
+      {num("Catch-up limit (hours)", catchUp, setCatchUp, "After a long gap, look back no further than this.", 1, 720)}
+      {txt("API URL", apiUrl, setApiUrl, "Change only for GitHub Enterprise: https://your-host/api/v3.", "https://api.github.com")}
+      <div className="ml-settings__switch">
+        <Checkbox
+          label="Comment when refusing"
+          checked={notice}
+          disabled={!writable || busy}
+          onChange={setNotice}
+        />
+        <p className="ml-settings__hint ml-settings__hint--switch">
+          Off, a mention the brain may not run is only logged. On, it gets the not-enabled notice as a
+          public comment, once per pull request.
+        </p>
+      </div>
+    </Panel>
+  );
+}
+
 function ClaudePanel({
   config,
   writable,
@@ -629,7 +792,7 @@ function ClaudePanel({
       out={out}
     >
       {txt("Command", bin, setBin, "The claude binary each mention runs as `claude -p`.", "claude")}
-      {txt("MCP config", mcp, setMcp, "The MCP servers the session may use: your Slack, Jira, Gmail, Drive. Empty uses what Claude Code loads anyway.", "~/.second_brain/trigger-mcp.json")}
+      {txt("MCP config", mcp, setMcp, "The MCP servers the session may use: your Slack, Jira, GitHub, Gmail, Drive. Empty uses what Claude Code loads anyway.", "~/.second_brain/trigger-mcp.json")}
       {txt("Notice model", noticeModel, setNoticeModel, "The small model that translates a refusal notice. Only used with a Slack user token or on Jira; without a token the notice session does it.", "haiku")}
       {num("Timeout (seconds)", timeout, setTimeoutS, "A session running longer is killed and marked timeout.", 30, 7200)}
       {num("At once", concurrent, setConcurrent, "How many mentions may run at the same time.", 1, 16)}

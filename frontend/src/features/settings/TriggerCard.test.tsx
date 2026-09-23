@@ -214,4 +214,37 @@ describe("Triggers", () => {
     const list = await screen.findByRole("list", { name: "recent requests" });
     expect(within(list).getByText(/Isadora: can you summarise this thread/)).toBeInTheDocument();
   });
+
+  it("has a GitHub panel with its own switch and a write-only token", async () => {
+    const { user } = renderApp(<TriggerCard writable />, { route: "/settings" });
+    const gh = await panel("GitHub");
+    await user.click(gh.getByRole("checkbox", { name: "Poll GitHub" }));
+    await waitFor(() => expect(sent()).toContainEqual({ github: { enabled: true } }));
+    await user.type(gh.getByLabelText(/^Token/), "github_pat_new");
+    await user.click(gh.getByRole("button", { name: "Save GitHub" }));
+    await waitFor(() => expect(sent()).toHaveLength(2));
+    const body = sent()[1].github as Record<string, unknown>;
+    expect(body.token).toBe("github_pat_new");
+    expect(body.repos).toEqual(["acme/api"]);
+  });
+
+  it("picks which GitHub changes start the flow, each with its instruction", async () => {
+    const { user } = renderApp(<TriggerCard writable />, { route: "/settings" });
+    const events = within(await screen.findByRole("group", { name: "GitHub events" }));
+    expect(events.queryAllByLabelText("What the brain does")).toHaveLength(3);
+    await user.click(events.getByRole("checkbox", { name: "Checks fail on your pull request" }));
+    await user.click(events.getByRole("checkbox", { name: "Your pull request is reviewed" }));
+    const boxes = events.getAllByLabelText("What the brain does");
+    expect(boxes).toHaveLength(3);
+    const ci = boxes[boxes.length - 1];
+    expect(ci).toHaveValue("Find the likely cause.");
+    await user.clear(ci);
+    await user.type(ci, "Fix it and push.");
+    await user.click((await panel("GitHub")).getByRole("button", { name: "Save GitHub" }));
+    await waitFor(() => expect(sent()).toHaveLength(1));
+    const ev = (sent()[0].github as { events: Record<string, { on: boolean; do: string }> }).events;
+    expect(ev.ci_failed).toEqual({ on: true, do: "Fix it and push." });
+    expect(ev.review.on).toBe(false);
+    expect(ev.mention.on).toBe(true);
+  });
 });

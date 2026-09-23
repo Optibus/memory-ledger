@@ -1,6 +1,6 @@
 ---
 name: respond
-description: Answer a Slack or Jira mention as the brain, in a headless session started by the trigger engine. Use ONLY when the prompt carries a `request_id`, a `source` (slack | jira) and a `permalink` from `scripts/trigger.py` ("You were summoned by a mention"). Reads the conversation from the permalink, does what was asked within the brain's rules, logs every outward action against the request id, and replies in place signed as the second brain.
+description: Answer a Slack, Jira or GitHub mention as the brain, or act on a GitHub pull request change the owner subscribed to, in a headless session started by the trigger engine. Use ONLY when the prompt carries a `request_id`, a `source` (slack | jira | github) and a `permalink` from `scripts/trigger.py` ("You were summoned by a mention"). Reads the conversation from the permalink, does what was asked within the brain's rules, logs every outward action against the request id, and replies in place signed as the second brain.
 ---
 
 # respond
@@ -21,11 +21,19 @@ by the owner at an interactive prompt: that is an ordinary turn.
   `source`, `requester` and whether they are the owner, `where`, `permalink`,
   `reply_convention`, `signature`, and the message verbatim between the
   `<<<MESSAGE` fences.
-- **The owner's own MCP servers** for that source (Slack or Atlassian), plus
+- **A GitHub event**, when `source` is `github`: `github_event` names the kind
+  (`mention`, `review`, `ci_failed`, …) and `instructions` is what the owner
+  wants done for it. For every kind but `mention` it is not a message to answer:
+  do what `instructions` says, and post on GitHub only if they say to. The
+  `reply_convention` line says the same.
+- **The owner's own MCP servers** for that source (Slack or Atlassian; for
+  GitHub, `gh` or a GitHub MCP, with the session's own GitHub auth), plus
   whatever else the session was given (Gmail, Drive). They act as the owner.
 - **The conversation**, read from the permalink: the Slack thread
-  (`slack_read_thread`) or the Jira issue and its comments (`getJiraIssue`). The
-  mention alone is rarely the whole request.
+  (`slack_read_thread`), the Jira issue and its comments (`getJiraIssue`), or the
+  GitHub PR or issue (`gh pr view <url> --comments`, `gh pr diff`, and for a
+  failed check `gh run view --log-failed`). The mention alone is rarely the whole
+  request.
 - **The brain**: `recall` / `search` on what the conversation is about, so the
   answer builds on what is already known.
 - **The audit command**, printed in the prompt:
@@ -83,7 +91,9 @@ See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTION
   itself (`kind: reply`). An action that is not logged did not happen as far as
   the owner can tell.
 - **The reply is in place.** Slack: in the thread of the mentioning message.
-  Jira: a comment on the issue. Never a new channel message. The one exception:
+  Jira: a comment on the issue. GitHub: a comment on the PR or issue, for a
+  mention; for a subscribed change, wherever `instructions` says, which by
+  default is the brain only, with no reply at all. Never a new channel message. The one exception:
   when the owner cannot post in that channel (not in it, not found, out of
   reach), the reply went to the requester as a DM, with the permalink, logged as
   `reply-dm`.
@@ -98,7 +108,9 @@ See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTION
 ## Judged against
 
 - **`trigger.py show --id <request_id>` lists a `reply` action whose target is
-  the thread or issue** of the permalink.
+  the thread or issue** of the permalink. A GitHub subscription that posted
+  nothing lists what it wrote to the brain instead (`kind: brain-task`,
+  `brain-note`, …).
 - **Every other outward action in the transcript has a matching action row.**
 - **The reply's last line is the signature, character for character.** Without
   it, the loop guard cannot recognise the brain's own words, and the owner's
@@ -119,7 +131,9 @@ See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTION
 - **Must not do anything destructive or irreversible** (deleting, closing
   someone else's issue, bulk edits) for a requester who is not the owner. Reply
   that the owner has to confirm it.
-- **Must not repeat the Jira marker or mention the bot in the reply.** The brain
+- **Must not post on GitHub for a subscribed change unless `instructions` say
+  to.** A review, a push or a failed check is not someone asking for an answer.
+- **Must not repeat the Jira or GitHub marker, or mention the bot, in the reply.** The brain
   answering itself is a loop the signature guard should never have to catch.
 - **Must not reply twice.** One reply per request; follow-ups go in the same one.
   A DM sent because the thread was out of reach is that one reply, not a second.

@@ -2,7 +2,7 @@
 
 Everything that decides, logs and dispatches is in `scripts/trigger.py`, which
 is stdlib. This module only owns what the server has and the engine may not:
-the Slack Socket Mode websocket (`slack_sdk`), the Jira poll loop's thread, and
+the Slack Socket Mode websocket (`slack_sdk`), the Jira and GitHub poll loops, and
 the pool the headless sessions run on — so several mentions run at once
 without a watcher waiting on any of them.
 
@@ -15,11 +15,12 @@ from __future__ import annotations
 
 import threading
 import time
-import traceback
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 import trigger
+
+log = trigger.log
 
 # While the socket is up every mention arrives live, so the Slack checkpoint
 # can follow the clock. It trails by a margin, so a mention in flight at the
@@ -37,7 +38,8 @@ _stop = threading.Event()
 _pool: ThreadPoolExecutor | None = None
 _slack_client = None
 STATE: dict = {"running": False, "reason": "not started", "started_at": "",
-               "slack": {"state": "off"}, "jira": {"state": "off"}, "recovered": {}}
+               "slack": {"state": "off"}, "jira": {"state": "off"}, "github": {"state": "off"},
+               "recovered": {}}
 
 
 def _now() -> str:
@@ -46,7 +48,27 @@ def _now() -> str:
 
 def _note(source: str, **fields) -> None:
     with _lock:
-        STATE[source] = {**STATE.get(source, {}), **fields, "at": _now()}
+        before = STATE.get(source, {})
+        STATE[source] = {**before, **fields, "at": _now()}
+    # A change of state, or a new error, is worth a line; a poll that went as
+    # the last one did is not.
+    state, err = fields.get("state"), fields.get("last_error")
+    if state and state != before.get("state"):
+        (log.warning if state in ("erroring", "misconfigured", "unavailable") else log.info)(
+            "%s: %s%s", source, state, f" — {err}" if err else "")
+    elif err and err != before.get("last_error"):
+        log.warning("%s: %s", source, err)
+
+
+def _summary(cfg: dict, workers: int) -> str:
+    on = []
+    for src in trigger.SOURCES:
+        if not trigger.source_enabled(cfg, src):
+            continue
+        every = (cfg.get(src) or {}).get("poll_seconds")
+        on.append(f"{src} (poll {every}s)" if src != "slack" and every else src)
+    return (f"sources: {', '.join(on) or 'none'}; up to {workers} sessions at once; "
+            f"log: {trigger.log_path()}")
 
 
 def _dispatch(request_id: str) -> None:
@@ -65,14 +87,14 @@ def _deliver(request_id: str, body: str) -> None:
     try:
         trigger.deliver_notice(request_id, body)
     except Exception:
-        traceback.print_exc()
+        log.exception("notice for %s crashed", request_id)
 
 
 def _run(request_id: str) -> None:
     try:
         trigger.run_request(request_id)
     except Exception:
-        traceback.print_exc()
+        log.exception("task %s crashed", request_id)
 
 
 def status() -> dict:
@@ -89,15 +111,18 @@ def start(*, recovering: bool = True) -> None:
 
 def _start(recovering: bool) -> None:
     global _pool, _stop
+    trigger.setup_logging()
     cfg = trigger.load_config()
-    STATE.update(slack={"state": "off"}, jira={"state": "off"})
+    STATE.update(slack={"state": "off"}, jira={"state": "off"}, github={"state": "off"})
     if not cfg.get("enabled") or cfg.get("_problem"):
         STATE.update(running=False, reason=cfg.get("_problem") or "triggers are switched off")
+        log.info("triggers not running: %s", STATE["reason"])
         return
     _stop = threading.Event()
     workers = max(1, min(16, int((cfg.get("claude") or {}).get("max_concurrent") or 3)))
     _pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="trigger-run")
     STATE.update(running=True, reason="", started_at=_now())
+    log.info("triggers running — %s", _summary(cfg, workers))
     if recovering:
         # Only when the process starts. On a restart the sessions still
         # running belong to this very process and are not orphans.
@@ -105,6 +130,9 @@ def _start(recovering: bool) -> None:
     if trigger.source_enabled(cfg, "jira"):
         threading.Thread(target=_jira_loop, args=(cfg, _stop), daemon=True,
                          name="trigger-jira").start()
+    if trigger.source_enabled(cfg, "github"):
+        threading.Thread(target=_github_loop, args=(cfg, _stop), daemon=True,
+                         name="trigger-github").start()
     if trigger.source_enabled(cfg, "slack"):
         threading.Thread(target=_slack_main, args=(cfg, _stop), daemon=True,
                          name="trigger-slack").start()
@@ -129,6 +157,8 @@ def _stop_now() -> None:
         # outlives this process anyway. recover() marks it on the next start.
         _pool.shutdown(wait=False, cancel_futures=False)
         _pool = None
+    if STATE.get("running"):
+        log.info("triggers stopped")
     STATE.update(running=False, reason="stopped")
 
 
@@ -156,6 +186,24 @@ def _jira_loop(cfg: dict, stop_event: threading.Event) -> None:
                 _note("jira", state="misconfigured", last_error=res.get("error", ""))
         except Exception as e:
             _note("jira", state="erroring", last_error=str(e)[:300])
+        stop_event.wait(every)
+
+
+# ---------------------------------------------------------------- github
+def _github_loop(cfg: dict, stop_event: threading.Event) -> None:
+    every = max(30, int((cfg.get("github") or {}).get("poll_seconds") or 120))
+    gh = trigger.GitHub(cfg)
+    _note("github", state="polling", every_s=every)
+    while not stop_event.is_set():
+        try:
+            res = trigger.github_poll(cfg, _dispatch, gh=gh, notice=_notice)
+            if res.get("ok"):
+                _note("github", state="polling", last_ok=_now(), last_error="",
+                      last={k: res.get(k) for k in ("items", "seen", "handled", "first_run")})
+            else:
+                _note("github", state="misconfigured", last_error=res.get("error", ""))
+        except Exception as e:
+            _note("github", state="erroring", last_error=str(e)[:300])
         stop_event.wait(every)
 
 
