@@ -28,6 +28,7 @@ CAPTURE        RECALL          STATE            OUTWARD            META
 remember       recall         add-task         send-slack        learn-skill
 ingest-context visualize      complete-task     calendar          writing-style
 read-email     export-memory  follow-up         delegate
+                                                respond
 read-jira                     remind
 slack-inbox
 web-search
@@ -54,6 +55,7 @@ share is the graph, so the real coupling is in the read and write surfaces below
 | `recall` | none | `search`, `get-node`, `neighbors`, `list`, `due` |
 | `remember` | any node type + edges + `areas` | `search`, `areas` |
 | `remind` | `reminder`, `about` | `person.tz`, the routine store |
+| `respond` | `trigger_action` rows (copied onto the `request` node), plus what the requested work produces | `request`, `person`, `jira-issue`, `task`; the thread or issue through its MCP |
 | `send-slack` | `note` (optional) | `person` props (`slack`, `lang`), `writing-sample` |
 | `slack-inbox` | none directly | Slack |
 | `visualize` | none by the skill (the UI writes) | the whole graph |
@@ -72,6 +74,7 @@ skill offers, not a precondition it waits on.
 - `read-email`, `slack-inbox` and `read-jira` hand ingestible content to `ingest-context`.
 - `ingest-context` hands Gabriel's own action items to `add-task`.
 - `remind` fires a routine that reaches the person through `send-slack`.
+- `respond` enriches its answer through `recall`; it is started by the trigger engine (`scripts/trigger.py`), never by another skill.
 - `send-slack` drafts through `writing-style`.
 - `slack-inbox` routes each message to whichever skill matches its intent.
 

@@ -76,11 +76,12 @@ claude --plugin-dir ~/dev/memory-ledger
 |---|---|
 | `scripts/graph.py` | the engine — schema, commands, recall, consolidation (~2.6k lines) |
 | `scripts/brain_query.py` | read-only date views, no writes |
+| `scripts/trigger.py` | the Slack/Jira trigger engine — gate, audit log, checkpoints, Jira poll, `claude -p` dispatch ([triggers](docs/trigger.md)) |
 | `scripts/brain_sync.py` | one-shot backfill into neo4j |
 | `hooks/` | the three always-on hooks + `_capture.py` shared helpers |
 | `hooks/hooks.json` | which hook binds to which Claude Code event |
 | `scripts/serve.py` | the one command: builds the server's venv, the UI, and runs the app |
-| `scripts/brain_api/` | the FastAPI app — reads, writes, request models, the SPA fallback |
+| `scripts/brain_api/` | the FastAPI app — reads, writes, request models, the SPA fallback, and the trigger watchers (`trigger_runtime.py`, the one user of `slack_sdk`) |
 | `scripts/requirements-server.txt` | the server's pinned dependencies, and only the server's |
 | `frontend/src/` | the React SPA — map, dashboard, skills, settings |
 | `frontend/dist/` | its committed build, so `serve.py` needs no node |
@@ -138,6 +139,7 @@ python3 tests/test_api.py             # the HTTP API, pinned from the outside
 python3 tests/test_api_faults.py      # a handler that raises, a client that hangs up
 python3 tests/test_contracts.py       # contract shapes, bundles, the web routes
 python3 tests/test_traceability.py    # the tree, and hooks that must not block
+python3 tests/test_trigger.py         # the trigger engine, against fake Slack/Jira/claude
 cd frontend && npm test               # the UI: unit + integration
 ```
 

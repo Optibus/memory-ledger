@@ -176,6 +176,20 @@ class Backup(Body):
     label: Text = T("Default `manual`.")
 
 
+# ---------------------------------------------------------------- trigger
+class TriggerGate(Body):
+    scope: Text = T("`slack:<channel>`, `slack:<channel>:<thread_ts>` or `jira:<ISSUE-KEY>`.")
+    enabled: Any = Field(None, description="true opens the conversation to other people's "
+                                           "mentions, false closes it again.")
+
+
+class TriggerAction(Body):
+    request_id: Text = T("The request the action was taken for.")
+    kind: Text = T("What was done: `reply`, `jira-transition`, `slack-message`, ...")
+    target: Text = T("Where: a permalink, an issue key, a channel.")
+    detail: Text = T("What, in a sentence a person could audit.")
+
+
 # -------------------------------------------------------------- contracts
 _sections = Annotated[Optional[dict[str, Any]], BeforeValidator(_dict_or_none)]
 

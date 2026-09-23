@@ -350,7 +350,8 @@ def _watched() -> list[Path]:
     """This module, the API package, the engine modules it serves, the page."""
     out = [Path(__file__).resolve(), INDEX, REQUIREMENTS]
     out += sorted((HERE / "brain_api").glob("*.py"))
-    out += [HERE / "graph.py", HERE / "brain_query.py", HERE / "doctor.py"]
+    out += [HERE / "graph.py", HERE / "brain_query.py", HERE / "doctor.py",
+            HERE / "trigger.py", HERE / "_switch.py"]
     return out
 
 
@@ -414,6 +415,10 @@ def main():
                          "is, even if your own source is newer than it.")
     ap.add_argument("--rebuild", action="store_true",
                     help="rebuild the UI even when it looks current")
+    ap.add_argument("--no-trigger", action="store_true",
+                    help="do not start the Slack/Jira trigger watchers, even when "
+                         "<home>/trigger.json enables them (docs/trigger.md). "
+                         "--no-write implies this.")
     args = ap.parse_args()
 
     _enter_server_env()
@@ -431,6 +436,8 @@ def main():
     from brain_api.app import create_app
 
     state.WRITABLE = not args.no_write
+    # A read-only server must not be acting on its owner's behalf.
+    state.TRIGGERS = not (args.no_trigger or args.no_write)
     graph.connect().close()  # ensure the brain exists
 
     # Refresh BEFORE binding, so the browser opens on the page it will keep.

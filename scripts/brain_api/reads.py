@@ -15,8 +15,9 @@ from fastapi.responses import FileResponse, JSONResponse
 
 import brain_query
 import graph
+import trigger
 
-from . import commands, payloads, state
+from . import commands, payloads, state, trigger_runtime
 
 router = APIRouter(prefix="/api")
 
@@ -172,6 +173,23 @@ def timezones():
                         "`password_set` only.")
 def status():
     return payloads.status_payload()
+
+
+@router.get("/trigger", tags=["trigger"],
+            summary="Trigger watchers, config and the newest requests",
+            description="What `<home>/trigger.json` configures (never the tokens, only "
+                        "whether each is set), what the watchers in this process are "
+                        "doing, the request counts by status, the conversations enabled, "
+                        "and the newest requests.")
+def trigger_status(limit: int = Query(10, ge=1, le=200)):
+    return {**trigger.status_payload(limit), "runtime": trigger_runtime.status(),
+            "watching": state.TRIGGERS}
+
+
+@router.get("/trigger-request", tags=["trigger"],
+            summary="One request and every action taken for it")
+def trigger_request(id: str = Query("", description="The request id (UUID).")):
+    return trigger.request_detail(id)
 
 
 @router.get("/meta", tags=["vocabulary"], summary="The vocabulary, so no client hard-codes it",

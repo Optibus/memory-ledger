@@ -166,6 +166,20 @@ Two things worth getting right if you do this:
   `chmod 600`, and never paste the credentials into a command that gets saved (a
   shell history or a tool-permission allowlist counts as saved).
 
+### Optional: summon it from Slack and Jira
+
+A mention in a Slack thread, or a Jira comment that mentions you with a marker
+like `@brain`, can start a headless Claude Code session that answers there as
+you. It needs a Slack app in Socket Mode (listen-only, no `chat:write`), a Jira
+API token, and `<home>/trigger.json`; the watchers then run inside
+`scripts/serve.py`. Check a config without starting anything:
+
+```
+python3 scripts/trigger.py check
+```
+
+Setup, scopes and every key: [docs/trigger.md](docs/trigger.md#setting-it-up).
+
 ## 3. The on/off switch
 
 Enablement used to just mean "the home dir exists" — deleting `~/.second_brain`

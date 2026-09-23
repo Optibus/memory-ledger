@@ -159,6 +159,7 @@ off switch, since the bootstrap hook recreates it on the next session; see
 | `delegate` | Hand a task to a person/agent and track the follow-up. |
 | `writing-style` | Learn your voice and write as you, in your language, at the register the reader can act on. |
 | `export-memory` | Dump the whole graph to Markdown / JSON. |
+| `respond` | Answer a Slack or Jira mention as you, from a headless session the trigger engine starts ([triggers](docs/trigger.md)). |
 
 **Every skill is a contract, not a script** (CONVENTIONS §5). Each one declares
 what must be TRUE when it finishes, what it reads and writes in the graph, and
@@ -192,6 +193,11 @@ Front door in Claude Code: **`/ledger <anything>`** routes to all of the above.
 them into your calendar's free windows — batching by context and protecting one
 deep block, because the cheapest day is the one with the fewest re-entries, not
 the fullest one. Ends with one clear first action.
+**Mention it instead of opening it.** With `<home>/trigger.json` set up, a
+mention in a Slack thread or a marked Jira comment starts a headless session that
+answers there as you, signed as your second brain, and logs who asked for what
+under a request id. Closed conversations stay closed until you open them. See
+[docs/trigger.md](docs/trigger.md).
 **`/neo4j-up`** stands up the optional local graph database (Docker, one command,
 data under `~/.second_brain/neo4j`) and points the brain at it.
 

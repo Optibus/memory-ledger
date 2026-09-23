@@ -20,7 +20,12 @@ python3 scripts/serve.py                    # http://127.0.0.1:8770
 python3 scripts/serve.py --port 9000 --host 127.0.0.1
 python3 scripts/serve.py --no-write         # read-only
 python3 scripts/serve.py --no-open          # don't open a browser
+python3 scripts/serve.py --no-trigger       # don't start the Slack/Jira watchers
 ```
+
+When `<home>/trigger.json` enables them, the server also runs the
+[trigger](trigger.md) watchers for as long as it is up. `--no-trigger` keeps them
+off, and so does `--no-write`: a read-only server must not act on your behalf.
 
 ## The interactive reference
 
@@ -124,6 +129,8 @@ Every response is `Cache-Control: no-store`.
 | `/api/consolidate-preview?keep_days=N` | what a consolidation run **would** change. A read: it writes nothing |
 | `/api/backups` | the snapshots consolidation leaves behind, each with when it expires |
 | `/api/ui-prefs` | the browser's stored view state, and whether syncing it is on |
+| `/api/trigger?limit=N` | the [trigger](trigger.md) config (whether each token is set, never the token), what this process's watchers are doing, request counts by status, enabled conversations, and the newest requests |
+| `/api/trigger-request?id=<uuid>` | one request and every action taken for it |
 | `/api/<view>?<params>` | any `brain_query.py` view: `agenda`, `open`, `today`, `tomorrow`, `week`, `closed`, `range` |
 
 `/api/meta` exists so the UI never hardcodes vocabulary. Two of those sets are
@@ -198,6 +205,8 @@ since the dashboard lists tasks and a kind with none would be dead UI.
 | `/api/export-bundle` | `{skills[], rules[]}` | `graph.py export-bundle` — a selection as one zip under `<home>/bundles`; returns `path`, `name`, a `download` URL, and any required skill that did not travel |
 | `/api/upload-bundle` | `{filename, data}` | base64 zip, ≤32MB. Stages it and returns a one-shot `token` plus every item with `exists`. **Reads only — nothing is written** |
 | `/api/import-bundle` | `{token, select{id: update\|replace\|ignore}}` | applies the staged bundle in its plan's order and consumes it. An unmentioned item is created when new, untouched when it exists |
+| `/api/trigger-gate` | `{scope, enabled}` | opens (`true`) or closes a conversation to other people's mentions. `scope` is `slack:<channel>`, `slack:<channel>:<thread_ts>` or `jira:<KEY>`; anything else is refused. `enabled` must be a boolean |
+| `/api/trigger-action` | `{request_id, kind, target?, detail?}` | appends an action to a request's audit log (what `trigger.py action` does). Refused for an unknown request or an empty `kind` |
 | `/api/delete-contracts` | `{ids[], force?}` | `graph.py del-contracts` — deletes skill/rule nodes and their edges. A built-in is refused unless `force`, since its file would re-ingest it |
 
 ### Authoring contracts

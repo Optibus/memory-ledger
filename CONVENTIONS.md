@@ -939,6 +939,29 @@ cost.
 | Why was this in the context window? | `context-at --agent` |
 | Where were the tokens spent? | `tokens_*` on the turn, totalled on its agent |
 
+## 2l. Triggers — summoned from Slack and Jira
+
+A mention of the brain in a Slack thread (`app_mention`, Socket Mode) or a Jira
+comment (the owner mentioned + the configured text marker, polled) starts **one
+stateless headless session** (`claude -p --dangerously-skip-permissions`) that
+answers **as the owner**, through the owner's own MCP servers, using the
+`respond` skill. The watchers run inside `scripts/serve.py`; the engine is
+`scripts/trigger.py` (stdlib). Full design: [`docs/trigger.md`](docs/trigger.md).
+
+- **The bot is an ear, never a mouth.** It has no `chat:write`. Only the session
+  (as the owner) replies, and every reply ends with the configured signature.
+- **Closed until the owner opens it.** The owner's mention runs and enables that
+  conversation (a Slack thread or a Jira issue); anyone else's runs only in an
+  enabled one, otherwise it is refused with one notice per conversation. The
+  gate is `trigger_gate` in `graph.db`.
+- **Logged before it runs.** Each mention gets a request id (UUID) in
+  `trigger_request` and a `request` node; every action the session takes is
+  appended to `trigger_action` with `trigger.py action --request <id>`. A skill
+  running under `$MEMORY_LEDGER_REQUEST_ID` logs **every** outward action.
+- **Configuration is personal** and lives in `<home>/trigger.json` (mode 600),
+  never in the plugin; tokens come from `MEMORY_LEDGER_SLACK_*_TOKEN` /
+  `MEMORY_LEDGER_JIRA_TOKEN` first.
+
 ---
 
 ## 3. Vocabulary
@@ -950,7 +973,8 @@ cost.
 target, §5a), `rule-snapshot` (a verbatim copy of a rule, §5b.3),
 `quote`, `parked` (context moved out of the window, §2j),
 `rule` (a convention, §2i), `spec` (a genome
-blueprint, §2i), `process`, and the stateful trackables `pr`, `email`, `message`.
+blueprint, §2i), `process`, the stateful trackables `pr`, `email`, `message`, and
+`request` (one Slack/Jira mention that summoned the brain, §2l).
 Traceability (§2k): `conversation`, `agent`, `idea`, `transition` (one immutable
 entry in an idea's history), `gauge` (a measurable thing with a probe — the
 specification's *resource*, renamed because `resource` already means a document

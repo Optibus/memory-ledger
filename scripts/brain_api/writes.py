@@ -20,6 +20,7 @@ from fastapi import APIRouter, Body as BodyParam, Depends
 from fastapi.responses import JSONResponse
 
 import graph
+import trigger
 
 from . import commands, models as m, payloads, state
 from .errors import Refused
@@ -462,6 +463,28 @@ def backup(data: m.Backup = body(m.Backup)):
         return reply(res)
     return reply({"ok": True, "created": res, "removed": graph.prune_backups(),
                   "backups": graph.list_backups()})
+
+
+# ---------------------------------------------------------------- trigger
+@router.post("/trigger-gate", tags=["trigger"], summary="Open or close a conversation",
+             description="An open conversation runs other people's mentions; a closed one "
+                         "refuses them. The owner's own mention always runs and opens it.")
+def trigger_gate(data: m.TriggerGate = body(m.TriggerGate)):
+    if not isinstance(data.enabled, bool):
+        return reply({"ok": False, "error": "enabled must be true or false"})
+    return reply(trigger.set_gate(trigger.db(), clip(data.scope, 200), data.enabled,
+                                  by="web-ui"))
+
+
+@router.post("/trigger-action", tags=["trigger"], summary="Log an action taken for a request",
+             description="Append-only. What the headless session did, under the request id "
+                         "it was started with.")
+def trigger_action(data: m.TriggerAction = body(m.TriggerAction)):
+    rid = clip(data.request_id, 60)
+    if not rid:
+        return reply({"ok": False, "error": "missing request_id"})
+    return reply(trigger.log_action(trigger.db(), rid, clip(data.kind, 60),
+                                    clip(data.target, 500), clip(data.detail, 4000)))
 
 
 # ------------------------------------------- authoring skills and rules
