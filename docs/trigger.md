@@ -252,14 +252,14 @@ Settings → Triggers → GitHub.
 | Kind | When | On by default |
 |---|---|---|
 | `mention` | someone writes `@you` in a comment, a review, a line comment or a description, on a PR or an issue | yes |
-| `review_requested` | someone asks you to review a PR | yes |
+| `review_requested` | you are asked to review a PR, or add yourself as a reviewer | yes |
 | `review` | someone reviews **your** PR (approved, changes requested, commented) | yes |
 | `comment` | any new comment on your PR, mention or not | no |
 | `pushed` | new commits on a PR you are involved in but did not open; one event per push | no |
 | `ci_failed` | checks fail on your open PR; one event per head commit, however many checks fail. `cancelled` and `skipped` do not count | no |
 | `merged` | your PR is merged | no |
-| `closed` | your PR or issue is closed unmerged, by someone else | no |
-| `assigned` | someone assigns you a PR or an issue | no |
+| `closed` | your PR or issue is closed unmerged, by anyone, you included | no |
+| `assigned` | you are assigned a PR or an issue, by someone or by yourself | no |
 
 **The default instructions only write to the brain.** They add a task or a note
 ("add a task to my brain listing each change asked for") and say *post nothing
@@ -277,7 +277,10 @@ comments without it are ignored.
 gives every comment. A stranger on a public repo who mentions you does not get a
 session with your MCPs. Their mention goes to the gate like any other: it runs
 in a PR you opened, and is refused elsewhere. For a change with no comment of
-its own (a review request, a push), the PR author's association decides.
+its own (a review request, a push), the PR author's association decides,
+unless you made the change: what you fire yourself, adding yourself as a
+reviewer, assigning yourself, closing your own PR, always runs, since it means
+you have to act on it.
 
 **Refusing is quiet.** On GitHub a refusal would be a public comment, and people
 mention each other there all day for human reasons. So a refused GitHub mention

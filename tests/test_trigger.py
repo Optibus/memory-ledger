@@ -820,11 +820,16 @@ def test_github(cfg):
              "body": "", "submitted_at": ts(7), "author_association": "MEMBER",
              "html_url": "https://github.com/o/r/pull/1#pullrequestreview-20"},
             {"event": "merged", "id": 30, "actor": {"login": "bob"}, "created_at": ts(9)},
+            {"event": "closed", "id": 31, "actor": {"login": "owner"}, "created_at": ts(9)},
             c(9, "alice", "@owner ancient", -600),
         ],
         2: [  # someone else's PR
             {"event": "review_requested", "id": 40, "actor": {"login": "carol"},
              "requested_reviewer": {"login": "owner"}, "created_at": ts(6)},
+            {"event": "review_requested", "id": 41, "actor": {"login": "owner"},
+             "requested_reviewer": {"login": "owner"}, "created_at": ts(6)},
+            {"event": "assigned", "id": 42, "actor": {"login": "owner"},
+             "assignee": {"login": "owner"}, "created_at": ts(6)},
             {"event": "committed", "sha": "a" * 40, "message": "first\nbody",
              "committer": {"date": ts(6)}, "author": {"name": "Carol"}},
             {"event": "committed", "sha": "b" * 40, "message": "second",
@@ -879,6 +884,18 @@ def test_github(cfg):
     ck("so does the merge", "o/r#1:m30" in ids)
     ck("nothing older than the window", "o/r#1:c9" not in ids)
     ck("a review request for the owner runs", "o/r#2:rr40" in ids)
+    ck("so does one the owner made for themselves: what they fire, they act on",
+       reqs.get("o/r#2:rr41", {}).get("reason") == "subscribed: review_requested"
+       and "added yourself as a reviewer" in reqs["o/r#2:rr41"]["text"])
+    ck("assigned and closed stay off until switched on", not {"o/r#2:a42", "o/r#1:x31"} & ids)
+    on = json.loads(json.dumps(cfg))
+    on["github"]["events"] = {**(on["github"].get("events") or {}),
+                              "assigned": {"on": True}, "closed": {"on": True}}
+    evs = {e["event_id"]: e for n in (1, 2) for e in trigger.github_item_events(
+        gh, items[n], now - timedelta(hours=1), on, "owner")}
+    ck("switched on, assigning themselves and closing their own PR count, trusted",
+       evs.get("o/r#2:a42", {}).get("subscribed") and evs.get("o/r#1:x31", {}).get("subscribed")
+       and "You assigned yourself" in evs["o/r#2:a42"]["text"], str(list(evs)))
     ck("a description that mentions the owner runs", "o/r#2:body" in ids)
     ck("several commits are one push, named by the newest",
        "o/r#2:pbbbbbbbbbbbb" in ids and not any(":paaaa" in i for i in ids))

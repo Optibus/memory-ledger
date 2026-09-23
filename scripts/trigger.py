@@ -1703,12 +1703,14 @@ def github_item_events(gh: GitHub, item: dict, since: datetime, cfg: dict, login
                                  trusted=trusted(assoc), do=kinds[own_kind]["do"]))
 
     def changed(kind, eid, who, text, at, link="", assoc=None):
-        """A change with no words of its own: a request, a merge, a push."""
+        """A change with no words of its own: a request, a merge, a push. One
+        the owner made is theirs to act on, so it counts, and is trusted."""
         k = kinds[kind]
         if not k["on"] or not fresh(at):
             return
         out.append(_gh_event(item, kind, eid=eid, actor=who, text=text, at=at, permalink=link,
-                             cfg=cfg, login=login, trusted=trusted(assoc), do=k["do"]))
+                             cfg=cfg, login=login, trusted=who.lower() == lg or trusted(assoc),
+                             do=k["do"]))
 
     repo, n = _repo_of(item), item.get("number")
     ref = f"{repo}#{n} “{item.get('title') or ''}”"
@@ -1738,25 +1740,27 @@ def github_item_events(gh: GitHub, item: dict, since: datetime, cfg: dict, login
                      c.get("created_at"), c.get("html_url"), c.get("author_association"),
                      "comment")
         elif kind == "review_requested":
-            if ((ev.get("requested_reviewer") or {}).get("login") or "").lower() == lg \
-                    and who.lower() != lg:
+            if ((ev.get("requested_reviewer") or {}).get("login") or "").lower() == lg:
                 changed("review_requested", f"rr{ev.get('id')}", who,
-                        f"{who} asked you to review {ref}.", ev.get("created_at"),
+                        f"You added yourself as a reviewer on {ref}." if who.lower() == lg
+                        else f"{who} asked you to review {ref}.", ev.get("created_at"),
                         assoc=item.get("author_association"))
         elif kind == "assigned":
-            if ((ev.get("assignee") or {}).get("login") or "").lower() == lg and who.lower() != lg:
-                changed("assigned", f"a{ev.get('id')}", who, f"{who} assigned you {ref}.",
-                        ev.get("created_at"))
+            if ((ev.get("assignee") or {}).get("login") or "").lower() == lg:
+                changed("assigned", f"a{ev.get('id')}", who,
+                        f"You assigned yourself {ref}." if who.lower() == lg
+                        else f"{who} assigned you {ref}.", ev.get("created_at"))
         elif kind == "committed" and is_pr and not mine:
             last_push = ev
         elif kind == "merged" and mine:
             changed("merged", f"m{ev.get('id')}", who, f"{who} merged your pull request {ref}.",
                     ev.get("created_at"))
-        elif kind == "closed" and mine and who.lower() != lg \
+        elif kind == "closed" and mine \
                 and not (item.get("pull_request") or {}).get("merged_at"):
             what = "pull request" if is_pr else "issue"
-            changed("closed", f"x{ev.get('id')}", who, f"{who} closed your {what} {ref}.",
-                    ev.get("created_at"))
+            changed("closed", f"x{ev.get('id')}", who,
+                    f"You closed your {what} {ref}." if who.lower() == lg
+                    else f"{who} closed your {what} {ref}.", ev.get("created_at"))
     if last_push:
         # One event per push, not per commit: named by the newest commit.
         at = ((last_push.get("committer") or {}).get("date") or "")

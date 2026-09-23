@@ -720,14 +720,14 @@ function JiraPanel({
 /** The GitHub events, in the order the panel lists them, and how each reads. */
 const GITHUB_EVENTS: { kind: GitHubEventKind; label: string; hint: string }[] = [
   { kind: "mention", label: "You are @mentioned", hint: "In a comment, a review or a description, on a pull request or an issue. The comment is the request; the instruction below is optional." },
-  { kind: "review_requested", label: "Your review is requested", hint: "Someone asks you to review a pull request." },
+  { kind: "review_requested", label: "Your review is requested", hint: "Someone asks you to review a pull request, or you add yourself as a reviewer." },
   { kind: "review", label: "Your pull request is reviewed", hint: "Approved, changes requested, or commented." },
   { kind: "comment", label: "A comment on your pull request", hint: "Any new comment or line comment, mention or not." },
   { kind: "pushed", label: "New commits on a pull request you review", hint: "One event per push, not per commit." },
   { kind: "ci_failed", label: "Checks fail on your pull request", hint: "One event per commit, however many checks fail. Cancelled and skipped do not count." },
   { kind: "merged", label: "Your pull request is merged", hint: "" },
-  { kind: "closed", label: "Your pull request is closed unmerged", hint: "By someone else." },
-  { kind: "assigned", label: "You are assigned", hint: "A pull request or an issue." },
+  { kind: "closed", label: "Your pull request is closed unmerged", hint: "By anyone, you included." },
+  { kind: "assigned", label: "You are assigned", hint: "A pull request or an issue, by someone else or by yourself." },
 ];
 
 const list = (v: string) =>
