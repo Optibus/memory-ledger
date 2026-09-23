@@ -376,6 +376,8 @@ three kept).
 ```
 2026-09-23 18:39:06 INFO    trigger  triggers running — sources: slack, jira (poll 60s); up to 3 sessions at once; log: ~/.second_brain/logs/trigger.log
 2026-09-23 18:39:07 INFO    trigger  slack: connected
+2026-09-23 18:39:07 INFO    trigger  slack: checking data from 2026-09-23 18:31:02Z (catch-up)
+2026-09-23 18:39:07 INFO    trigger  jira: checking data from 2026-09-23 18:36:04Z (updated >= -4m ORDER BY updated ASC)
 2026-09-23 18:39:40 INFO    trigger  new request 0a255d52-6c1e-4f0b-9a57-2f3e8d41c9b0  slack slack:C1:650.1 from Ana (owner): 'summarise this'  -> queued (owner)
 2026-09-23 18:39:40 INFO    trigger  task 0a255d52-6c1e-4f0b-9a57-2f3e8d41c9b0 started  slack slack:C1:650.1 from Ana
 2026-09-23 18:40:52 INFO    trigger  task 0a255d52-6c1e-4f0b-9a57-2f3e8d41c9b0 done  in 72s, exit 0, $0.14
@@ -384,8 +386,10 @@ three kept).
 
 It logs the state on every start, restart and stop (or why the triggers are not
 running), each new request with its decision, the start and end of each task
-(the headless session), and a watcher that changes state or hits a new error.
-A mention seen before and a poll that went like the last one are not logged.
+(the headless session), a watcher that changes state or hits a new error, and
+every poll pass: `<source>: checking data from <time>`, the start of the window
+it reads, so you can see each poll run on its schedule. A mention seen before is
+not logged.
 The id is the request id, so `trigger.py show --id` takes it as it is. The
 CLI logs nothing: only the server attaches the log.
 

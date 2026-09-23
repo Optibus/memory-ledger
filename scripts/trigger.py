@@ -316,6 +316,10 @@ def setup_logging() -> Path:
     return path
 
 
+def _since(at: datetime) -> str:
+    return at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+
+
 def _brief(text: str, n: int = 80) -> str:
     text = " ".join((text or "").split())
     return text if len(text) <= n else text[:n - 1] + "…"
@@ -1317,8 +1321,11 @@ def slack_catch_up(cfg: dict, dispatch, *, now: float | None = None, notice=None
     cp = get_checkpoint(con, "slack")
     if not cp:
         set_checkpoint(con, "slack", f"{start:.6f}")
+        log.info("slack: first catch-up, nothing to check — starting from now")
         return {"ok": True, "first_run": True, "handled": 0}
     oldest = float(cp)
+    log.info("slack: checking data from %s (catch-up)",
+             _since(datetime.fromtimestamp(oldest, timezone.utc)))
     token = secret(cfg, "slack", "bot_token")
     bot = slack_bot_user_id(cfg)
     scfg = cfg.get("slack") or {}
@@ -1503,6 +1510,7 @@ def jira_poll(cfg: dict, dispatch, *, now: datetime | None = None, jira: Jira | 
     cp = _parse_dt(get_checkpoint(con, "jira"))
     if not cp:
         set_checkpoint(con, "jira", start.isoformat(timespec="seconds"))
+        log.info("jira: first poll, nothing to check — starting from now")
         return {"ok": True, "first_run": True, "handled": 0}
     jcfg = cfg.get("jira") or {}
     cap = timedelta(hours=float(jcfg.get("max_catchup_hours") or 72))
@@ -1513,6 +1521,7 @@ def jira_poll(cfg: dict, dispatch, *, now: datetime | None = None, jira: Jira | 
     if extra:
         jql += f" AND ({extra})"
     jql += " ORDER BY updated ASC"
+    log.info("jira: checking data from %s (%s)", _since(since), jql)
     owner_id = jira.owner_id()
     notify = jira_notify(cfg, jira, notice)
     issues = seen = handled = 0
@@ -1818,6 +1827,7 @@ def github_poll(cfg: dict, dispatch, *, now: datetime | None = None, gh: GitHub 
     cp = _parse_dt(get_checkpoint(con, "github"))
     if not cp:
         set_checkpoint(con, "github", start.isoformat(timespec="seconds"))
+        log.info("github: first poll, nothing to check — starting from now")
         return {"ok": True, "first_run": True, "handled": 0}
     cap = timedelta(hours=float((cfg.get("github") or {}).get("max_catchup_hours") or 72))
     since = max(cp, start - cap) - timedelta(minutes=2)       # margin; dedupe absorbs it
@@ -1825,6 +1835,8 @@ def github_poll(cfg: dict, dispatch, *, now: datetime | None = None, gh: GitHub 
     if not login:
         return {"ok": False, "error": "github: the token did not say whose it is (/user)"}
     kinds = github_events_cfg(cfg)
+    log.info("github: checking data from %s (as %s%s)", _since(since), login,
+             _github_repo_q(cfg))
     stamp = since.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     rq = _github_repo_q(cfg)
     queries = [f"involves:{login} updated:>={stamp}{rq}"]
