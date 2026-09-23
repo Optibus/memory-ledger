@@ -43,7 +43,7 @@ GET_ROUTES = [
     "/api/backups", "/api/doctor", "/api/consolidate-preview",
     "/api/person-duplicates", "/api/kinds", "/api/skills", "/api/bundle",
     "/api/rule", "/api/settings", "/api/timezones", "/api/status", "/api/meta",
-    "/api/suggest-links", "/api/search",
+    "/api/suggest-links", "/api/search", "/api/trigger", "/api/trigger-request",
 ]
 POST_ROUTES = [
     "/api/set-due", "/api/add-task", "/api/complete", "/api/set-status",
@@ -54,6 +54,8 @@ POST_ROUTES = [
     "/api/create-rule", "/api/create-skill", "/api/create-process",
     "/api/export-skills", "/api/ingest-skills", "/api/export-bundle",
     "/api/upload-bundle", "/api/import-bundle", "/api/delete-contracts",
+    "/api/trigger-gate", "/api/trigger-action", "/api/trigger-config", "/api/trigger-check",
+    "/api/trigger-channel", "/api/trigger-decline",
 ]
 VIEWS = ["agenda", "open", "today", "tomorrow", "week", "closed", "range"]
 
@@ -678,6 +680,110 @@ def test_contract_writes(s: Server):
     ck("delete-contracts", d.get("ok") and d.get("count") == 1, str(d)[:160])
 
 
+# ================================================================ triggers
+def test_trigger_routes(s: Server):
+    print("\n== triggers: the request log, its actions, the gate ==")
+    t = s.get("/api/trigger").json()
+    ck("status answers with no trigger.json, and says so",
+       t.get("ok") and t["config"]["enabled"] is False and t["config"]["exists"] is False)
+    ck("without a config the watchers do not start, and say why",
+       t["runtime"]["running"] is False and "does not exist" in t["runtime"]["reason"],
+       str(t.get("runtime"))[:160])
+
+    # A mention, logged the way a watcher would log it: through the engine.
+    snippet = (
+        "import sys, json; sys.path.insert(0, %r); import trigger; "
+        "ev = {'source': 'slack', 'event_id': 'C1:1.0', 'scope': 'slack:C1:1.0', "
+        "'requester_id': 'U1', 'is_owner': True, 'text': 'hello', 'meta': {}}; "
+        "print(json.dumps(trigger.intake(ev, trigger.load_config())))"
+        % str(ROOT / "scripts"))
+    p = subprocess.run([sys.executable, "-c", snippet], capture_output=True, text=True,
+                       env=env_for(s.home))
+    rid = json.loads(p.stdout or "{}").get("request_id", "")
+    ck("a request can be logged into the served brain", bool(rid), p.stderr[-200:])
+
+    d = s.get("/api/trigger-request", id=rid).json()
+    ck("trigger-request returns it", d.get("ok") and d["request"]["id"] == rid
+       and d["actions"] == [])
+    ck("an unknown request is a successful read of nothing",
+       s.get("/api/trigger-request", id="nope").json().get("ok") is False)
+    ck("status lists it", any(r["id"] == rid for r in s.get("/api/trigger").json()["recent"]))
+
+    a = s.post("/api/trigger-action", {"request_id": rid, "kind": "reply",
+                                       "target": "https://x", "detail": "answered"})
+    ck("trigger-action appends", a.status == 200 and a.json().get("ok"), str(a.raw[:120]))
+    ck("and the request shows it",
+       [x["kind"] for x in s.get("/api/trigger-request", id=rid).json()["actions"]] == ["reply"])
+    ck("an action needs a request", refused(s.post("/api/trigger-action", {"kind": "x"}),
+                                            400, "missing request_id"))
+    ck("for a request that exists", refused(s.post("/api/trigger-action",
+                                                   {"request_id": "nope", "kind": "x"}),
+                                            400, "no request nope"))
+    ck("and a kind", refused(s.post("/api/trigger-action", {"request_id": rid}),
+                             400, "missing kind"))
+
+    g = s.post("/api/trigger-gate", {"scope": "jira:PROJ-1", "enabled": True})
+    ck("trigger-gate opens a conversation", g.status == 200 and g.json().get("enabled") is True)
+    ck("which status then lists",
+       any(x["scope"] == "jira:PROJ-1" for x in s.get("/api/trigger").json()["enabled_scopes"]))
+    s.post("/api/trigger-gate", {"scope": "jira:PROJ-1", "enabled": False})
+    ck("and closes it again",
+       not any(x["scope"] == "jira:PROJ-1"
+               for x in s.get("/api/trigger").json()["enabled_scopes"]))
+    ck("enabled must be a boolean", refused(s.post("/api/trigger-gate",
+                                                   {"scope": "jira:PROJ-1", "enabled": "yes"}),
+                                            400, "true or false"))
+    c = s.post("/api/trigger-config", {"jira": {"enabled": True, "base_url": "https://j.example",
+                                                "email": "a@b.c", "token": "secret-tok"}})
+    ck("trigger-config saves", c.status == 200 and c.json()["config"]["jira"]["enabled"] is True,
+       str(c.raw[:200]))
+    ck("and never echoes a token", b"secret-tok" not in c.raw
+       and c.json()["config"]["secrets"]["jira.token"]["set"] is True)
+    ck("a save restarts the watchers on the new config",
+       c.json().get("watching") is True and c.json()["runtime"]["reason"] == "triggers are switched off")
+    ck("status reads it back", s.get("/api/trigger").json()["config"]["jira"]["base_url"]
+       == "https://j.example")
+    ck("a bad value is refused", refused(s.post("/api/trigger-config",
+                                                {"jira": {"poll_seconds": 2}}), 400, "from 15"))
+    ck("so is a config that is not an object",
+       s.post("/api/trigger-config", raw_body=b"[1]").status == 400)
+    k = s.post("/api/trigger-check", {"only": "jira", "offline": True}).json()
+    ck("trigger-check checks one service", k.get("ok") and k["target"] == "jira"
+       and k["ready"] is True, str(k)[:200])
+    k = s.post("/api/trigger-check", {"only": "slack", "offline": True}).json()
+    ck("and names what is missing", k["ready"] is False
+       and any("app_token" in p for p in k["problems"]))
+    ck("an unknown service is refused", refused(s.post("/api/trigger-check", {"only": "fax"}),
+                                                400, "only must be one of"))
+
+    ch = s.post("/api/trigger-channel", {"channel": "https://x.slack.com/archives/C0ABC123/p1",
+                                         "name": "#ops", "enabled": True})
+    ck("trigger-channel opens a channel from a link", ch.status == 200
+       and [c["channel_id"] for c in ch.json()["channels"]["active"]] == ["C0ABC123"],
+       str(ch.raw[:200]))
+    ch = s.post("/api/trigger-channel", {"channel": "C0ABC123", "enabled": False}).json()
+    ck("closing it keeps the row, marked removed",
+       ch.get("ok") and [c["channel_id"] for c in ch["channels"]["removed"]] == ["C0ABC123"])
+    ck("and status lists it that way",
+       s.get("/api/trigger").json()["channels"]["removed"][0]["name"] == "ops")
+    ck("a channel must be an id or a link", refused(
+        s.post("/api/trigger-channel", {"channel": "#general", "enabled": True}), 400, "its id"))
+    ck("enabled must be a boolean", refused(
+        s.post("/api/trigger-channel", {"channel": "C0ABC123"}), 400, "true or false"))
+
+    dcl = s.post("/api/trigger-decline", {"request_id": rid, "reason": "It is personal.",
+                                          "rule": "rule_x"})
+    ck("trigger-decline declines and returns the notice", dcl.status == 200
+       and dcl.json()["status"] == "declined" and dcl.json()["notice"].endswith("It is personal."),
+       str(dcl.raw[:200]))
+    ck("a decline needs a reason", refused(s.post("/api/trigger-decline", {"request_id": rid}),
+                                           400, "missing reason"))
+
+    ck("a malformed scope is refused", refused(s.post("/api/trigger-gate",
+                                                      {"scope": "bogus", "enabled": True}),
+                                               400, "scope must look like"))
+
+
 # ========================================================== read-only mode
 def test_read_only():
     print("\n== --no-write refuses every write, and says so ==")
@@ -694,6 +800,8 @@ def test_read_only():
             ck("every write route is refused with a 403", True)
         ck("an unknown POST is still a 404", refused(s.post("/api/nope", {}), 404))
         ck("reads still work", s.get("/api/graph").status == 200)
+        ck("and a read-only server never acts: no trigger watchers",
+           s.get("/api/trigger").json().get("watching") is False)
     finally:
         s.stop()
 
@@ -709,6 +817,7 @@ def main():
         test_people_writes(s)
         test_settings_writes(s)
         test_contract_writes(s)
+        test_trigger_routes(s)
     finally:
         s.stop()
     test_read_only()

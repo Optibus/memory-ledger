@@ -166,6 +166,21 @@ Two things worth getting right if you do this:
   `chmod 600`, and never paste the credentials into a command that gets saved (a
   shell history or a tool-permission allowlist counts as saved).
 
+### Optional: summon it from Slack and Jira
+
+A mention in a Slack thread, or a Jira comment that mentions you with a marker
+like `@brain`, can start a headless Claude Code session that answers there as
+you. It needs a Slack app in Socket Mode (listen-only, no `chat:write`), a Jira
+API token, and `<home>/trigger.json`; the watchers then run inside
+`scripts/serve.py`. Set all of it, switch each service on or off, and check it,
+in the web UI under **Settings → Triggers**, or from the shell:
+
+```
+python3 scripts/trigger.py check
+```
+
+Setup, scopes and every key: [docs/trigger.md](docs/trigger.md#setting-it-up).
+
 ## 3. The on/off switch
 
 Enablement used to just mean "the home dir exists" — deleting `~/.second_brain`
@@ -280,8 +295,8 @@ Five sections behind the hamburger menu (`m`), each with its own URL: **Map**
 (live graph), **Dashboard** (the query views), **People** (person nodes, what each
 connects to, and merging the ones that are the same human), **Skills** (the two
 contract trees and the rule catalogue), and **Settings** (your name, timezone,
-default realm, the capture switch, database connection, consolidation and the
-health check). The API documents itself at
+default realm, the capture switch, database connection, consolidation, the
+health check, and the Slack/Jira triggers). The API documents itself at
 [`/api/docs`](http://127.0.0.1:8770/api/docs). The dashboard also **edits** the brain — create tasks
 with auto-recognised links, complete them, change status/assignee/due, rename, and
 add/remove relations — all token-free (no model). Set the timezone once in

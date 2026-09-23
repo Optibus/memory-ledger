@@ -8,12 +8,13 @@ than the one answering.
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
-from . import errors, reads, state, writes
+from . import errors, reads, state, trigger_runtime, writes
 
 TAGS = [
     {"name": "graph", "description": "Nodes, edges, and what connects to what."},
@@ -26,7 +27,23 @@ TAGS = [
     {"name": "vocabulary", "description": "The open and closed sets a client must read "
                                           "rather than hard-code."},
     {"name": "settings", "description": "Preferences, store health, and upkeep."},
+    {"name": "trigger", "description": "Slack and Jira mentions that summon the brain: "
+                                       "the request log, its actions, and the "
+                                       "per-conversation gate (docs/trigger.md)."},
 ]
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    """The trigger watchers live as long as the server does, and only when
+    serve.py asked for them."""
+    if state.TRIGGERS:
+        trigger_runtime.start()
+    try:
+        yield
+    finally:
+        if state.TRIGGERS:
+            trigger_runtime.stop()
 
 DESCRIPTION = """\
 The local HTTP API over one person's memory graph.
@@ -101,7 +118,7 @@ def create_app(dist: Path, missing_ui: str) -> FastAPI:
     `{reason}` slot, filled from `state.UI_PROBLEM`."""
     app = FastAPI(title="memory-ledger", version="2.0.0", description=DESCRIPTION,
                   openapi_tags=TAGS, docs_url="/api/docs", openapi_url="/api/openapi.json",
-                  redoc_url=None,
+                  redoc_url=None, lifespan=lifespan,
                   # Relative, deliberately: "the server" is whatever origin the
                   # document was fetched from, not a fixed port.
                   servers=[{"url": "/", "description": "This server."}])

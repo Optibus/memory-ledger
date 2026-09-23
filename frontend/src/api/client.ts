@@ -137,6 +137,8 @@ export const api = {
   settings: (signal?: AbortSignal) => get<Settings>("/api/settings", undefined, signal),
   timezones: (signal?: AbortSignal) => get<Timezones>("/api/timezones", undefined, signal),
   status: (signal?: AbortSignal) => get<Status>("/api/status", undefined, signal),
+  trigger: (signal?: AbortSignal) =>
+    get<import("./types").TriggerStatus>("/api/trigger", { limit: 5 }, signal),
   capture: (signal?: AbortSignal) =>
     get<import("./types").CaptureState>("/api/capture", undefined, signal),
   doctor: (signal?: AbortSignal) =>
@@ -173,6 +175,22 @@ export const api = {
   saveSettings: (body: Partial<import("./types").StoredSettings>) => post("/api/settings", body),
   saveNeo4j: (body: Record<string, unknown>) => post("/api/neo4j-config", body),
   testNeo4j: () => post("/api/neo4j-test", {}),
+  /** A patch. Secrets are write-only: send one to replace it, list it in
+   *  `clear` to remove it, leave it out to keep what is stored. */
+  saveTrigger: (body: Record<string, unknown>) =>
+    post<{ ok: boolean; config: import("./types").TriggerConfig; runtime: import("./types").TriggerRuntime }>(
+      "/api/trigger-config",
+      body,
+    ),
+  /** Open (`enabled: true`) or close a channel. `channel` may be a link. */
+  setTriggerChannel: (channel: string, enabled: boolean, name = "") =>
+    post<{ ok: boolean; channels: import("./types").TriggerChannels }>("/api/trigger-channel", {
+      channel,
+      name,
+      enabled,
+    }),
+  checkTrigger: (only: import("./types").TriggerService) =>
+    post<import("./types").TriggerCheck>("/api/trigger-check", { only }),
   flush: () => post("/api/flush", {}),
   /**
    * Consolidate. Refused without `confirm`, by the server — the preview is not

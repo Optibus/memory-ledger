@@ -10,6 +10,7 @@ These pages are the reference: how it works and how to change it.
 | [search.md](search.md) | the FTS5 index, cue construction, budgets, sharp edges |
 | [api.md](api.md) | the local HTTP server — the FastAPI app, its envelope, its venv, and how to extend it. Its interactive reference is `/api/docs` on a running server, generated from the routes |
 | [frontend.md](frontend.md) | the React single-page app — layout, why its build is committed, how to work on it, and what the two test suites cover |
+| [trigger.md](trigger.md) | summoning the brain from Slack and Jira — Socket Mode and polling, the per-conversation gate, the request audit log, the headless `claude -p` dispatch, and setup |
 | [performance.md](performance.md) | measured latency, storage, growth projections, scaling, known limits |
 | [neo4j.md](neo4j.md) | running a real graph database instead of the SQLite mirror — `neo4j_local.py up` (Docker, one command), the `backend` setting, and whether it is worth it |
 | [comparison.md](comparison.md) | how this compares to MemPalace and other second brains, and measured SQLite vs neo4j vs ChromaDB |

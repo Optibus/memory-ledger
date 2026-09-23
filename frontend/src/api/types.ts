@@ -564,3 +564,119 @@ export interface UiPrefsPayload extends Envelope {
   path: string;
   prefs: UiPrefs;
 }
+
+// ---------------------------------------------------------------- triggers
+// docs/trigger.md. The config is what `<home>/trigger.json` holds, minus the
+// secrets: for those the server only ever says whether one is set, and where
+// from, so a page that shows "one is stored" never holds the token itself.
+
+export type TriggerService = "claude" | "slack" | "jira";
+
+export interface TriggerSecret {
+  set: boolean;
+  stored: boolean;
+  /** "env" outranks the file, and then this page cannot change it. */
+  source: "env" | "file" | "";
+  env_var: string;
+}
+
+export interface TriggerConfig {
+  path: string;
+  exists: boolean;
+  problem: string;
+  /** In effect: the master switch AND a file that parses. */
+  enabled: boolean;
+  stored_enabled: boolean;
+  signature: string;
+  signature_template: string;
+  refusals: { not_enabled: string; policy: string };
+  translate_notices: boolean;
+  claude: {
+    bin: string;
+    notice_model: string;
+    mcp_config: string;
+    strict_mcp_config: boolean;
+    timeout_s: number;
+    max_concurrent: number;
+    extra_args: string[];
+    cwd: string;
+  };
+  slack: {
+    enabled: boolean;
+    active: boolean;
+    owner_user_id: string;
+    thread_lookback_days: number;
+  };
+  jira: {
+    enabled: boolean;
+    active: boolean;
+    base_url: string;
+    email: string;
+    owner_account_id: string;
+    marker: string;
+    poll_seconds: number;
+    jql: string;
+    max_catchup_hours: number;
+  };
+  secrets: Record<string, TriggerSecret>;
+}
+
+export interface TriggerWatcher {
+  state: string;
+  last_error?: string;
+  at?: string;
+  [key: string]: unknown;
+}
+
+export interface TriggerRuntime {
+  running: boolean;
+  reason: string;
+  started_at: string;
+  slack: TriggerWatcher;
+  jira: TriggerWatcher;
+}
+
+export interface TriggerRequestRow {
+  id: string;
+  source: "slack" | "jira";
+  scope: string;
+  requester_name: string;
+  requester_id: string;
+  status: string;
+  received_at: string;
+  text: string;
+  permalink: string;
+}
+
+/** A Slack channel open to everyone's mentions. Closing one keeps the row. */
+export interface TriggerChannelRow {
+  channel_id: string;
+  name: string;
+  added_by: string;
+  added_at: string;
+  removed_by: string;
+  removed_at: string;
+}
+
+export interface TriggerChannels {
+  active: TriggerChannelRow[];
+  removed: TriggerChannelRow[];
+}
+
+export interface TriggerStatus extends Envelope {
+  config: TriggerConfig;
+  runtime: TriggerRuntime;
+  /** False when the server was started with --no-trigger or --no-write. */
+  watching: boolean;
+  counts: Record<string, number>;
+  enabled_scopes: { scope: string; by: string; at: string }[];
+  channels: TriggerChannels;
+  recent: TriggerRequestRow[];
+}
+
+export interface TriggerCheck extends Envelope {
+  ready: boolean;
+  target: string;
+  problems: string[];
+  notes: string[];
+}

@@ -63,6 +63,9 @@ NODE_TYPES = [
     # the skill tree (§5a): one node per node TYPE, so two skills touching the
     # same type are visibly coupled even when neither one names the other.
     "node-type",
+    # triggers (docs/trigger.md): one per Slack/Jira mention that summoned the
+    # brain, so "who asked for that?" is a recall, not an archaeology dig.
+    "request",
 ]
 
 # Default character budget for read paths that would otherwise return whole

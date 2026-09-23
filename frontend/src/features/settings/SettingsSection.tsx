@@ -18,6 +18,7 @@ import { CaptureCard } from "./CaptureCard";
 import { UpkeepCard } from "./UpkeepCard";
 import { DoctorCard } from "./DoctorCard";
 import { BrowserCard } from "./BrowserCard";
+import { TriggerCard } from "./TriggerCard";
 import type { RealmCount, Settings, Status, StoredSettings, Timezones } from "@/api/types";
 import "./SettingsSection.css";
 
@@ -87,6 +88,8 @@ export function SettingsSection() {
       ) : null}
 
       <DoctorCard />
+
+      {settings.data ? <TriggerCard writable={settings.data.writable} /> : null}
 
       {status.data ? <StoreCard status={status.data} onChanged={() => status.reload()} /> : null}
       {status.error ? <StatusMessage tone="error">{status.error}</StatusMessage> : null}

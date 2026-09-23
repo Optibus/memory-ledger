@@ -20,8 +20,9 @@ from fastapi import APIRouter, Body as BodyParam, Depends
 from fastapi.responses import JSONResponse
 
 import graph
+import trigger
 
-from . import commands, models as m, payloads, state
+from . import commands, models as m, payloads, state, trigger_runtime
 from .errors import Refused
 
 ENVELOPE_RESPONSES = {
@@ -462,6 +463,82 @@ def backup(data: m.Backup = body(m.Backup)):
         return reply(res)
     return reply({"ok": True, "created": res, "removed": graph.prune_backups(),
                   "backups": graph.list_backups()})
+
+
+# ---------------------------------------------------------------- trigger
+@router.post("/trigger-gate", tags=["trigger"], summary="Open or close a conversation",
+             description="An open conversation runs other people's mentions; a closed one "
+                         "refuses them. The owner's own mention always runs and opens it.")
+def trigger_gate(data: m.TriggerGate = body(m.TriggerGate)):
+    if not isinstance(data.enabled, bool):
+        return reply({"ok": False, "error": "enabled must be true or false"})
+    return reply(trigger.set_gate(trigger.db(), clip(data.scope, 200), data.enabled,
+                                  by="web-ui"))
+
+
+@router.post("/trigger-config", tags=["trigger"], summary="Change the trigger configuration",
+             description="Merges the keys sent into `<home>/trigger.json` (mode 600) and, "
+                         "when this server runs the watchers, restarts them on it. Secrets "
+                         "are write-only: empty keeps the stored one, `clear` removes it, "
+                         "and none is ever sent back.")
+def trigger_config(data: m.TriggerConfig = body(m.TriggerConfig)):
+    patch = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
+    if "clear" in patch:
+        patch["clear"] = [c for c in patch["clear"] if isinstance(c, str)]
+    res = trigger.save_config(patch)
+    if res.get("ok"):
+        res["runtime"] = trigger_runtime.restart() if state.TRIGGERS else trigger_runtime.status()
+        res["watching"] = state.TRIGGERS
+    return reply(res)
+
+
+@router.post("/trigger-check", tags=["trigger"], summary="Check that a service is ready",
+             description="Validates the configuration, and unless `offline`, calls Slack and "
+                         "Jira with the stored tokens to prove they work. Starts nothing and "
+                         "writes nothing. `ready` is the verdict; `ok` means the check ran.")
+def trigger_check(data: m.TriggerCheck = body(m.TriggerCheck)):
+    return reply(trigger.check(trigger.load_config(), offline=data.offline is True,
+                               only=clip(data.only, 20)))
+
+
+@router.post("/trigger-channel", tags=["trigger"], summary="Open or close a Slack channel",
+             description="An open channel runs everyone's mentions in every thread. Closing "
+                         "one keeps its row, marked removed, so the list is also the history "
+                         "of who opened what.")
+def trigger_channel(data: m.TriggerChannel = body(m.TriggerChannel)):
+    if not isinstance(data.enabled, bool):
+        return reply({"ok": False, "error": "enabled must be true or false"})
+    con = trigger.db()
+    if data.enabled:
+        res = trigger.add_channel(con, clip(data.channel, 300), clip(data.name, 80),
+                                  by="web-ui", cfg=trigger.load_config())
+    else:
+        res = trigger.remove_channel(con, clip(data.channel, 300), by="web-ui")
+    if res.get("ok"):
+        res["channels"] = trigger.list_channels(con)
+    return reply(res)
+
+
+@router.post("/trigger-decline", tags=["trigger"], summary="Decline a request that breaks a rule",
+             description="What the session calls instead of doing the work. Marks the request "
+                         "`declined`, logs why, and returns the policy notice and the "
+                         "signature for the session to post.")
+def trigger_decline(data: m.TriggerDecline = body(m.TriggerDecline)):
+    rid = clip(data.request_id, 60)
+    if not rid:
+        return reply({"ok": False, "error": "missing request_id"})
+    return reply(trigger.decline(trigger.db(), rid, clip(data.reason, 300), clip(data.rule, 120)))
+
+
+@router.post("/trigger-action", tags=["trigger"], summary="Log an action taken for a request",
+             description="Append-only. What the headless session did, under the request id "
+                         "it was started with.")
+def trigger_action(data: m.TriggerAction = body(m.TriggerAction)):
+    rid = clip(data.request_id, 60)
+    if not rid:
+        return reply({"ok": False, "error": "missing request_id"})
+    return reply(trigger.log_action(trigger.db(), rid, clip(data.kind, 60),
+                                    clip(data.target, 500), clip(data.detail, 4000)))
 
 
 # ------------------------------------------- authoring skills and rules

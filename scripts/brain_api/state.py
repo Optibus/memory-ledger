@@ -16,3 +16,8 @@ BOOT = f"{os.getpid()}-{int(time.time())}"
 # Why the UI could not be (re)built, when it could not — shown on the fallback
 # page rather than a bare 404. Set by serve.ensure_ui().
 UI_PROBLEM = ""
+
+# Whether the app's lifespan starts the Slack/Jira trigger watchers
+# (brain_api/trigger_runtime.py). Off unless serve.py turns it on, so a server
+# built by a test never reaches out to Slack.
+TRIGGERS = False
