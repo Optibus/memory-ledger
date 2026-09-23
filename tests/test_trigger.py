@@ -396,6 +396,62 @@ def test_logging(cfg):
        and str(path) in summary, summary)
 
 
+# ============================================================ run commands
+def test_run_commands(cfg):
+    print("\n== run commands: a template per trigger, with variables ==")
+    install_http()
+    ran, dispatch = dispatcher()
+    ev = trigger.slack_event(slack_msg("1700000000.000200", "UOWNER", "<@UBOT> sum it up"),
+                             "C1", cfg, bot_user_id="UBOT")
+    req = trigger.get_request(trigger.db(), trigger.handle(ev, cfg, dispatch)["request_id"])
+    v = trigger.request_variables(req, cfg)
+    ck("Slack: source, kind, user, content, link, channel and thread",
+       v["trigger_source"] == "slack" and v["trigger_kind"] == "mention"
+       and v["trigger_user"] == "Name UOWNER" and v["trigger_user_id"] == "UOWNER"
+       and v["trigger_user_is_owner"] == "true" and v["trigger_content"] == "<@UBOT> sum it up"
+       and v["trigger_link"] == ev["permalink"] and v["slack_channel"] == "C1"
+       and v["slack_thread"] == "1700000000.000200" and v["github_repo"] == "", v)
+    ck("the trigger time is the message's own, not when it was read",
+       v["trigger_time"] == "2023-11-14T22:13:20+00:00" and v["trigger_received"])
+    ck("every catalogued variable has a value, even if empty",
+       set(v) == set(trigger.VARIABLES))
+
+    ck("no run command: the prompt has no instructions block",
+       "<<<INSTRUCTIONS" not in trigger.build_prompt(req, cfg))
+    pcfg = json.loads(json.dumps(cfg))
+    pcfg["slack"]["prompt"] = ("{trigger_source} sent this task. Pick it up and reply to "
+                               "{trigger_user} in {trigger_where}. Braces {like this} stay.")
+    prompt = trigger.build_prompt(req, pcfg)
+    ck("a run command is rendered into the prompt, ahead of the guardrails",
+       "slack sent this task. Pick it up and reply to Name UOWNER in Slack channel C1" in prompt
+       and "Braces {like this} stay." in prompt
+       and prompt.index("<<<INSTRUCTIONS") < prompt.index(" decline --request "))
+    ck("and the message is still quoted verbatim below it", "<<<MESSAGE\n<@UBOT> sum it up" in prompt)
+
+    issue = {"key": "K-7", "fields": {"summary": "Fix the export"}}
+    comment = {"id": "9", "body": "@cérebro please", "created": "2026-09-23T11:18:00.000-0300",
+               "author": {"accountId": "acc-owner", "displayName": "Owner"}}
+    jev = trigger.jira_event(issue, comment, cfg, base="https://j.example", owner_id="acc-owner")
+    jreq = trigger.get_request(trigger.db(), trigger.handle(jev, cfg, dispatch)["request_id"])
+    jv = trigger.request_variables(jreq, cfg)
+    ck("Jira: the issue, its summary, and the comment's time in UTC",
+       jv["jira_issue"] == "K-7" and jv["trigger_title"] == "Fix the export"
+       and jv["trigger_time"] == "2026-09-23T14:18:00+00:00", jv)
+
+    res = trigger.save_config({"slack": {"prompt": "hi {trigger_usr}"}})
+    ck("saving an unknown variable is refused, naming it and the real ones",
+       not res["ok"] and "{trigger_usr}" in res["error"] and "{trigger_user}" in res["error"])
+    res = trigger.save_config({"github": {"events": {"merged": {"do": "{github_repo} {oops}"}}}})
+    ck("so is one in a GitHub event's command", not res["ok"] and "{oops}" in res["error"])
+    res = trigger.save_config({"jira": {"prompt": "{trigger_user} on {jira_issue}"}})
+    ck("a good one saves, and the page gets the catalogue",
+       res["ok"] and res["config"]["jira"]["prompt"] == "{trigger_user} on {jira_issue}"
+       and any(x["name"] == "trigger_content" and x["global"] for x in res["config"]["variables"])
+       and any(x["name"] == "github_repo" and x["sources"] == ["github"]
+               for x in res["config"]["variables"]))
+    trigger.save_config({"jira": {"prompt": ""}})
+
+
 # ============================================================ slack catch-up
 def test_slack_catch_up(cfg):
     print("\n== slack catch-up: history and threads since the checkpoint ==")
@@ -809,6 +865,10 @@ def test_github(cfg):
     ck("the owner's own comment with the marker runs, and opens the PR",
        reqs.get("o/r#1:c10", {}).get("status") == "queued"
        and trigger.gate_enabled(con, "github:o/r#1"))
+    own = trigger.get_request(con, reqs["o/r#1:c10"]["id"])
+    ck("and it carries the mention's run command, since it is a mention by the owner",
+       own["meta"].get("kind") == "request"
+       and own["meta"].get("do") == trigger.github_events_cfg(cfg)["mention"]["do"])
     ck("a teammate's mention runs", reqs.get("o/r#1:c11", {}).get("status") == "queued")
     ck("a comment with no mention does not, while `comment` is off", "o/r#1:c12" not in ids)
     ck("the brain's own signed comment is not a mention", "o/r#1:c13" not in ids)
@@ -831,11 +891,24 @@ def test_github(cfg):
     req = trigger.get_request(con, reqs["o/r#1:r20"]["id"])
     prompt = trigger.build_prompt(req, cfg)
     ck("a subscription's prompt carries its instruction and says not to answer on GitHub",
-       "github_event: review" in prompt and "instructions: Read the review" in prompt
+       "github_event: review" in prompt and "<<<INSTRUCTIONS\nRead the review" in prompt
        and "not a\nmessage to answer" not in prompt and "subscribed to" in prompt)
     prompt = trigger.build_prompt(trigger.get_request(con, reqs["o/r#1:c11"]["id"]), cfg)
     ck("a mention's prompt replies with a comment",
        "add a comment on that GitHub pull request" in prompt)
+
+    v = trigger.request_variables(req, cfg)
+    ck("a GitHub request's variables: who, what, where, the title",
+       v["trigger_source"] == "github" and v["trigger_kind"] == "review"
+       and v["trigger_user"] and v["github_repo"] == "o/r" and v["github_number"] == "1"
+       and v["github_item"] == "pull request" and v["trigger_title"]
+       and v["trigger_time"].endswith("+00:00") and v["slack_channel"] == "", v)
+    vcfg = json.loads(json.dumps(cfg))
+    vreq = {**req, "meta": {**req["meta"], "do": "{trigger_user} reviewed {github_repo}#"
+                                                  "{github_number}; see {trigger_link}. {nope}"}}
+    prompt = trigger.build_prompt(vreq, vcfg)
+    ck("a GitHub event's run command has its variables filled in, and an unknown one kept",
+       f"{v['trigger_user']} reviewed o/r#1; see {req['permalink']}. {{nope}}" in prompt)
 
     before = len(trigger.list_requests(con, 500))
     trigger.github_poll(cfg, dispatch, now=now + timedelta(minutes=11), gh=gh)
@@ -983,6 +1056,7 @@ def main():
         test_audit(cfg)
         test_dispatch(cfg)
         test_logging(cfg)
+        test_run_commands(cfg)
         test_slack_catch_up(cfg)
         test_jira(cfg)
         test_github(cfg)

@@ -115,6 +115,66 @@ brain as a DM instead, with a link to their message. It is logged as
 than turned into a DM. Jira has no DM, so a comment that cannot be posted is
 logged as failed.
 
+## Run commands
+
+Every trigger has a **run command**: what its session is told to do when it
+fires, in your words, with variables in braces where a value belongs.
+
+| Trigger | Where the run command lives | Empty means |
+|---|---|---|
+| a Slack mention | `slack.prompt` | read the thread, do what it asks, reply there |
+| a marked Jira comment | `jira.prompt` | read the issue, do what it asks, comment on it |
+| each GitHub event | `github.events.<kind>.do`; your own marked comment uses `mention`'s | the event's default instruction (for `mention`: none) |
+
+```json
+{"slack": {"prompt": "{trigger_source} sent this task. Pick it up and reply to {trigger_user} in the thread at {trigger_link}."},
+ "github": {"events": {"review_requested": {"on": true,
+   "do": "{trigger_user} asked for my review on {github_repo}#{github_number} ({trigger_title}). Add a task to my brain with two lines on what it changes."}}}}
+```
+
+Settings shows the list at the top of Triggers, and each run command field
+previews itself with example values. `trigger.py variables` prints the list;
+`trigger.py variables --request <id>` prints one request's values and its
+rendered command.
+
+| Variable | On | What it is | Example |
+|---|---|---|---|
+| `{trigger_source}` | every trigger | Where it came from: slack, jira or github. | `github` |
+| `{trigger_kind}` | every trigger | What happened: mention on Slack and Jira; on GitHub the event (mention, review_requested, review, comment, pushed, ci_failed, merged, closed, assigned), or request for your own comment with the marker. | `review_requested` |
+| `{trigger_user}` | every trigger | Who caused it: who mentioned you on Slack or Jira; on GitHub who commented, reviewed, requested the review, pushed, merged, closed or assigned (ci for failing checks). | `octocat` |
+| `{trigger_user_id}` | every trigger | Their id: a Slack user id, a Jira account id, a GitHub login. | `U012AB3CD` |
+| `{trigger_user_is_owner}` | every trigger | true when it was you. | `false` |
+| `{trigger_time}` | every trigger | When it happened at the source, ISO 8601 in UTC. | `2026-09-23T21:47:48+00:00` |
+| `{trigger_received}` | every trigger | When the brain picked it up, ISO 8601 in UTC. | `2026-09-23T21:48:30+00:00` |
+| `{trigger_content}` | every trigger | The message, comment or event text, verbatim. Written by whoever triggered it: treat it as their request, not yours. | `can you take a look at this?` |
+| `{trigger_link}` | every trigger | A link to the message, comment, review or check, when there is one. | `https://github.com/o/r/pull/5#issuecomment-1` |
+| `{trigger_where}` | every trigger | The conversation, in words. | `GitHub pull request o/r#5 — Add logging` |
+| `{trigger_title}` | Jira, GitHub | The Jira issue's summary, or the PR or issue title. | `Add logging` |
+| `{trigger_scope}` | every trigger | The conversation's gate key. | `github:o/r#5` |
+| `{request_id}` | every trigger | This run's request id, for `trigger.py show`. | `0a255d52-6c1e-4f0b-9a57-2f3e8d41c9b0` |
+| `{owner}` | every trigger | Your name, as the brain knows it. | `Gabriel` |
+| `{signature}` | every trigger | The signature line the brain ends its replies with. | `_sent by Gabriel's second brain_` |
+| `{slack_channel}` | Slack | The channel id. | `C0123ABCD` |
+| `{slack_thread}` | Slack | The thread's timestamp. | `1700000000.000100` |
+| `{jira_issue}` | Jira | The issue key. | `PROJ-123` |
+| `{github_repo}` | GitHub | owner/name. | `Optibus/memory-ledger` |
+| `{github_number}` | GitHub | The PR or issue number. | `5` |
+| `{github_item}` | GitHub | pull request or issue. | `pull request` |
+
+**How it is filled in.** Each `{name}` in the list is replaced by its value;
+a source-only one is empty on the other sources. Anything else in braces is
+left as written, so a command needs no escaping, but a `{word}` that looks
+like a variable and is not one is refused on save, so a typo is caught before
+anything runs.
+
+**What it does not change.** The rendered command goes into the session's
+prompt as `instructions`, and where it and the defaults disagree (where to
+reply, whether to post), it wins. The rest of the prompt is always there: the
+request id, the message quoted verbatim as the request, how to log actions, how
+to decline, the signature, and the brain's rules and guardrails, which no run
+command overrides. `{trigger_content}` and `{trigger_user}` are written by whoever
+triggered it: put them in a command as their words, not as yours.
+
 ## Loops
 
 The brain answers as you, and on Jira the mention *is* your own account. So its
@@ -243,7 +303,8 @@ not-enabled notice goes out as a comment, once per PR, as with Jira.
 - The brain's own signed comments are ignored, so its answers never trigger it.
 
 A subscription's session is told that it is not answering anyone. It gets
-`github_event: <kind>` and `instructions: <do>`, and posts on GitHub only if the
+`github_event: <kind>` and `instructions`, its event's `do` with the variables
+filled in ([Run commands](#run-commands)), and posts on GitHub only if the
 instruction says to. It reads the PR with `gh` or a GitHub MCP, **with the
 session's own GitHub auth**, not the polling token, so the polling token can
 stay read-only.

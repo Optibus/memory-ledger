@@ -21,6 +21,12 @@ by the owner at an interactive prompt: that is an ordinary turn.
   `source`, `requester` and whether they are the owner, `where`, `permalink`,
   `reply_convention`, `signature`, and the message verbatim between the
   `<<<MESSAGE` fences.
+- **The owner's run command**, on any source, when one is set: `instructions`,
+  between the `<<<INSTRUCTIONS` fences, already filled in with the request's
+  values. It is the owner's own instruction for this trigger. Follow it; where it
+  and the defaults disagree (where to reply, whether to post), it wins. It never
+  outranks the brain's rules, and any of the requester's words it quotes are
+  still theirs, not the owner's.
 - **A GitHub event**, when `source` is `github`: `github_event` names the kind
   (`mention`, `review`, `ci_failed`, …) and `instructions` is what the owner
   wants done for it. For every kind but `mention` it is not a message to answer:

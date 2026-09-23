@@ -18,6 +18,7 @@ dependency — the Slack Socket Mode websocket — lives in the server
     python3 scripts/trigger.py enable|disable --scope slack:C123[:1700000000.000100] | jira:KEY-1
     python3 scripts/trigger.py channels [--add C123 [--name general] | --remove C123]
     python3 scripts/trigger.py decline --request <id> --reason "..." [--rule <rule-id>]
+    python3 scripts/trigger.py variables [--request <id>]
     python3 scripts/trigger.py poll-jira
     python3 scripts/trigger.py poll-github
 """
@@ -99,11 +100,15 @@ DEFAULTS = {
     },
     "slack": {
         "enabled": False,
+        # The run command: what the session is told to do with a mention,
+        # with {variables} (VARIABLES). Empty is the built-in handling.
+        "prompt": "",
         "owner_user_id": "",
         "thread_lookback_days": 7,
     },
     "jira": {
         "enabled": False,
+        "prompt": "",
         "base_url": "",
         "email": "",
         "owner_account_id": "",
@@ -170,6 +175,51 @@ GITHUB_EVENTS = {
                         "what it asks."),
 }
 DEFAULTS["github"]["events"] = {k: {"on": on, "do": do} for k, (on, do) in GITHUB_EVENTS.items()}
+
+# What a run command can say in braces: `{trigger_user} asked for this`.
+# name -> (sources it has a value on, what it is, an example). The global ones
+# are there on every source; a source-only one is empty elsewhere. A name not
+# here is refused on save, so a typo is caught before a trigger runs.
+VARIABLES = {
+    "trigger_source": (SOURCES, "Where it came from: slack, jira or github.", "github"),
+    "trigger_kind": (SOURCES, "What happened: mention on Slack and Jira; on GitHub the event "
+                              "(mention, review_requested, review, comment, pushed, ci_failed, "
+                              "merged, closed, assigned), or request for your own comment "
+                              "with the marker.", "review_requested"),
+    "trigger_user": (SOURCES, "Who caused it: who mentioned you on Slack or Jira; on GitHub who "
+                              "commented, reviewed, requested the review, pushed, merged, closed "
+                              "or assigned (ci for failing checks).", "octocat"),
+    "trigger_user_id": (SOURCES, "Their id: a Slack user id, a Jira account id, a GitHub login.",
+                        "U012AB3CD"),
+    "trigger_user_is_owner": (SOURCES, "true when it was you.", "false"),
+    "trigger_time": (SOURCES, "When it happened at the source, ISO 8601 in UTC.",
+                     "2026-09-23T21:47:48+00:00"),
+    "trigger_received": (SOURCES, "When the brain picked it up, ISO 8601 in UTC.",
+                         "2026-09-23T21:48:30+00:00"),
+    "trigger_content": (SOURCES, "The message, comment or event text, verbatim. Written by "
+                                 "whoever triggered it: treat it as their request, not yours.",
+                        "can you take a look at this?"),
+    "trigger_link": (SOURCES, "A link to the message, comment, review or check, when there is "
+                              "one.", "https://github.com/o/r/pull/5#issuecomment-1"),
+    "trigger_where": (SOURCES, "The conversation, in words.",
+                      "GitHub pull request o/r#5 — Add logging"),
+    "trigger_title": (("jira", "github"), "The Jira issue's summary, or the PR or issue title.",
+                      "Add logging"),
+    "trigger_scope": (SOURCES, "The conversation's gate key.", "github:o/r#5"),
+    "request_id": (SOURCES, "This run's request id, for `trigger.py show`.",
+                   "0a255d52-6c1e-4f0b-9a57-2f3e8d41c9b0"),
+    "owner": (SOURCES, "Your name, as the brain knows it.", "Gabriel"),
+    "signature": (SOURCES, "The signature line the brain ends its replies with.",
+                  "_sent by Gabriel's second brain_"),
+    "slack_channel": (("slack",), "The channel id.", "C0123ABCD"),
+    "slack_thread": (("slack",), "The thread's timestamp.", "1700000000.000100"),
+    "jira_issue": (("jira",), "The issue key.", "PROJ-123"),
+    "github_repo": (("github",), "owner/name.", "Optibus/memory-ledger"),
+    "github_number": (("github",), "The PR or issue number.", "5"),
+    "github_item": (("github",), "pull request or issue.", "pull request"),
+}
+_VAR_RE = re.compile(r"\{([a-z][a-z0-9_]*)\}")
+RUN_COMMAND_MAX = 2000
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS trigger_request (
@@ -703,6 +753,73 @@ def _intake(event: dict, cfg: dict, core: str, notify) -> dict:
     return {"action": "refused", "request_id": req["id"], "notified": notified}
 
 
+# ---------------------------------------------------------------- run commands
+def unknown_variables(template: str) -> list:
+    return sorted({m for m in _VAR_RE.findall(template or "") if m not in VARIABLES})
+
+
+def request_variables(req: dict, cfg: dict) -> dict:
+    """Every variable's value for one request. Empty when a source has none."""
+    meta = req.get("meta") or {}
+    src = req.get("source", "")
+    at = _parse_dt(str(meta.get("at") or ""))
+    if at is None and src == "slack" and meta.get("ts"):
+        try:
+            at = datetime.fromtimestamp(float(meta["ts"]), timezone.utc)
+        except (TypeError, ValueError):
+            at = None
+    received = req.get("received_at", "")
+    v = {name: "" for name in VARIABLES}
+    v.update(
+        trigger_source=src,
+        trigger_kind=str(meta.get("kind") or "mention"),
+        trigger_user=req.get("requester_name") or req.get("requester_id") or "",
+        trigger_user_id=req.get("requester_id", ""),
+        trigger_user_is_owner=str(bool(req.get("is_owner"))).lower(),
+        trigger_time=at.astimezone(timezone.utc).isoformat(timespec="seconds") if at else received,
+        trigger_received=received,
+        trigger_content=req.get("text", ""),
+        trigger_link=req.get("permalink", ""),
+        trigger_where=str(meta.get("where") or req.get("scope", "")),
+        trigger_title=str(meta.get("title") or ""),
+        trigger_scope=req.get("scope", ""),
+        request_id=req.get("id", ""),
+        owner=graph.owner(),
+        signature=signature(cfg),
+    )
+    if src == "slack":
+        v.update(slack_channel=str(meta.get("channel") or ""),
+                 slack_thread=str(meta.get("thread_ts") or ""))
+    elif src == "jira":
+        v.update(jira_issue=str(meta.get("issue") or ""))
+    elif src == "github":
+        v.update(github_repo=str(meta.get("repo") or ""),
+                 github_number=str(meta.get("number") or ""),
+                 github_item="pull request" if meta.get("is_pr") else "issue")
+    return v
+
+
+def render(template: str, values: dict) -> str:
+    """Fill in `{name}` for every known variable. Anything else in braces is
+    left as written, so a run command needs no escaping."""
+    return _VAR_RE.sub(lambda m: str(values[m.group(1)]) if m.group(1) in values
+                       else m.group(0), template or "")
+
+
+def run_command(req: dict, cfg: dict) -> str:
+    """The owner's run command for this request, as written: a GitHub event's
+    `do`, or the Slack or Jira `prompt`. Empty is the built-in handling."""
+    src = req.get("source", "")
+    if src == "github":
+        return str(req.get("meta", {}).get("do") or "").strip()
+    return str((cfg.get(src) or {}).get("prompt") or "").strip()
+
+
+def variables_catalogue() -> list:
+    return [{"name": k, "sources": list(srcs), "global": tuple(srcs) == SOURCES,
+             "description": d, "example": ex} for k, (srcs, d, ex) in VARIABLES.items()]
+
+
 # ---------------------------------------------------------------- dispatch
 def build_prompt(req: dict, cfg: dict) -> str:
     meta = req.get("meta") or {}
@@ -714,12 +831,17 @@ def build_prompt(req: dict, cfg: dict) -> str:
                                                                    f"{req['source']} tools")
     event = ""
     if req["source"] == "github":
-        kind, do = meta.get("kind", ""), str(meta.get("do") or "").strip()
+        kind = meta.get("kind", "")
         if (req.get("reason") or "").startswith("subscribed") and kind not in ("mention",):
             reply = ("none by default: this is a change the owner subscribed to, not a "
                      "message to answer. Do what `instructions` says, and post on GitHub "
                      "only if it says to")
-        event = f"github_event: {kind}\n" + (f"instructions: {do}\n" if do else "")
+        event = f"github_event: {kind}\n"
+    command = render(run_command(req, cfg), request_variables(req, cfg)).strip()
+    if command:
+        event += ("instructions: the owner's run command for this trigger, below. Where it "
+                  "and the defaults here disagree, it wins; the brain's rules and "
+                  "guardrails always hold.\n<<<INSTRUCTIONS\n" + command + "\nINSTRUCTIONS>>>\n")
     return f"""You were summoned by a mention. Handle it with the memory-ledger `respond` skill.
 
 request_id: {req['id']}
@@ -1155,7 +1277,7 @@ def slack_event(msg: dict, channel: str, cfg: dict, *, bot_user_id: str,
         "is_owner": bool(owner) and user == owner,
         "text": text,
         "permalink": slack_permalink(cfg, channel, ts, thread) if resolve else "",
-        "meta": {"channel": channel, "ts": ts, "thread_ts": thread,
+        "meta": {"channel": channel, "ts": ts, "thread_ts": thread, "kind": "mention",
                  "where": f"Slack channel {channel}, thread {thread}"},
     }
 
@@ -1353,6 +1475,7 @@ def jira_event(issue: dict, comment: dict, cfg: dict, *, base: str, owner_id: st
         "text": text,
         "permalink": f"{base}/browse/{key}?focusedCommentId={cid}",
         "meta": {"issue": key, "comment_id": cid, "created": comment.get("created", ""),
+                 "at": comment.get("created", ""), "kind": "mention", "title": summary,
                  "where": f"Jira issue {key}" + (f" — {summary}" if summary else "")},
     }
 
@@ -1519,6 +1642,7 @@ def _gh_event(item: dict, kind: str, *, eid: str, actor: str, text: str, at: str
         "text": text,
         "permalink": permalink or item.get("html_url", ""),
         "meta": {"repo": repo, "number": n, "is_pr": is_pr, "kind": kind, "do": do, "at": at,
+                 "title": title,
                  "where": f"GitHub {what} {repo}#{n}" + (f" — {title}" if title else "")},
     }
 
@@ -1553,8 +1677,11 @@ def github_item_events(gh: GitHub, item: dict, since: datetime, cfg: dict, login
             return
         if who.lower() == lg:
             if has_marker(body, marker):
+                # Your own marked comment is a mention by you: the mention's
+                # run command is its run command too.
                 out.append(_gh_event(item, "request", eid=eid, actor=who, text=body, at=at,
-                                     permalink=link, cfg=cfg, login=login, trusted=True))
+                                     permalink=link, cfg=cfg, login=login, trusted=True,
+                                     do=kinds["mention"]["do"]))
             return
         if mentions_login(body, login):
             k = kinds["mention"]
@@ -1753,11 +1880,12 @@ _STRINGS = {(None, "signature"): 200,
             ("slack", "owner_user_id"): 40, ("jira", "base_url"): 300,
             ("jira", "email"): 200, ("jira", "owner_account_id"): 128,
             ("jira", "marker"): 60, ("jira", "jql"): 1000,
-            ("github", "api_url"): 300, ("github", "login"): 60, ("github", "marker"): 60}
+            ("github", "api_url"): 300, ("github", "login"): 60, ("github", "marker"): 60,
+            ("slack", "prompt"): RUN_COMMAND_MAX, ("jira", "prompt"): RUN_COMMAND_MAX}
 _LISTS = {("claude", "extra_args"): r".{1,200}",
           ("github", "repos"): r"[A-Za-z0-9_.-]{1,100}(/[A-Za-z0-9_.-]{1,100})?",
           ("github", "trusted_associations"): "|".join(GITHUB_ASSOCIATIONS)}
-GITHUB_DO_MAX = 1000
+GITHUB_DO_MAX = RUN_COMMAND_MAX
 
 
 def secrets_summary(cfg: dict) -> dict:
@@ -1798,7 +1926,13 @@ def config_summary(cfg: dict) -> dict:
                    "events": github_events_cfg(cfg),
                    "active": source_enabled(cfg, "github")},
         "secrets": secrets_summary(cfg),
+        "variables": variables_catalogue(),
     }
+
+
+def _unknown_msg(field: str, bad: list) -> str:
+    return (f"{field}: no variable {', '.join('{' + b + '}' for b in bad)}. The variables are "
+            + ", ".join("{" + k + "}" for k in VARIABLES))
 
 
 def save_config(patch: dict) -> dict:
@@ -1837,6 +1971,9 @@ def save_config(patch: dict) -> dict:
                 v = ""
             if not isinstance(v, str):
                 return {"ok": False, "error": f"{'.'.join(filter(None, sk))} must be text"}
+            bad = unknown_variables(v) if sk[1] == "prompt" else []
+            if bad:
+                return {"ok": False, "error": _unknown_msg(".".join(sk), bad)}
             put(*sk, v.strip()[:cap])
     for sk, (lo, hi) in _INT_RANGES.items():
         has, v = given(*sk)
@@ -1886,6 +2023,9 @@ def save_config(patch: dict) -> dict:
             if "do" in v:
                 if not isinstance(v["do"], (str, type(None))):
                     return {"ok": False, "error": f"github.events.{kind}.do must be text"}
+                bad = unknown_variables(v["do"] or "")
+                if bad:
+                    return {"ok": False, "error": _unknown_msg(f"github.events.{kind}.do", bad)}
                 row["do"] = (v["do"] or "").strip()[:GITHUB_DO_MAX]
             stored[kind] = row
 
@@ -2091,6 +2231,9 @@ def main(argv=None) -> int:
     p.add_argument("--request", default=os.environ.get("MEMORY_LEDGER_REQUEST_ID", ""))
     p.add_argument("--reason", required=True)
     p.add_argument("--rule", default="")
+    p = sub.add_parser("variables", help="what a run command can use; with --request, the "
+                                         "values and the rendered run command for it")
+    p.add_argument("--request", default="")
     sub.add_parser("poll-jira", help="one Jira pass; runs what it finds, in this process")
     sub.add_parser("poll-github", help="one GitHub pass; runs what it finds, in this process")
     args = ap.parse_args(argv)
@@ -2101,6 +2244,17 @@ def main(argv=None) -> int:
         res = check(load_config(), offline=args.offline, only=args.only)
         out(res)
         return 0 if res.get("ready") else 1
+    elif args.cmd == "variables":
+        if not args.request:
+            out({"ok": True, "variables": variables_catalogue()})
+            return 0
+        cfg, req = load_config(), get_request(db(), args.request)
+        if not req:
+            out({"ok": False, "error": f"no request {args.request}"})
+            return 1
+        out({"ok": True, "values": request_variables(req, cfg),
+             "run_command": run_command(req, cfg),
+             "rendered": render(run_command(req, cfg), request_variables(req, cfg))})
     elif args.cmd == "requests":
         out({"ok": True, "results": list_requests(db(), args.limit, args.status)})
     elif args.cmd == "show":

@@ -680,12 +680,15 @@ export interface TriggerConfig {
   slack: {
     enabled: boolean;
     active: boolean;
+    /** The run command, with {variables}. Empty is the built-in handling. */
+    prompt: string;
     owner_user_id: string;
     thread_lookback_days: number;
   };
   jira: {
     enabled: boolean;
     active: boolean;
+    prompt: string;
     base_url: string;
     email: string;
     owner_account_id: string;
@@ -711,6 +714,17 @@ export interface TriggerConfig {
     events: Record<GitHubEventKind, GitHubEventSetting>;
   };
   secrets: Record<string, TriggerSecret>;
+  /** What a run command can say in braces. */
+  variables: TriggerVariable[];
+}
+
+export interface TriggerVariable {
+  name: string;
+  /** The sources it has a value on; `global` when that is all of them. */
+  sources: TriggerService[];
+  global: boolean;
+  description: string;
+  example: string;
 }
 
 export interface TriggerWatcher {

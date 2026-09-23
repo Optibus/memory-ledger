@@ -443,9 +443,9 @@ export const triggerFixture: import("@/api/types").TriggerStatus = {
       bin: "claude", notice_model: "haiku", mcp_config: "", strict_mcp_config: false, timeout_s: 900,
       max_concurrent: 3, extra_args: [], cwd: "",
     },
-    slack: { enabled: true, active: true, owner_user_id: "U0OWNER", thread_lookback_days: 7 },
+    slack: { enabled: true, active: true, prompt: "", owner_user_id: "U0OWNER", thread_lookback_days: 7 },
     jira: {
-      enabled: false, active: false, base_url: "https://j.example", email: "me@example.com",
+      enabled: false, active: false, prompt: "", base_url: "https://j.example", email: "me@example.com",
       owner_account_id: "", marker: "@brain", poll_seconds: 60, jql: "", max_catchup_hours: 72,
     },
     github: {
@@ -471,6 +471,12 @@ export const triggerFixture: import("@/api/types").TriggerStatus = {
       "jira.token": { set: false, stored: false, source: "", env_var: "MEMORY_LEDGER_JIRA_TOKEN" },
       "github.token": { set: false, stored: false, source: "", env_var: "MEMORY_LEDGER_GITHUB_TOKEN" },
     },
+    variables: [
+      { name: "trigger_source", sources: ["slack", "jira", "github"], global: true, description: "Where it came from.", example: "github" },
+      { name: "trigger_user", sources: ["slack", "jira", "github"], global: true, description: "Who caused it.", example: "octocat" },
+      { name: "trigger_link", sources: ["slack", "jira", "github"], global: true, description: "A link to it.", example: "https://github.com/o/r/pull/5" },
+      { name: "github_repo", sources: ["github"], global: false, description: "owner/name.", example: "o/r" },
+    ],
   },
   runtime: {
     running: true, reason: "", started_at: "2026-09-23T12:00:00+00:00",

@@ -200,16 +200,20 @@ class TriggerConfig(Body):
                                                      "message they answer (a model call).")
     claude: _obj = Field(None, description="`bin`, `mcp_config`, `strict_mcp_config`, "
                                            "`timeout_s`, `max_concurrent`, `extra_args`, `cwd`.")
-    slack: _obj = Field(None, description="`enabled`, `owner_user_id`, "
+    slack: _obj = Field(None, description="`enabled`, `prompt` (the run command, with "
+                                          "`{variables}`), `owner_user_id`, "
                                           "`thread_lookback_days`, and the write-only "
                                           "`app_token`, `bot_token`, `user_token`.")
-    jira: _obj = Field(None, description="`enabled`, `base_url`, `email`, `owner_account_id`, "
+    jira: _obj = Field(None, description="`enabled`, `prompt` (the run command), "
+                                         "`base_url`, `email`, `owner_account_id`, "
                                          "`marker`, `poll_seconds`, `jql`, `max_catchup_hours`, "
                                          "and the write-only `token`.")
     github: _obj = Field(None, description="`enabled`, `api_url`, `login`, `marker`, "
                                            "`poll_seconds`, `repos`, `trusted_associations`, "
                                            "`refusal_notice`, `max_catchup_hours`, `events` "
-                                           "(`{kind: {on, do}}`), and the write-only `token`.")
+                                           "(`{kind: {on, do}}`, `do` being that event's run "
+                                           "command), and the write-only `token`. An unknown "
+                                           "`{variable}` in a run command is refused.")
     clear: Optional[list[LooseStr]] = Field(None, description="Secrets to remove, e.g. "
                                                               "`[\"slack.user_token\"]`.")
 

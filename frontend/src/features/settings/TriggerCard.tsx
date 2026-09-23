@@ -14,6 +14,7 @@ import type {
   TriggerSecret,
   TriggerService,
   TriggerStatus,
+  TriggerVariable,
   TriggerWatcher,
 } from "@/api/types";
 import "./SettingsSection.css";
@@ -66,6 +67,7 @@ export function TriggerCard({ writable }: { writable: boolean }) {
       ) : null}
       {config.problem ? <StatusMessage tone="error">{config.problem}</StatusMessage> : null}
 
+      <VariablesGuide variables={config.variables} />
       <MasterSwitch config={config} writable={writable} onSaved={reload} />
 
       <SlackPanel
@@ -82,6 +84,116 @@ export function TriggerCard({ writable }: { writable: boolean }) {
 
       {!writable ? <span className="ml-settings__note">read-only server</span> : null}
     </Card>
+  );
+}
+
+// ---------------------------------------------------------------- run commands
+const VAR_RE = /\{([a-z][a-z0-9_]*)\}/g;
+const SOURCE_NAME: Record<string, string> = { slack: "Slack", jira: "Jira", github: "GitHub" };
+
+/** The run command with each variable swapped for its example, and the names it does not know. */
+function preview(template: string, variables: TriggerVariable[]) {
+  const known = new Map(variables.map((v) => [v.name, v.example]));
+  const unknown = new Set<string>();
+  const text = template.replace(VAR_RE, (whole, name: string) => {
+    if (known.has(name)) return known.get(name) ?? "";
+    unknown.add(name);
+    return whole;
+  });
+  return { text, unknown: [...unknown] };
+}
+
+/**
+ * What a run command can say, at the top of the card: every trigger's command
+ * uses the same names, so they are documented once, here.
+ */
+function VariablesGuide({ variables }: { variables: TriggerVariable[] }) {
+  return (
+    <details className="ml-trigger__vars">
+      <summary>
+        Run commands and their variables <Badge tone="neutral">{variables.length}</Badge>
+      </summary>
+      <p className="ml-settings__hint">
+        Each trigger has a run command: what the session is told to do when it fires. Write it in
+        your own words and put a variable in braces where a value belongs, for example{" "}
+        <code>{"{trigger_source} sent this task. Pick it up and reply to {trigger_user} at {trigger_link}."}</code>{" "}
+        Left empty, a trigger gets the built-in handling. Whatever the command says, the brain&rsquo;s
+        rules still hold, and the message is still quoted to the session as the request, not as your
+        instruction. <code>{"{trigger_content}"}</code> is written by whoever triggered it, so use
+        it as their words.
+      </p>
+      <div className="ml-trigger__vars-table">
+        <table>
+          <thead>
+            <tr>
+              <th>Variable</th>
+              <th>On</th>
+              <th>What it is</th>
+              <th>Example</th>
+            </tr>
+          </thead>
+          <tbody>
+            {variables.map((v) => (
+              <tr key={v.name}>
+                <td>
+                  <code>{`{${v.name}}`}</code>
+                </td>
+                <td>{v.global ? "every trigger" : v.sources.map((x) => SOURCE_NAME[x] ?? x).join(", ")}</td>
+                <td>{v.description}</td>
+                <td>
+                  <code>{v.example}</code>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </details>
+  );
+}
+
+function RunCommandField({
+  label = "Run command",
+  hint,
+  value,
+  onChange,
+  variables,
+  writable,
+  placeholder,
+}: {
+  label?: string;
+  hint: string;
+  value: string;
+  onChange: (v: string) => void;
+  variables: TriggerVariable[];
+  writable: boolean;
+  placeholder?: string;
+}) {
+  const { text, unknown } = preview(value, variables);
+  return (
+    <Field label={label} hint={hint}>
+      {(id) => (
+        <>
+          <TextArea
+            id={id}
+            rows={3}
+            value={value}
+            placeholder={placeholder}
+            disabled={!writable}
+            onChange={(e) => onChange(e.target.value)}
+          />
+          {unknown.length ? (
+            <StatusMessage tone="error">
+              Not a variable: {unknown.map((u) => `{${u}}`).join(", ")}. The list is at the top of Triggers.
+            </StatusMessage>
+          ) : value.match(VAR_RE) ? (
+            <p className="ml-trigger__preview">
+              <span>With example values:</span> {text}
+            </p>
+          ) : null}
+        </>
+      )}
+    </Field>
   );
 }
 
@@ -427,18 +539,21 @@ function SlackPanel({
   const { busy, out, save } = useSave(onSaved);
   const [owner, setOwner] = useState(s.owner_user_id ?? "");
   const [lookback, setLookback] = useState(String(s.thread_lookback_days ?? 7));
+  const [prompt, setPrompt] = useState(s.prompt ?? "");
   const [appToken, setAppToken] = useState("");
   const [botToken, setBotToken] = useState("");
   const [userToken, setUserToken] = useState("");
   useEffect(() => {
     setOwner(s.owner_user_id ?? "");
     setLookback(String(s.thread_lookback_days ?? 7));
-  }, [s.owner_user_id, s.thread_lookback_days]);
+    setPrompt(s.prompt ?? "");
+  }, [s.owner_user_id, s.thread_lookback_days, s.prompt]);
 
   const submit = async () => {
     const slack: Record<string, unknown> = {
       owner_user_id: owner,
       thread_lookback_days: Number(lookback),
+      prompt,
     };
     // Only a typed token travels. Blank means keep, never "set to empty".
     if (appToken) slack.app_token = appToken;
@@ -469,6 +584,14 @@ function SlackPanel({
     >
       {txt("Your Slack user id", owner, setOwner, "Your own U… id. Your mention opens a thread; nobody else's can.", "U0123ABCD")}
       {num("Thread look-back (days)", lookback, setLookback, "How far back catch-up looks for threads with new replies.", 0, 90)}
+      <RunCommandField
+        hint="What the session does with a Slack mention. Empty: read the thread, do what it asks, reply there."
+        value={prompt}
+        onChange={setPrompt}
+        variables={config.variables}
+        writable={writable}
+        placeholder="{trigger_user} mentioned me in Slack. Read {trigger_link}, do what they ask, and reply in the thread."
+      />
       <SecretField
         label="App token"
         secret={config.secrets["slack.app_token"]}
@@ -523,8 +646,10 @@ function JiraPanel({
   const [poll, setPoll] = useState(String(j.poll_seconds ?? 60));
   const [jql, setJql] = useState(j.jql ?? "");
   const [catchUp, setCatchUp] = useState(String(j.max_catchup_hours ?? 72));
+  const [prompt, setPrompt] = useState(j.prompt ?? "");
   const [token, setToken] = useState("");
   useEffect(() => {
+    setPrompt(j.prompt ?? "");
     setBaseUrl(j.base_url ?? "");
     setEmail(j.email ?? "");
     setAccount(j.owner_account_id ?? "");
@@ -532,7 +657,7 @@ function JiraPanel({
     setPoll(String(j.poll_seconds ?? 60));
     setJql(j.jql ?? "");
     setCatchUp(String(j.max_catchup_hours ?? 72));
-  }, [j.base_url, j.email, j.owner_account_id, j.marker, j.poll_seconds, j.jql, j.max_catchup_hours]);
+  }, [j.base_url, j.email, j.owner_account_id, j.marker, j.poll_seconds, j.jql, j.max_catchup_hours, j.prompt]);
 
   const submit = async () => {
     const jira: Record<string, unknown> = {
@@ -543,6 +668,7 @@ function JiraPanel({
       poll_seconds: Number(poll),
       jql,
       max_catchup_hours: Number(catchUp),
+      prompt,
     };
     if (token) jira.token = token;
     if (await save({ jira }, "Jira saved.")) setToken("");
@@ -569,6 +695,14 @@ function JiraPanel({
       {num("Poll every (seconds)", poll, setPoll, "15 to 3600.", 15, 3600)}
       {num("Catch-up limit (hours)", catchUp, setCatchUp, "After a long gap, look back no further than this.", 1, 720)}
       {txt("Extra JQL", jql, setJql, "ANDed onto the search, to narrow which issues are read.", "project in (PROJ, OPS)")}
+      <RunCommandField
+        hint="What the session does with a marked Jira comment. Empty: read the issue, do what it asks, reply with a comment."
+        value={prompt}
+        onChange={setPrompt}
+        variables={config.variables}
+        writable={writable}
+        placeholder="{trigger_user} asked for this on {jira_issue} ({trigger_title}). Do it and comment on the issue."
+      />
       <SecretField
         label="API token"
         secret={config.secrets["jira.token"]}
@@ -691,17 +825,13 @@ function GitHubPanel({
                 />
                 {e.hint ? <p className="ml-settings__hint ml-settings__hint--switch">{e.hint}</p> : null}
                 {ev.on ? (
-                  <Field label="What the brain does" hint={e.kind === "mention" ? "Optional: how to handle a mention, on top of what it asks." : "The instruction the session gets."}>
-                    {(id) => (
-                      <TextArea
-                        id={id}
-                        rows={2}
-                        value={ev.do}
-                        disabled={!writable}
-                        onChange={(x) => setEvent(e.kind, { do: x.target.value })}
-                      />
-                    )}
-                  </Field>
+                  <RunCommandField
+                    hint={e.kind === "mention" ? "Optional: how to handle a mention, and your own comment with the marker, on top of what it asks. Variables work here." : "What the session does when this happens. Variables work here."}
+                    value={ev.do}
+                    onChange={(x) => setEvent(e.kind, { do: x })}
+                    variables={config.variables}
+                    writable={writable}
+                  />
                 ) : null}
               </div>
             );

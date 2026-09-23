@@ -231,10 +231,10 @@ describe("Triggers", () => {
   it("picks which GitHub changes start the flow, each with its instruction", async () => {
     const { user } = renderApp(<TriggerCard writable />, { route: "/settings" });
     const events = within(await screen.findByRole("group", { name: "GitHub events" }));
-    expect(events.queryAllByLabelText("What the brain does")).toHaveLength(3);
+    expect(events.queryAllByLabelText("Run command")).toHaveLength(3);
     await user.click(events.getByRole("checkbox", { name: "Checks fail on your pull request" }));
     await user.click(events.getByRole("checkbox", { name: "Your pull request is reviewed" }));
-    const boxes = events.getAllByLabelText("What the brain does");
+    const boxes = events.getAllByLabelText("Run command");
     expect(boxes).toHaveLength(3);
     const ci = boxes[boxes.length - 1];
     expect(ci).toHaveValue("Find the likely cause.");
@@ -246,5 +246,41 @@ describe("Triggers", () => {
     expect(ev.ci_failed).toEqual({ on: true, do: "Fix it and push." });
     expect(ev.review.on).toBe(false);
     expect(ev.mention.on).toBe(true);
+  });
+
+  it("documents the run command variables once, at the top", async () => {
+    const { user } = renderApp(<TriggerCard writable />, { route: "/settings" });
+    await user.click(await screen.findByText("Run commands and their variables"));
+    const table = screen.getByRole("table");
+    expect(within(table).getByText("{trigger_user}")).toBeInTheDocument();
+    const repo = within(table).getByText("{github_repo}").closest("tr") as HTMLElement;
+    expect(within(repo).getByText("GitHub")).toBeInTheDocument();
+    const src = within(table).getByText("{trigger_source}").closest("tr") as HTMLElement;
+    expect(within(src).getByText("every trigger")).toBeInTheDocument();
+  });
+
+  it("saves Slack's run command, previewing it with example values", async () => {
+    const { user } = renderApp(<TriggerCard writable />, { route: "/settings" });
+    const slack = await panel("Slack");
+    const box = slack.getByLabelText("Run command");
+    await user.click(box);
+    await user.paste("{trigger_source} sent this task. Reply to {trigger_user}.");
+    expect(slack.getByText(/github sent this task\. Reply to octocat\./)).toBeInTheDocument();
+    await user.click(slack.getByRole("button", { name: "Save Slack" }));
+    await waitFor(() =>
+      expect(sent()[0].slack).toMatchObject({
+        prompt: "{trigger_source} sent this task. Reply to {trigger_user}.",
+      }),
+    );
+  });
+
+  it("flags a variable that does not exist", async () => {
+    const { user } = renderApp(<TriggerCard writable />, { route: "/settings" });
+    const events = within(await screen.findByRole("group", { name: "GitHub events" }));
+    const box = events.getAllByLabelText("Run command")[1];
+    await user.clear(box);
+    await user.click(box);
+    await user.paste("Review {github_repo} for {trigger_usr}");
+    expect(events.getByText(/Not a variable: \{trigger_usr\}/)).toBeInTheDocument();
   });
 });
