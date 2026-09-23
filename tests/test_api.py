@@ -54,7 +54,7 @@ POST_ROUTES = [
     "/api/create-rule", "/api/create-skill", "/api/create-process",
     "/api/export-skills", "/api/ingest-skills", "/api/export-bundle",
     "/api/upload-bundle", "/api/import-bundle", "/api/delete-contracts",
-    "/api/trigger-gate", "/api/trigger-action",
+    "/api/trigger-gate", "/api/trigger-action", "/api/trigger-config", "/api/trigger-check",
 ]
 VIEWS = ["agenda", "open", "today", "tomorrow", "week", "closed", "range"]
 
@@ -683,8 +683,8 @@ def test_contract_writes(s: Server):
 def test_trigger_routes(s: Server):
     print("\n== triggers: the request log, its actions, the gate ==")
     t = s.get("/api/trigger").json()
-    ck("status answers with no trigger.json, and says why",
-       t.get("ok") and t["config"]["enabled"] is False and "does not exist" in t["config"]["problem"])
+    ck("status answers with no trigger.json, and says so",
+       t.get("ok") and t["config"]["enabled"] is False and t["config"]["exists"] is False)
     ck("without a config the watchers do not start, and say why",
        t["runtime"]["running"] is False and "does not exist" in t["runtime"]["reason"],
        str(t.get("runtime"))[:160])
@@ -732,6 +732,29 @@ def test_trigger_routes(s: Server):
     ck("enabled must be a boolean", refused(s.post("/api/trigger-gate",
                                                    {"scope": "jira:PROJ-1", "enabled": "yes"}),
                                             400, "true or false"))
+    c = s.post("/api/trigger-config", {"jira": {"enabled": True, "base_url": "https://j.example",
+                                                "email": "a@b.c", "token": "secret-tok"}})
+    ck("trigger-config saves", c.status == 200 and c.json()["config"]["jira"]["enabled"] is True,
+       str(c.raw[:200]))
+    ck("and never echoes a token", b"secret-tok" not in c.raw
+       and c.json()["config"]["secrets"]["jira.token"]["set"] is True)
+    ck("a save restarts the watchers on the new config",
+       c.json().get("watching") is True and c.json()["runtime"]["reason"] == "triggers are switched off")
+    ck("status reads it back", s.get("/api/trigger").json()["config"]["jira"]["base_url"]
+       == "https://j.example")
+    ck("a bad value is refused", refused(s.post("/api/trigger-config",
+                                                {"jira": {"poll_seconds": 2}}), 400, "from 15"))
+    ck("so is a config that is not an object",
+       s.post("/api/trigger-config", raw_body=b"[1]").status == 400)
+    k = s.post("/api/trigger-check", {"only": "jira", "offline": True}).json()
+    ck("trigger-check checks one service", k.get("ok") and k["target"] == "jira"
+       and k["ready"] is True, str(k)[:200])
+    k = s.post("/api/trigger-check", {"only": "slack", "offline": True}).json()
+    ck("and names what is missing", k["ready"] is False
+       and any("app_token" in p for p in k["problems"]))
+    ck("an unknown service is refused", refused(s.post("/api/trigger-check", {"only": "fax"}),
+                                                400, "only must be one of"))
+
     ck("a malformed scope is refused", refused(s.post("/api/trigger-gate",
                                                       {"scope": "bogus", "enabled": True}),
                                                400, "scope must look like"))

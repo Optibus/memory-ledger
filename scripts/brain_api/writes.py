@@ -22,7 +22,7 @@ from fastapi.responses import JSONResponse
 import graph
 import trigger
 
-from . import commands, models as m, payloads, state
+from . import commands, models as m, payloads, state, trigger_runtime
 from .errors import Refused
 
 ENVELOPE_RESPONSES = {
@@ -474,6 +474,31 @@ def trigger_gate(data: m.TriggerGate = body(m.TriggerGate)):
         return reply({"ok": False, "error": "enabled must be true or false"})
     return reply(trigger.set_gate(trigger.db(), clip(data.scope, 200), data.enabled,
                                   by="web-ui"))
+
+
+@router.post("/trigger-config", tags=["trigger"], summary="Change the trigger configuration",
+             description="Merges the keys sent into `<home>/trigger.json` (mode 600) and, "
+                         "when this server runs the watchers, restarts them on it. Secrets "
+                         "are write-only: empty keeps the stored one, `clear` removes it, "
+                         "and none is ever sent back.")
+def trigger_config(data: m.TriggerConfig = body(m.TriggerConfig)):
+    patch = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
+    if "clear" in patch:
+        patch["clear"] = [c for c in patch["clear"] if isinstance(c, str)]
+    res = trigger.save_config(patch)
+    if res.get("ok"):
+        res["runtime"] = trigger_runtime.restart() if state.TRIGGERS else trigger_runtime.status()
+        res["watching"] = state.TRIGGERS
+    return reply(res)
+
+
+@router.post("/trigger-check", tags=["trigger"], summary="Check that a service is ready",
+             description="Validates the configuration, and unless `offline`, calls Slack and "
+                         "Jira with the stored tokens to prove they work. Starts nothing and "
+                         "writes nothing. `ready` is the verdict; `ok` means the check ran.")
+def trigger_check(data: m.TriggerCheck = body(m.TriggerCheck)):
+    return reply(trigger.check(trigger.load_config(), offline=data.offline is True,
+                               only=clip(data.only, 20)))
 
 
 @router.post("/trigger-action", tags=["trigger"], summary="Log an action taken for a request",

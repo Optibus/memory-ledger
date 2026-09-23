@@ -14,6 +14,7 @@ import {
   settingsFixture,
   skillsFixture,
   statusFixture,
+  triggerFixture,
 } from "./fixtures";
 
 /** Every write the tests observed, so a test can assert what was actually sent. */
@@ -65,6 +66,7 @@ export const handlers = [
   }),
   http.get("/api/settings", () => HttpResponse.json(settingsFixture)),
   http.get("/api/status", () => HttpResponse.json(statusFixture)),
+  http.get("/api/trigger", () => HttpResponse.json(triggerFixture)),
   http.get("/api/timezones", () => ok({ zones: ["UTC", "America/Sao_Paulo", "Europe/Lisbon"] })),
   http.get("/api/capture", () => HttpResponse.json(captureFixture)),
   http.get("/api/doctor", () => HttpResponse.json(doctorFixture)),
@@ -115,6 +117,10 @@ export const handlers = [
   write("/api/settings"),
   write("/api/neo4j-config"),
   write("/api/neo4j-test"),
+  write("/api/trigger-config", () => ok({ config: triggerFixture.config, runtime: triggerFixture.runtime })),
+  write("/api/trigger-check", (body: { only?: string }) =>
+    ok({ ready: true, target: body.only || "all", problems: [], notes: [`${body.only}: fine`] }),
+  ),
   write("/api/flush"),
   write("/api/prune", () =>
     ok({ keep_days: 2, days_consolidated: 1, newly_consolidated: 12, still_loose: 0,

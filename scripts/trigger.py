@@ -929,26 +929,151 @@ def jira_poll(cfg: dict, dispatch, *, now: datetime | None = None, jira: Jira | 
 
 
 # ---------------------------------------------------------------- status
+SECRET_PREFIX = {("slack", "app_token"): "xapp-", ("slack", "bot_token"): "xoxb-",
+                 ("slack", "user_token"): "xoxp-"}
+
+# Every key the page may write, and how it is checked. A key not listed here is
+# ignored, so a client cannot grow the file with whatever it likes.
+_INT_RANGES = {
+    ("claude", "timeout_s"): (30, 7200),
+    ("claude", "max_concurrent"): (1, 16),
+    ("slack", "thread_lookback_days"): (0, 90),
+    ("jira", "poll_seconds"): (15, 3600),
+    ("jira", "max_catchup_hours"): (1, 720),
+}
+_BOOLS = {(None, "enabled"), ("claude", "strict_mcp_config"), ("slack", "enabled"),
+          ("jira", "enabled")}
+_STRINGS = {(None, "signature"): 200, (None, "refusal"): 500,
+            ("claude", "bin"): 500, ("claude", "mcp_config"): 500, ("claude", "cwd"): 500,
+            ("slack", "owner_user_id"): 40, ("jira", "base_url"): 300,
+            ("jira", "email"): 200, ("jira", "owner_account_id"): 128,
+            ("jira", "marker"): 60, ("jira", "jql"): 1000}
+_LISTS = {("claude", "extra_args"): r".{1,200}", ("slack", "channels"): r"[A-Z0-9]{2,20}"}
+
+
+def secrets_summary(cfg: dict) -> dict:
+    """Per secret: is one in effect, and where from. Never the value."""
+    out = {}
+    for (section, key), env in SECRETS.items():
+        from_env = bool(_env(env))
+        stored = bool(str((cfg.get(section) or {}).get(key) or ""))
+        out[f"{section}.{key}"] = {"set": from_env or stored, "stored": stored,
+                                   "source": "env" if from_env else "file" if stored else "",
+                                   "env_var": "MEMORY_LEDGER_" + env}
+    return out
+
+
 def config_summary(cfg: dict) -> dict:
-    """What is configured, never the secrets themselves."""
+    """What is configured, as the page edits it, never the secrets themselves.
+
+    `slack.enabled` is the stored switch; `active` says whether it actually
+    runs, which also needs the master switch and a file that parses."""
     s, j, c = cfg.get("slack") or {}, cfg.get("jira") or {}, cfg.get("claude") or {}
     return {
         "path": str(config_path()),
-        "problem": cfg.get("_problem", ""),
+        "exists": config_path().exists(),
+        "problem": cfg.get("_problem", "") if config_path().exists() else "",
         "enabled": bool(cfg.get("enabled")) and "_problem" not in cfg,
+        "stored_enabled": bool(cfg.get("enabled")),
         "signature": signature(cfg),
-        "claude": {"bin": c.get("bin"), "mcp_config": c.get("mcp_config") or "",
-                   "timeout_s": c.get("timeout_s"), "max_concurrent": c.get("max_concurrent")},
-        "slack": {"enabled": source_enabled(cfg, "slack"),
-                  "owner_user_id": s.get("owner_user_id") or "",
-                  "app_token_set": bool(secret(cfg, "slack", "app_token")),
-                  "bot_token_set": bool(secret(cfg, "slack", "bot_token")),
-                  "user_token_set": bool(secret(cfg, "slack", "user_token")),
-                  "channels": s.get("channels") or []},
-        "jira": {"enabled": source_enabled(cfg, "jira"), "base_url": j.get("base_url") or "",
-                 "marker": j.get("marker") or "", "poll_seconds": j.get("poll_seconds"),
-                 "jql": j.get("jql") or "", "token_set": bool(secret(cfg, "jira", "token"))},
+        "signature_template": str(cfg.get("signature") or DEFAULTS["signature"]),
+        "refusal": str(cfg.get("refusal") or DEFAULTS["refusal"]),
+        "claude": {k: c.get(k) for k in DEFAULTS["claude"]},
+        "slack": {**{k: s.get(k) for k in DEFAULTS["slack"]},
+                  "active": source_enabled(cfg, "slack")},
+        "jira": {**{k: j.get(k) for k in DEFAULTS["jira"]},
+                 "active": source_enabled(cfg, "jira")},
+        "secrets": secrets_summary(cfg),
     }
+
+
+def save_config(patch: dict) -> dict:
+    """Merge a validated patch into `<home>/trigger.json`, written mode 600.
+
+    Secrets are write-only: a non-empty value replaces the stored one, an empty
+    or missing one KEEPS it, and `clear: ["slack.bot_token", ...]` removes it.
+    That way a form showing "one is stored" never has to send it back."""
+    if not isinstance(patch, dict):
+        return {"ok": False, "error": "the config must be an object"}
+    p = config_path()
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+    except (OSError, ValueError):
+        return {"ok": False, "error": f"{p} is not valid JSON; fix or remove it first"}
+    if not isinstance(raw, dict):
+        raw = {}
+
+    def put(section, key, value):
+        (raw if section is None else raw.setdefault(section, {}))[key] = value
+
+    def given(section, key):
+        src = patch if section is None else patch.get(section)
+        return (True, src[key]) if isinstance(src, dict) and key in src else (False, None)
+
+    for sk in _BOOLS:
+        has, v = given(*sk)
+        if has:
+            if not isinstance(v, bool):
+                return {"ok": False, "error": f"{'.'.join(filter(None, sk))} must be true or false"}
+            put(*sk, v)
+    for sk, cap in _STRINGS.items():
+        has, v = given(*sk)
+        if has:
+            if v is None:
+                v = ""
+            if not isinstance(v, str):
+                return {"ok": False, "error": f"{'.'.join(filter(None, sk))} must be text"}
+            put(*sk, v.strip()[:cap])
+    for sk, (lo, hi) in _INT_RANGES.items():
+        has, v = given(*sk)
+        if has:
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or not lo <= v <= hi:
+                return {"ok": False, "error": f"{'.'.join(sk)} must be a number from {lo} to {hi}"}
+            put(*sk, int(v))
+    for sk, pattern in _LISTS.items():
+        has, v = given(*sk)
+        if has:
+            if isinstance(v, str):
+                v = [x for x in re.split(r"[\s,]+", v) if x]
+            if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+                return {"ok": False, "error": f"{'.'.join(sk)} must be a list of text"}
+            bad = [x for x in v if not re.fullmatch(pattern, x)]
+            if bad:
+                return {"ok": False, "error": f"{'.'.join(sk)}: not valid: {', '.join(bad[:3])}"}
+            put(*sk, v[:100])
+
+    url = str((raw.get("jira") or {}).get("base_url") or "")
+    if url and not re.fullmatch(r"https?://[^\s/]+(/[^\s]*)?", url):
+        return {"ok": False, "error": "jira.base_url must be an http(s) URL"}
+    if (raw.get("jira") or {}).get("base_url"):
+        raw["jira"]["base_url"] = url.rstrip("/")
+
+    for (section, key) in SECRETS:
+        has, v = given(section, key)
+        if has and isinstance(v, str) and v.strip():
+            v = v.strip()
+            prefix = SECRET_PREFIX.get((section, key))
+            if prefix and not v.startswith(prefix):
+                return {"ok": False, "error": f"{section}.{key} should start with {prefix} "
+                                             "— is it the right token?"}
+            put(section, key, v[:500])
+    clear = patch.get("clear") or []
+    if not isinstance(clear, list):
+        return {"ok": False, "error": "clear must be a list of secret names"}
+    for name in clear:
+        section, _, key = str(name).partition(".")
+        if (section, key) not in SECRETS:
+            return {"ok": False, "error": f"clear: {name} is not a secret"}
+        (raw.get(section) or {}).pop(key, None)
+
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(p.name + ".tmp")
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(json.dumps(raw, indent=2, ensure_ascii=False, sort_keys=True) + "\n")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, p)
+    return {"ok": True, "config": config_summary(load_config())}
 
 
 def status_payload(limit: int = 10) -> dict:
@@ -965,48 +1090,90 @@ def status_payload(limit: int = 10) -> dict:
             "recent": list_requests(con, limit)}
 
 
-def check(cfg: dict, offline: bool = False) -> dict:
-    """Is it ready to run? Validates the file, the tokens and claude, starting
-    nothing and writing nothing."""
-    problems, notes = [], []
-    if cfg.get("_problem"):
-        problems.append(cfg["_problem"])
-    if not cfg.get("enabled"):
-        notes.append("trigger.enabled is false — nothing will start")
-    bin_ = str((cfg.get("claude") or {}).get("bin") or "claude")
+CHECK_TARGETS = ("claude", "slack", "jira")
+
+
+def _check_claude(cfg: dict, problems: list, notes: list) -> None:
+    c = cfg.get("claude") or {}
+    bin_ = str(c.get("bin") or "claude")
     try:
         v = subprocess.run([bin_, "--version"], capture_output=True, text=True, timeout=30)
         (notes if v.returncode == 0 else problems).append(
-            f"claude: {(v.stdout or v.stderr).strip()[:80]}")
+            f"claude: {(v.stdout or v.stderr).strip()[:80] or 'runs'}")
     except (OSError, subprocess.TimeoutExpired) as e:
         problems.append(f"claude ({bin_}) does not run: {e}")
-    mcp = str((cfg.get("claude") or {}).get("mcp_config") or "")
+    mcp = str(c.get("mcp_config") or "")
     if mcp and not Path(mcp).expanduser().is_file():
         problems.append(f"claude.mcp_config {mcp} does not exist")
-    if source_enabled(cfg, "slack"):
-        for key in ("app_token", "bot_token"):
-            if not secret(cfg, "slack", key):
-                problems.append(f"slack: no {key} (${'MEMORY_LEDGER_' + SECRETS[('slack', key)]})")
-        if not (cfg.get("slack") or {}).get("owner_user_id"):
-            problems.append("slack.owner_user_id is empty — nobody could enable a thread")
-        if not secret(cfg, "slack", "user_token"):
-            notes.append("slack: no user_token — refusals are logged but not posted")
-        if not offline and secret(cfg, "slack", "bot_token"):
-            try:
-                notes.append(f"slack: bot is {slack_bot_user_id(cfg)}")
-            except TriggerError as e:
-                problems.append(str(e))
-    if source_enabled(cfg, "jira"):
-        jira = Jira(cfg)
-        if jira.ready():
-            problems.append(f"jira: missing {jira.ready()}")
-        elif not offline:
-            try:
-                notes.append(f"jira: acting as account {jira.owner_id()}")
-            except TriggerError as e:
-                problems.append(str(e))
-    return {"ok": not problems, "problems": problems, "notes": notes,
-            "config": config_summary(cfg)}
+
+
+def _check_slack(cfg: dict, problems: list, notes: list, offline: bool) -> None:
+    for key in ("app_token", "bot_token"):
+        if not secret(cfg, "slack", key):
+            problems.append(f"slack: no {key} (${'MEMORY_LEDGER_' + SECRETS[('slack', key)]})")
+    if not (cfg.get("slack") or {}).get("owner_user_id"):
+        problems.append("slack.owner_user_id is empty, so nobody could enable a thread")
+    if not secret(cfg, "slack", "user_token"):
+        notes.append("slack: no user_token, so refusals are logged but not posted")
+    if offline:
+        return
+    if secret(cfg, "slack", "bot_token"):
+        try:
+            _SLACK_BOT_ID.pop(secret(cfg, "slack", "bot_token"), None)
+            notes.append(f"slack: bot token works, the bot is {slack_bot_user_id(cfg)}")
+        except TriggerError as e:
+            problems.append(f"bot token: {e}")
+    if secret(cfg, "slack", "app_token"):
+        try:
+            slack_api("apps.connections.open", secret(cfg, "slack", "app_token"))
+            notes.append("slack: app token opens a Socket Mode connection")
+        except TriggerError as e:
+            problems.append(f"app token: {e}")
+    if secret(cfg, "slack", "user_token"):
+        try:
+            who = slack_api("auth.test", secret(cfg, "slack", "user_token"))
+            notes.append(f"slack: user token acts as {who.get('user', '?')} ({who.get('user_id', '?')})")
+        except TriggerError as e:
+            problems.append(f"user token: {e}")
+
+
+def _check_jira(cfg: dict, problems: list, notes: list, offline: bool) -> None:
+    jira = Jira(cfg)
+    if jira.ready():
+        problems.append(f"jira: missing {jira.ready()}")
+        return
+    if not (cfg.get("jira") or {}).get("marker"):
+        problems.append("jira.marker is empty, so no comment could be told apart as for the brain")
+    if not offline:
+        try:
+            jira._owner = str((cfg.get("jira") or {}).get("owner_account_id") or "")
+            me = jira.call("GET", "/rest/api/3/myself")
+            notes.append(f"jira: token works, acting as {me.get('displayName', '?')} "
+                         f"({me.get('accountId', '?')})")
+        except TriggerError as e:
+            problems.append(str(e))
+
+
+def check(cfg: dict, offline: bool = False, only: str = "") -> dict:
+    """Is it ready to run? Validates the file, the tokens and claude, starting
+    nothing and writing nothing. `only` checks one of claude / slack / jira,
+    whether or not it is switched on — the page checks a service before
+    turning it on."""
+    if only and only not in CHECK_TARGETS:
+        return {"ok": False, "error": f"only must be one of {', '.join(CHECK_TARGETS)}"}
+    problems, notes = [], []
+    if cfg.get("_problem") and config_path().exists():
+        problems.append(cfg["_problem"])
+    if not only and not cfg.get("enabled"):
+        notes.append("triggers are switched off, so nothing will start")
+    if only in ("", "claude"):
+        _check_claude(cfg, problems, notes)
+    if only == "slack" or (not only and source_enabled(cfg, "slack")):
+        _check_slack(cfg, problems, notes, offline)
+    if only == "jira" or (not only and source_enabled(cfg, "jira")):
+        _check_jira(cfg, problems, notes, offline)
+    return {"ok": True, "ready": not problems, "target": only or "all",
+            "problems": problems, "notes": notes}
 
 
 # ---------------------------------------------------------------- cli
@@ -1020,6 +1187,8 @@ def main(argv=None) -> int:
     sub.add_parser("status", help="config, counts, checkpoints, recent requests")
     p = sub.add_parser("check", help="validate config, tokens and claude; starts nothing")
     p.add_argument("--offline", action="store_true", help="skip the network checks")
+    p.add_argument("--only", default="", choices=("",) + CHECK_TARGETS,
+                   help="check one service, even if it is switched off")
     p = sub.add_parser("requests", help="the request log, newest first")
     p.add_argument("--limit", type=int, default=20)
     p.add_argument("--status", default="", choices=("",) + STATUSES)
@@ -1039,9 +1208,9 @@ def main(argv=None) -> int:
     if args.cmd == "status":
         out(status_payload())
     elif args.cmd == "check":
-        res = check(load_config(), offline=args.offline)
+        res = check(load_config(), offline=args.offline, only=args.only)
         out(res)
-        return 0 if res["ok"] else 1
+        return 0 if res.get("ready") else 1
     elif args.cmd == "requests":
         out({"ok": True, "results": list_requests(db(), args.limit, args.status)})
     elif args.cmd == "show":

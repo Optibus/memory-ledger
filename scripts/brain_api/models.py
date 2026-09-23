@@ -183,6 +183,32 @@ class TriggerGate(Body):
                                            "mentions, false closes it again.")
 
 
+_obj = Annotated[Optional[dict[str, Any]], BeforeValidator(_dict_or_none)]
+
+
+class TriggerConfig(Body):
+    """A patch: only the keys sent are changed. Secrets are write-only."""
+    enabled: Any = Field(None, description="The master switch for every trigger.")
+    signature: Any = Field(None, description="The line every reply ends with; `{owner}` "
+                                             "is the owner's name. Also the loop guard.")
+    refusal: Any = Field(None, description="The notice a refused mention gets.")
+    claude: _obj = Field(None, description="`bin`, `mcp_config`, `strict_mcp_config`, "
+                                           "`timeout_s`, `max_concurrent`, `extra_args`, `cwd`.")
+    slack: _obj = Field(None, description="`enabled`, `owner_user_id`, `channels`, "
+                                          "`thread_lookback_days`, and the write-only "
+                                          "`app_token`, `bot_token`, `user_token`.")
+    jira: _obj = Field(None, description="`enabled`, `base_url`, `email`, `owner_account_id`, "
+                                         "`marker`, `poll_seconds`, `jql`, `max_catchup_hours`, "
+                                         "and the write-only `token`.")
+    clear: Optional[list[LooseStr]] = Field(None, description="Secrets to remove, e.g. "
+                                                              "`[\"slack.user_token\"]`.")
+
+
+class TriggerCheck(Body):
+    only: Text = T("`claude`, `slack` or `jira`; empty checks everything switched on.")
+    offline: Any = Field(False, description="true skips the calls to Slack and Jira.")
+
+
 class TriggerAction(Body):
     request_id: Text = T("The request the action was taken for.")
     kind: Text = T("What was done: `reply`, `jira-transition`, `slack-message`, ...")

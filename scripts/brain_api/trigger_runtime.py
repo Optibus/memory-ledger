@@ -28,6 +28,11 @@ SLACK_HEARTBEAT_S = 30
 SLACK_TRAIL_S = 120
 
 _lock = threading.Lock()
+# Serialises start / stop / restart: two saves from the page at once must not
+# leave two sets of watchers running.
+_life = threading.Lock()
+# One event per start. A restart gives the new watchers a fresh one rather than
+# clearing the old, so a loop from before the restart cannot miss its stop.
 _stop = threading.Event()
 _pool: ThreadPoolExecutor | None = None
 _slack_client = None
@@ -61,28 +66,42 @@ def status() -> dict:
         return {k: (dict(v) if isinstance(v, dict) else v) for k, v in STATE.items()}
 
 
-def start() -> None:
+def start(*, recovering: bool = True) -> None:
     """Non-blocking: the network calls happen on the watchers' own threads, so
     a slow Slack never holds up the server's start."""
-    global _pool
+    with _life:
+        _start(recovering)
+
+
+def _start(recovering: bool) -> None:
+    global _pool, _stop
     cfg = trigger.load_config()
+    STATE.update(slack={"state": "off"}, jira={"state": "off"})
     if not cfg.get("enabled") or cfg.get("_problem"):
-        STATE.update(running=False, reason=cfg.get("_problem") or "trigger.enabled is false")
+        STATE.update(running=False, reason=cfg.get("_problem") or "triggers are switched off")
         return
-    _stop.clear()
+    _stop = threading.Event()
     workers = max(1, min(16, int((cfg.get("claude") or {}).get("max_concurrent") or 3)))
     _pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="trigger-run")
     STATE.update(running=True, reason="", started_at=_now())
-    STATE["recovered"] = trigger.recover(cfg, _dispatch)
+    if recovering:
+        # Only when the process starts. On a restart the sessions still
+        # running belong to this very process and are not orphans.
+        STATE["recovered"] = trigger.recover(cfg, _dispatch)
     if trigger.source_enabled(cfg, "jira"):
-        threading.Thread(target=_jira_loop, args=(cfg,), daemon=True,
+        threading.Thread(target=_jira_loop, args=(cfg, _stop), daemon=True,
                          name="trigger-jira").start()
     if trigger.source_enabled(cfg, "slack"):
-        threading.Thread(target=_slack_main, args=(cfg,), daemon=True,
+        threading.Thread(target=_slack_main, args=(cfg, _stop), daemon=True,
                          name="trigger-slack").start()
 
 
 def stop() -> None:
+    with _life:
+        _stop_now()
+
+
+def _stop_now() -> None:
     global _pool, _slack_client
     _stop.set()
     if _slack_client is not None:
@@ -99,12 +118,21 @@ def stop() -> None:
     STATE.update(running=False, reason="stopped")
 
 
+def restart() -> dict:
+    """Stop and start again on the config as it now is. What the page calls
+    after saving, so a change applies without restarting the server."""
+    with _life:
+        _stop_now()
+        _start(recovering=False)
+    return status()
+
+
 # ---------------------------------------------------------------- jira
-def _jira_loop(cfg: dict) -> None:
+def _jira_loop(cfg: dict, stop_event: threading.Event) -> None:
     every = max(15, int((cfg.get("jira") or {}).get("poll_seconds") or 60))
     jira = trigger.Jira(cfg)
     _note("jira", state="polling", every_s=every)
-    while not _stop.is_set():
+    while not stop_event.is_set():
         try:
             res = trigger.jira_poll(cfg, _dispatch, jira=jira)
             if res.get("ok"):
@@ -114,11 +142,11 @@ def _jira_loop(cfg: dict) -> None:
                 _note("jira", state="misconfigured", last_error=res.get("error", ""))
         except Exception as e:
             _note("jira", state="erroring", last_error=str(e)[:300])
-        _stop.wait(every)
+        stop_event.wait(every)
 
 
 # ---------------------------------------------------------------- slack
-def _slack_main(cfg: dict) -> None:
+def _slack_main(cfg: dict, stop_event: threading.Event) -> None:
     global _slack_client
     try:
         from slack_sdk.socket_mode import SocketModeClient
@@ -169,7 +197,7 @@ def _slack_main(cfg: dict) -> None:
     except Exception as e:
         _note("slack", state="erroring", last_error=str(e)[:300])
     was_connected = False
-    while not _stop.is_set():
+    while not stop_event.is_set():
         up = False
         try:
             up = client.is_connected()
@@ -190,4 +218,8 @@ def _slack_main(cfg: dict) -> None:
         elif was_connected:
             _note("slack", state="reconnecting")
         was_connected = up
-        _stop.wait(SLACK_HEARTBEAT_S if up else 5)
+        stop_event.wait(SLACK_HEARTBEAT_S if up else 5)
+    try:
+        client.close()
+    except Exception:
+        pass

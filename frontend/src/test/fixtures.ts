@@ -421,3 +421,48 @@ export const statusFixture: Status = {
     env: [],
   },
 };
+
+export const triggerFixture: import("@/api/types").TriggerStatus = {
+  ok: true,
+  watching: true,
+  config: {
+    path: "/home/brain/trigger.json",
+    exists: true,
+    problem: "",
+    enabled: true,
+    stored_enabled: true,
+    signature: "_sent by Gabriel's second brain_",
+    signature_template: "_sent by {owner}'s second brain_",
+    refusal: "I'm not enabled in this conversation, so I did nothing.",
+    claude: {
+      bin: "claude", mcp_config: "", strict_mcp_config: false, timeout_s: 900,
+      max_concurrent: 3, extra_args: [], cwd: "",
+    },
+    slack: { enabled: true, active: true, owner_user_id: "U0OWNER", channels: ["C1"], thread_lookback_days: 7 },
+    jira: {
+      enabled: false, active: false, base_url: "https://j.example", email: "me@example.com",
+      owner_account_id: "", marker: "@brain", poll_seconds: 60, jql: "", max_catchup_hours: 72,
+    },
+    secrets: {
+      "slack.app_token": { set: true, stored: true, source: "file", env_var: "MEMORY_LEDGER_SLACK_APP_TOKEN" },
+      "slack.bot_token": { set: true, stored: false, source: "env", env_var: "MEMORY_LEDGER_SLACK_BOT_TOKEN" },
+      "slack.user_token": { set: false, stored: false, source: "", env_var: "MEMORY_LEDGER_SLACK_USER_TOKEN" },
+      "jira.token": { set: false, stored: false, source: "", env_var: "MEMORY_LEDGER_JIRA_TOKEN" },
+    },
+  },
+  runtime: {
+    running: true, reason: "", started_at: "2026-09-23T12:00:00+00:00",
+    slack: { state: "connected" },
+    jira: { state: "off" },
+  },
+  counts: { done: 3, refused: 1 },
+  enabled_scopes: [{ scope: "slack:C1:1.0", by: "U0OWNER", at: "2026-09-23T12:00:00+00:00" }],
+  recent: [
+    {
+      id: "0b7c6f2e-1111-4222-8333-944455556666", source: "slack", scope: "slack:C1:1.0",
+      requester_name: "Isadora", requester_id: "U2", status: "done",
+      received_at: "2026-09-23T12:01:00+00:00", text: "can you summarise this thread?",
+      permalink: "https://x.slack.com/p1",
+    },
+  ],
+};

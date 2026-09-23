@@ -181,6 +181,18 @@ or `GET /api/trigger` and `GET /api/trigger-request?id=` on a running server.
 All of it is **per person** and lives in the brain home, never in this repo:
 `<home>/trigger.json`, written mode 600 because it may hold tokens.
 
+**The easy way is the web UI: Settings → Triggers.** It has a master switch, and
+one panel each for Slack, Jira and Claude. Each panel has its own on/off switch,
+its fields, a **Save** and a **Check** that proves the stored tokens against the
+real service without starting anything. Saving restarts the watchers on the new
+file, so a switch flipped there takes effect at once. Tokens are write-only: the
+page shows whether one is stored, and whether the environment has taken it over,
+never what it is. A blank token field keeps the stored one, and **Remove**
+deletes it. Behind the page are `POST /api/trigger-config` and
+`POST /api/trigger-check` ([the API](api.md)).
+
+The file itself, for editing by hand or scripting:
+
 ```json
 {
   "enabled": true,
@@ -211,7 +223,9 @@ All of it is **per person** and lives in the brain home, never in this repo:
 }
 ```
 
-Secrets are read from the environment first, then from the same file:
+Secrets are read from the environment first, then from the same file. A token
+in the environment of the process running `serve.py` outranks anything saved
+from the page, and the page says so:
 
 | Secret | Env var | Key in the file |
 |---|---|---|
@@ -234,8 +248,10 @@ Then:
 1. Create the Slack app (Socket Mode on, the scopes above, `app_mention` event
    subscription), install it to the workspace — that may need a workspace admin.
 2. Invite it to the channels where it should listen.
-3. `python3 scripts/trigger.py check` — validates the file, the tokens, and that
-   `claude` runs, without starting anything.
+3. **Check** each service in Settings → Triggers, or
+   `python3 scripts/trigger.py check [--only slack|jira|claude]`. It validates
+   the file, calls Slack and Jira with the tokens, and runs `claude --version`,
+   without starting anything.
 4. `python3 scripts/serve.py` — the watchers start with the server.
    `--no-trigger` keeps them off; `--no-write` does too, since a read-only server
    must not be acting on your behalf.
@@ -256,5 +272,6 @@ Then:
 ## Not done yet
 
 - A dedicated Jira bot user, so a mention does not have to be of you.
-- A Requests view in the web UI over `GET /api/trigger`.
+- A full Requests view in the web UI. Settings → Triggers lists only the newest
+  five; `trigger.py requests` and `show` have the rest.
 - DMs to the bot (`message.im`) — today only `app_mention` in channels.

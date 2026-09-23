@@ -142,7 +142,7 @@ def test_config():
     ck("the signature names the owner", trigger.signature(cfg) == "_sent by Owner's second brain_")
     summary = json.dumps(trigger.config_summary(cfg))
     ck("the summary never carries a token", "xoxb-t" not in summary and "jt\"" not in summary
-       and '"bot_token_set": true' in summary)
+       and trigger.config_summary(cfg)["secrets"]["slack.bot_token"]["set"] is True)
 
 
 # ==================================================================== gate
@@ -463,14 +463,80 @@ def test_check(cfg):
     print("\n== check: ready or not, starting nothing ==")
     install_http()
     res = trigger.check(cfg, offline=True)
-    ck("a complete config checks out", res["ok"], str(res["problems"]))
+    ck("a complete config checks out", res["ok"] and res["ready"], str(res["problems"]))
     bad = json.loads(json.dumps(cfg))
     bad["slack"].pop("app_token")
     bad["slack"]["owner_user_id"] = ""
     res = trigger.check(bad, offline=True)
     ck("a missing token and owner are named",
-       not res["ok"] and any("app_token" in p for p in res["problems"])
+       not res["ready"] and any("app_token" in p for p in res["problems"])
        and any("owner_user_id" in p for p in res["problems"]))
+    off = json.loads(json.dumps(cfg))
+    off["jira"]["enabled"] = False
+    off["jira"]["base_url"] = ""
+    res = trigger.check(off, offline=True, only="jira")
+    ck("one service can be checked while it is still switched off",
+       res["target"] == "jira" and any("jira.base_url" in p for p in res["problems"]))
+    res = trigger.check(off, offline=True, only="slack")
+    ck("and checking one does not report on the others",
+       res["ready"] and not any("jira" in p for p in res["problems"]))
+    ck("an unknown target is refused", trigger.check(cfg, only="email")["ok"] is False)
+
+    fake = install_http()
+    s = trigger.SLACK_API
+    fake.on("POST", s + "apps.connections.open", lambda **_: {"ok": True, "url": "wss://x"})
+    fake.on("POST", s + "auth.test", lambda form=None, **_: {"ok": True, "user_id": "UBOT",
+                                                             "user": "me"})
+    res = trigger.check(cfg, only="slack")
+    ck("online, the Slack check proves each token against Slack",
+       res["ready"] and sum("token" in n for n in res["notes"]) >= 3, str(res["notes"]))
+    fake.on("POST", s + "apps.connections.open", lambda **_: {"ok": False, "error": "invalid_auth"})
+    res = trigger.check(cfg, only="slack")
+    ck("and names the token Slack rejected",
+       not res["ready"] and any(p.startswith("app token") for p in res["problems"]))
+
+
+# ================================================================== saving
+def test_save():
+    print("\n== save_config: validated, secrets write-only, mode 600 ==")
+    trigger.config_path().unlink(missing_ok=True)
+    res = trigger.save_config({"enabled": True, "jira": {"enabled": True,
+                                                         "base_url": "https://j.example/",
+                                                         "token": "sekrit-9f2", "poll_seconds": 30}})
+    ck("a first save creates the file", res["ok"] and trigger.config_path().exists(), str(res))
+    ck("mode 600, because it holds tokens",
+       (trigger.config_path().stat().st_mode & 0o777) == 0o600)
+    summary = res["config"]
+    ck("the summary says a token is stored, never what it is",
+       summary["secrets"]["jira.token"]["set"] and "sekrit-9f2" not in json.dumps(summary))
+    ck("a trailing slash on the base url is dropped", summary["jira"]["base_url"] == "https://j.example")
+    res = trigger.save_config({"jira": {"token": "", "marker": "@brain"}})
+    raw = json.loads(trigger.config_path().read_text())
+    ck("an empty secret keeps the stored one", raw["jira"]["token"] == "sekrit-9f2")
+    ck("and the other keys survive a partial save",
+       raw["jira"]["poll_seconds"] == 30 and raw["enabled"] is True and raw["jira"]["marker"] == "@brain")
+    trigger.save_config({"clear": ["jira.token"]})
+    ck("clear removes a secret", "token" not in json.loads(trigger.config_path().read_text())["jira"])
+    os.environ["MEMORY_LEDGER_JIRA_TOKEN"] = "from-env"
+    ck("a secret from the environment is reported as such",
+       trigger.config_summary(trigger.load_config())["secrets"]["jira.token"]["source"] == "env")
+    del os.environ["MEMORY_LEDGER_JIRA_TOKEN"]
+    for patch, needle in (
+        ({"enabled": "yes"}, "true or false"),
+        ({"jira": {"poll_seconds": 1}}, "from 15 to 3600"),
+        ({"jira": {"base_url": "ftp://x"}}, "http(s) URL"),
+        ({"slack": {"bot_token": "xoxp-wrong"}}, "should start with xoxb-"),
+        ({"slack": {"channels": ["C1", "not a channel"]}}, "not valid"),
+        ({"clear": ["jira.email"]}, "is not a secret"),
+    ):
+        r = trigger.save_config(patch)
+        ck(f"refused: {needle}", r["ok"] is False and needle in r["error"], str(r))
+    trigger.save_config({"slack": {"channels": "C1, C2 C3"}})
+    ck("channels may be typed as one string",
+       json.loads(trigger.config_path().read_text())["slack"]["channels"] == ["C1", "C2", "C3"])
+    trigger.save_config({"bogus": 1, "slack": {"bogus": 2}})
+    raw = json.loads(trigger.config_path().read_text())
+    ck("an unknown key is not written", "bogus" not in raw and "bogus" not in raw["slack"])
 
 
 def main():
@@ -484,6 +550,7 @@ def main():
         test_slack_catch_up(cfg)
         test_jira(cfg)
         test_check(cfg)
+        test_save()
     finally:
         import shutil
         shutil.rmtree(HOME, ignore_errors=True)
