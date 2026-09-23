@@ -29,8 +29,15 @@
 .ml-side__link:hover { background: var(--hover); }
 .ml-side__link.is-active { background: var(--accent); color: var(--accent-fg); font-weight: 600; }
 
-/* The one link in the drawer that leaves the app. The arrow says so, and the
+/* API docs: an in-app page, plus an arrow that opens it in its own tab. The
    dimmer weight keeps it from competing with the sections above it. */
-.ml-side__link--out { color: var(--muted); }
-.ml-side__link--out:hover { color: var(--fg); }
-.ml-side__ext { margin-left: auto; font-size: 10px; opacity: .8; }
+.ml-side__row { display: flex; align-items: center; gap: var(--space-1); }
+.ml-side__row .ml-side__link { flex: 1; }
+.ml-side__link--docs:not(.is-active) { color: var(--muted); }
+.ml-side__link--docs:not(.is-active):hover { color: var(--fg); }
+.ml-side__ext {
+  flex: none; display: flex; align-items: center; justify-content: center;
+  width: 28px; align-self: stretch; border-radius: 8px;
+  color: var(--muted); text-decoration: none; font-size: 11px;
+}
+.ml-side__ext:hover { background: var(--hover); color: var(--fg); }

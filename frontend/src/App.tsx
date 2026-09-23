@@ -8,6 +8,7 @@ import { SkillsSection } from "@/features/skills/SkillsSection";
 import { SettingsSection } from "@/features/settings/SettingsSection";
 import { PeopleSection } from "@/features/people/PeopleSection";
 import { CreateLauncher } from "@/features/create/CreateLauncher";
+import { ApiDocsSection } from "@/features/apidocs/ApiDocsSection";
 
 /**
  * Five sections behind one drawer, each owning the whole viewport.
@@ -45,6 +46,7 @@ export function App() {
               }
             />
             <Route path="/settings" element={<SettingsSection />} />
+            <Route path="/api-docs" element={<ApiDocsSection />} />
             {/* Anything else is a stale bookmark, not a 404 page worth writing. */}
             <Route path="*" element={<Navigate to="/map" replace />} />
           </Route>

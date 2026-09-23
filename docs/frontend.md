@@ -128,15 +128,21 @@ all-pairs repulsion turned a few thousand nodes into a hairball that never stopp
 moving. Reheats are keyed on what changed, never on identity: every poll hands down
 fresh arrays and Sets, and reheating on those kept the map twitching.
 
-**The section is in the URL.** `/map`, `/dashboard`, `/people`, `/skills`, `/settings`, on a
+**The section is in the URL.** `/map`, `/dashboard`, `/people`, `/skills`, `/settings` (and `/api-docs`), on a
 hash router. A reload lands where you were and a link to the dashboard is a link
 to the dashboard — neither was true of the old page, which kept the section in a
 body class. The hash means `serve.py` never has to learn about the app's routes.
 
-The drawer's one exception is **API docs**, a plain `<a>` rather than a
-`NavLink`: `/api/docs` is Swagger rendered by `serve.py`, so handing that URL to
-the router would match nothing and show the map. It opens in a new tab, which
-also means "back" cannot land on a page React never rendered.
+**API docs** (`/api-docs`) frames the server's Swagger UI (`/api/docs`) in an
+iframe, so reading the API never leaves the app: the drawer, the URL and your
+place in every other section stay put. It is framed rather than rebuilt because
+the document is generated from the running routes, and a copy in the app would
+be a second description to go stale. Like the map, it owns the viewport
+(`body[data-section="api-docs"]` does not scroll; the frame scrolls inside
+itself). Beside its drawer row sits a plain `<a>` arrow — a real navigation, not
+a `NavLink` — that opens `/api/docs` in a tab of its own, and the page's heading
+row carries the same link. The two are siblings, since a link inside a link is
+invalid HTML.
 
 **The favicon is the map, not a brain.** `public/favicon.svg` draws a hub with
 three satellites in the app's own token colours — the one shape from the graph

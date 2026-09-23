@@ -452,7 +452,7 @@ guarantee as the read layer.
 | Create a relation | `POST /api/link` | Search for the other end, pick the relation, done. |
 | Remove a relation | `POST /api/unlink` | The `×` on any row under **Related**. |
 | Read the vocabulary | `GET /api/meta` | Relations + statuses + `writable`; the UI never hardcodes them. |
-| Read the API itself | `GET /api/docs` | Swagger UI over `GET /api/openapi.json`, generated from the routes by the running process so it cannot describe a different server. Linked from the drawer, above Settings — it opens in its own tab, because the server renders it and it is read beside the brain rather than instead of it. |
+| Read the API itself | `GET /api/docs` | Swagger UI over `GET /api/openapi.json`, generated from the routes by the running process so it cannot describe a different server. Linked from the drawer, above Settings: the row opens it framed inside the app (`#/api-docs`), so reading the API never leaves the brain, and the ↗ arrow beside it opens the server's page in its own tab. |
 | Find a node to link | `GET /api/search?q=` | Title substring, for the relation picker. |
 | Change a preference | `POST /api/settings` | `tz`, `realm`, `owner`, `backend`, `autosync`, `consolidate`, `ui_sync`, `map_poll_seconds`, `dash_refresh_seconds` → `<home>/settings.json`. |
 | Stop or resume capture | `POST /api/capture` | `{enabled}` — writes the same `.disabled` marker `graph.py disable` writes. Refused while `$MEMORY_LEDGER_OFF` is set, because that outranks it. |

@@ -1,4 +1,5 @@
 import { NavLink } from "react-router-dom";
+import { API_DOCS_URL } from "@/features/apidocs/ApiDocsSection";
 import "./Sidebar.css";
 
 export interface SectionLink {
@@ -55,23 +56,35 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         <nav className="ml-side__nav">{main.map(item)}</nav>
         <div className="ml-side__foot">
           {/*
-            Not a NavLink: /api/docs is the Swagger UI the SERVER renders, not a
-            route this app owns, so it has to be a real navigation. It opens in
-            its own tab because reading the API is something you do BESIDE the
-            brain, not instead of it — and because coming "back" from a page
-            React never rendered would drop whatever you had open here.
+            Two links on one row. The row opens the server's Swagger UI framed
+            inside the app, so reading the API never leaves the brain. The arrow
+            is a real navigation to the same page in a tab of its own. They are
+            siblings, not nested: a link inside a link is invalid HTML, and the
+            arrow's click must not also trigger the route change.
           */}
-          <a
-            className="ml-side__link ml-side__link--out"
-            href="./api/docs"
-            target="_blank"
-            rel="noreferrer"
-            onClick={onClose}
-          >
-            <span aria-hidden="true">📖</span>
-            <span>API docs</span>
-            <span className="ml-side__ext" aria-hidden="true">↗</span>
-          </a>
+          <div className="ml-side__row">
+            <NavLink
+              to="/api-docs"
+              className={({ isActive }) =>
+                `ml-side__link ml-side__link--docs${isActive ? " is-active" : ""}`
+              }
+              onClick={onClose}
+            >
+              <span aria-hidden="true">📖</span>
+              <span>API docs</span>
+            </NavLink>
+            <a
+              className="ml-side__ext"
+              href={API_DOCS_URL}
+              target="_blank"
+              rel="noreferrer"
+              title="open the API docs in a new tab"
+              aria-label="open the API docs in a new tab"
+              onClick={onClose}
+            >
+              ↗
+            </a>
+          </div>
           {foot.map(item)}
         </div>
       </aside>

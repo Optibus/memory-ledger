@@ -38,17 +38,38 @@ describe("the app shell", () => {
     expect(await screen.findByRole("heading", { name: "People" })).toBeInTheDocument();
   });
 
-  it("links out to the server's own API docs, in a new tab", async () => {
+  it("opens the server's API docs inside the app, framed", async () => {
+    const { user } = renderApp(<App />, { route: "/map", withMeta: false });
+    await screen.findByText(/nodes · 3 edges/);
+    await user.click(screen.getByRole("button", { name: "sections" }));
+    await user.click(screen.getByRole("link", { name: "API docs" }));
+
+    expect(await screen.findByRole("heading", { name: "API docs" })).toBeInTheDocument();
+    // Swagger is rendered by the server, so the page frames it rather than
+    // reimplementing it: the drawer and the URL stay in the app.
+    expect(screen.getByTitle("API docs")).toHaveAttribute("src", "./api/docs");
+    await waitFor(() => expect(document.body.dataset.section).toBe("api-docs"));
+  });
+
+  it("keeps an arrow beside it that opens the docs in a new tab", async () => {
     const { user } = renderApp(<App />, { route: "/map", withMeta: false });
     await screen.findByText(/nodes · 3 edges/);
     await user.click(screen.getByRole("button", { name: "sections" }));
 
-    const link = screen.getByRole("link", { name: /API docs/ });
-    // A real navigation, not a route: Swagger is rendered by serve.py, so a
-    // NavLink here would hand the URL to the router and show the map instead.
-    expect(link).toHaveAttribute("href", "./api/docs");
-    expect(link).toHaveAttribute("target", "_blank");
-    expect(link).toHaveAttribute("rel", "noreferrer");
+    const arrow = screen.getByRole("link", { name: "open the API docs in a new tab" });
+    // A real navigation, not a route: the new tab is the server's own page.
+    expect(arrow).toHaveAttribute("href", "./api/docs");
+    expect(arrow).toHaveAttribute("target", "_blank");
+    expect(arrow).toHaveAttribute("rel", "noreferrer");
+  });
+
+  it("opens the API docs page straight from its URL", async () => {
+    renderApp(<App />, { route: "/api-docs", withMeta: false });
+    expect(await screen.findByRole("heading", { name: "API docs" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /open in a new tab/ })).toHaveAttribute(
+      "target",
+      "_blank",
+    );
   });
 
   it("toggles the drawer with the m key, and not while typing", async () => {
