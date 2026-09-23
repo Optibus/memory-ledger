@@ -1,10 +1,10 @@
 /**
  * The wire shapes of the memory-ledger HTTP API.
  *
- * These mirror `docs/openapi.yaml`, which is the contract of record, and
- * `scripts/openapi.py` builds that file from the same route table the server
- * dispatches on — so a route the server grows without a spec entry fails CI
- * (`tests/test_openapi.py`) rather than quietly drifting away from these types.
+ * These mirror what the server sends. Its OpenAPI document (`/api/openapi.json`)
+ * is generated from the routes at runtime, and `tests/test_api.py` pins the
+ * response shapes and the route inventory against the real server — so a route
+ * that grows or changes shape fails CI rather than quietly drifting from these.
  */
 
 /** Every response carries `ok`; a failure carries `error` with it. */

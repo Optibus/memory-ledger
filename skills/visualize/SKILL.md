@@ -17,7 +17,8 @@ skills to my other machine", "change the timezone", "run prune".
 
 ## Given
 
-- **The server**, which is dependency-free and local:
+- **The server**, which is local and needs no install step (the first start
+  builds its own venv, which needs the network once):
 
   ```
   python3 "$CLAUDE_PLUGIN_ROOT/scripts/serve.py" [--port 8770] [--no-open]

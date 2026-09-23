@@ -24,7 +24,9 @@ project, every session). It works in Claude Code and the Claude app.
 - **Python 3** on your `PATH` (the engine and hooks are stdlib-only — no packages).
 - **git** (for the brain's own history and, optionally, installing from GitHub).
 
-Nothing else. The brain has zero third-party dependencies.
+Nothing else. The engine, the CLI and the hooks have zero third-party
+dependencies. The optional web UI's server does (FastAPI, uvicorn), and installs
+them itself into its own venv the first time you start it — see below.
 
 ## 1. Install the plugin (global)
 
@@ -266,6 +268,11 @@ python3 scripts/serve.py --no-write      # read-only
 ```
 **No install step.** It is a React app, but the compiled bundle ships with the
 plugin, so this works on a machine with no node and nothing to `npm install`.
+The API behind it is a FastAPI app: the **first** start builds a venv for it
+under `~/.cache/memory-ledger/` (this needs the network once; on Debian/Ubuntu,
+`python3 -m venv` needs the `python3-venv` package). Every start after that is
+immediate. Offline, point `$MEMORY_LEDGER_VENV` at a venv that already has
+`fastapi` and `uvicorn`. See [the API](docs/api.md#the-servers-environment).
 (Change the UI's source with node installed and the server rebuilds the bundle
 on the next start, so you never serve a page older than your edit.)
 

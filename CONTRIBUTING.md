@@ -1,11 +1,20 @@
 # Contributing
 
 The brain is small on purpose: **stdlib only, no dependencies, nothing to
-install.** `python3 scripts/graph.py` runs on a clean machine, and so does
-`python3 scripts/serve.py`. Please keep that true — a dependency here is a
-dependency in everyone's shell startup path.
+install.** `python3 scripts/graph.py` runs on a clean machine, and so do the
+hooks. Please keep that true — a dependency here is a dependency in everyone's
+shell startup path.
 
-The one exception is `frontend/`, which is a React app with a build. It earns its
+There are two fenced-off exceptions, and neither is on that path.
+
+The web server's API (`scripts/brain_api/`) is a FastAPI app. It earns the
+dependency by being the one part of the brain nothing else imports: `serve.py`
+stays stdlib-only, builds a venv for the server on first run from
+`scripts/requirements-server.txt`, and re-enters it on every start — so
+`python3 scripts/serve.py` is still the only command a user runs. See
+[the API](docs/api.md#the-servers-environment).
+
+The other is `frontend/`, which is a React app with a build. It earns its
 place by not costing anyone anything at runtime: the compiled bundle is
 **committed**, so a person who installed the plugin and has no node still gets
 the UI from `serve.py`. The toolchain is a contributor's problem, never a user's
@@ -14,10 +23,13 @@ ahead of it. See [the frontend](docs/frontend.md).
 
 ## Ground rules
 
-1. **Standard library only** in `scripts/` and `hooks/`. If you need a
-   third-party package, that is a strong signal the feature belongs in a skill
-   (where the model already runs) rather than in the engine. `frontend/` is the
-   exception and is fenced off: nothing in it may be needed to RUN the brain.
+1. **Standard library only** in `scripts/` and `hooks/`, except
+   `scripts/brain_api/`. If you need a third-party package, that is a strong
+   signal the feature belongs in a skill (where the model already runs) rather
+   than in the engine. `brain_api/` and `frontend/` are the exceptions and are
+   fenced off: nothing in either may be imported by the engine, the CLI or a
+   hook, and a new server dependency goes in `scripts/requirements-server.txt`,
+   pinned.
 2. **The hooks must never call a model.** Capture and recall being token-free is
    the property the whole design rests on. Anything that needs judgement goes in
    `skills/`, which the user invokes deliberately.
@@ -67,8 +79,9 @@ claude --plugin-dir ~/dev/memory-ledger
 | `scripts/brain_sync.py` | one-shot backfill into neo4j |
 | `hooks/` | the three always-on hooks + `_capture.py` shared helpers |
 | `hooks/hooks.json` | which hook binds to which Claude Code event |
-| `scripts/serve.py` | the local HTTP server: the JSON API, and the built UI |
-| `scripts/openapi.py` | the API description, served at `/api/docs` and generated into `docs/` |
+| `scripts/serve.py` | the one command: builds the server's venv, the UI, and runs the app |
+| `scripts/brain_api/` | the FastAPI app — reads, writes, request models, the SPA fallback |
+| `scripts/requirements-server.txt` | the server's pinned dependencies, and only the server's |
 | `frontend/src/` | the React SPA — map, dashboard, skills, settings |
 | `frontend/dist/` | its committed build, so `serve.py` needs no node |
 | `skills/<name>/SKILL.md` | model-driven skills (these may spend tokens) |
@@ -101,8 +114,10 @@ Add it to `EDGE_RELS`. Keep the name a lowercase verb phrase (`blocked-by`,
 
 ### An HTTP endpoint
 
-See [the API guide](docs/api.md#extending-it). Validate and length-cap with
-`self._str(data, key, max_len)`.
+See [the API guide](docs/api.md#extending-it). A request model in
+`scripts/brain_api/models.py`, a route in `reads.py` or `writes.py`, text
+length-capped with `clip(value, max_len)`, and the route pinned in
+`tests/test_api.py`.
 
 ### A skill
 
@@ -116,12 +131,13 @@ python3 scripts/graph.py ingest-skills
 
 ## Testing
 
-Two stdlib-only suites, no install step and no runner to learn:
+Stdlib-only suites, no install step and no runner to learn:
 
 ```bash
+python3 tests/test_api.py             # the HTTP API, pinned from the outside
+python3 tests/test_api_faults.py      # a handler that raises, a client that hangs up
 python3 tests/test_contracts.py       # contract shapes, bundles, the web routes
 python3 tests/test_traceability.py    # the tree, and hooks that must not block
-python3 tests/test_openapi.py         # the API doc and the router cannot drift
 cd frontend && npm test               # the UI: unit + integration
 ```
 
@@ -129,16 +145,21 @@ The Python suites build THROWAWAY brains in temp dirs, so a run can never touch
 the one in your home. `test_contracts.py` also starts the real
 `scripts/serve.py` and drives it over HTTP, checks the committed bundle is
 present and parses (`node --check`, skipped when node is absent) and that the
-server decides correctly when to rebuild it, and asserts the running server
-serves the same OpenAPI document it was built from. It never runs npm, so the
-Python suite stays stdlib-only.
+server decides correctly when to rebuild it. It never runs npm, so the Python
+suite stays stdlib-only.
 
-`test_openapi.py` is the one worth understanding before you add an endpoint. It
-reads serve.py's ACTUAL routes out of its source — the `path ==` chain and the
-`do_POST` dispatch dict — and fails if the spec in `scripts/openapi.py` holds an
-endpoint the router does not, or the other way round. A spec beside a router is a
-second description of the same surface, and the second description is the one
-that rots.
+`test_api.py` is the one worth understanding before you add an endpoint. It
+never imports the server: it starts `serve.py` against a throwaway brain and
+pins every route over a socket — the envelope, the status codes, every refusal
+and its wording, the SPA fallback, `--no-write`. It was written against the old
+stdlib server and carried across the move to FastAPI unchanged, which is what a
+behaviour spec is for. It also holds the route inventory: a route the served
+OpenAPI document lists that the suite has never heard of, or the reverse, fails
+it. `test_api_faults.py` is the only suite that needs the server in process (to
+make a route raise on demand), so it re-execs itself under the server's venv.
+
+The servers these suites start use the same venv `serve.py` builds, so the first
+run on a machine needs the network once.
 
 The frontend suites are split by what they cover: unit (components, hooks, and
 the pure logic in `src/lib`) and integration (a whole section driven against a
@@ -147,9 +168,10 @@ mock server, asserting on the writes that reach the wire). See
 
 **CI** (`.github/workflows/ci.yml`) runs all of them on every pull request and
 every push to `main`, alongside byte-compilation, the plugin and hook manifests,
-and `scripts/check-contracts.sh`. It also rebuilds `frontend/dist` and
-regenerates `docs/openapi.json`, failing if either moved — both are generated
-artifacts that are committed, and a stale one is a lie the repo tells quietly. The §4 docs-ship-with-behavior check runs on pull
+and `scripts/check-contracts.sh`. It also rebuilds `frontend/dist`, failing if
+it moved — it is a generated artifact that is committed, and a stale one is a lie
+the repo tells quietly. The OpenAPI document is not committed at all: it is
+generated by the running server, so there is no copy to go stale. The §4 docs-ship-with-behavior check runs on pull
 requests only, because a direct push may legitimately have taken the
 `--no-verify` bypass that check documents.
 

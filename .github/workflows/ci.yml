@@ -67,11 +67,22 @@ jobs:
           fi
           echo "frontend/dist is up to date"
 
+      # serve.py builds the API server's venv under ~/.cache/memory-ledger on
+      # first start, named by a hash of the requirements and the Python version.
+      # Keyed the same way here, so a pin change is a fresh venv in CI too.
+      - name: Cache the server venv
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/memory-ledger
+          key: server-venv-${{ runner.os }}-py3.12-${{ hashFiles('scripts/requirements-server.txt') }}
+
       # The suites are stdlib-only and self-contained, so there is no install
-      # step and no reason not to run them. SECOND_BRAIN_HOME points at a temp
-      # dir so a run can never touch a real brain -- test_contracts builds its
-      # own graph, and test_traceability starts servers and asserts the hooks
-      # do not block on a slow master.
+      # step and no reason not to run them. The servers they start bring their
+      # own venv (serve.py builds it from scripts/requirements-server.txt); the
+      # cache step above keeps that to one pip install per pin change.
+      # SECOND_BRAIN_HOME points at a temp dir so a run can never touch a real
+      # brain -- test_contracts builds its own graph, and test_traceability
+      # starts servers and asserts the hooks do not block on a slow master.
       - name: Run the test suites
         env:
           SECOND_BRAIN_HOME: ${{ runner.temp }}/brain
@@ -80,19 +91,6 @@ jobs:
             echo "== $t"
             python "$t" || exit 1
           done
-
-      # The OpenAPI document is generated, so the copy in docs/ is a convenience
-      # for readers who are not running the server. It has to be regenerated with
-      # any API change, exactly like every other doc (CONVENTIONS §4).
-      - name: The checked-in OpenAPI document is current
-        run: |
-          python3 scripts/openapi.py --out docs/openapi.json
-          if ! git diff --quiet -- docs/openapi.json; then
-            echo "docs/openapi.json is stale — regenerate it and commit it:"
-            echo "    python3 scripts/openapi.py --out docs/openapi.json"
-            exit 1
-          fi
-          echo "docs/openapi.json is up to date"
 
       # Manifest validation exists because .claude-plugin/plugin.json and
       # marketplace.json are hand-edited and never executed — a typo or a

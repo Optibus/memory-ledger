@@ -4,9 +4,9 @@ import { HashRouter } from "react-router-dom";
 import { App } from "./App";
 import "./styles/global.css";
 
-// HashRouter, not BrowserRouter: serve.py is a stdlib handler with an explicit
-// route table, and a hash route never reaches it — so a deep link works without
-// the server needing a catch-all rewrite for every future section.
+// HashRouter, not BrowserRouter: a hash route never reaches the server, so a
+// deep link works without the server having to know the app's sections (its
+// catch-all to index.html is belt and braces, not load-bearing).
 const root = document.getElementById("root");
 if (!root) throw new Error("#root is missing from index.html");
 

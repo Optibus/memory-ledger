@@ -1,0 +1,7 @@
+# The web server's dependencies — and ONLY the web server's. graph.py, the hooks
+# and brain_query.py stay stdlib-only; nothing on a shell's startup path imports
+# these. `scripts/serve.py` installs this file into its own venv on first run
+# (see `server_python` there), keyed by a hash of this file, so changing a pin
+# here builds a fresh environment instead of mutating a working one.
+fastapi==0.141.1
+uvicorn==0.53.0

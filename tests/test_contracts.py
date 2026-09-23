@@ -20,7 +20,6 @@ import signal
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import urllib.error
 import urllib.request
@@ -244,7 +243,7 @@ def test_web():
             return json.loads(e.read())
 
     try:
-        for _ in range(60):
+        for _ in range(600):
             try:
                 if call("/api/meta").get("ok"):
                     break
@@ -507,126 +506,31 @@ def test_travel_damage():
 
 
 def test_server_error_paths():
-    print("\n== the server survives the client, and its own bugs ==")
-    import graph
-    import serve
-
-    calls = {}
-
-    class FakeSelf:
-        def _send(self, code, body, ctype):
-            calls["code"] = code
-            if calls.get("dead"):
-                raise BrokenPipeError(32, "broken pipe")
-
-    f = FakeSelf()
-    serve.Handler._fail(f, RuntimeError("boom"))
-    ck("an ordinary handler bug still reaches the client", calls.get("code") == 500)
-    calls.clear()
-    serve.Handler._fail(f, ConnectionResetError(54, "reset"))
-    ck("a client that hung up is not reported back to itself, since it is gone",
-       "code" not in calls)
-    calls["dead"] = True
-    serve.Handler._fail(f, RuntimeError("boom"))
-    ck("and reporting a bug down a dead socket does not raise a second error",
-       calls.get("code") == 500)
-
-    quiet = serve.QuietServer.__new__(serve.QuietServer)
-    try:
-        raise ConnectionResetError(54, "reset")
-    except ConnectionResetError:
-        quiet.handle_error(None, ("127.0.0.1", 1))
-    ck("a client hanging up never reaches the traceback printer", True)
-    loud, serve.ThreadingHTTPServer.handle_error = {}, \
-        lambda *a, **k: loud.setdefault("printed", True)
-    try:
-        raise RuntimeError("a real bug")
-    except RuntimeError:
-        quiet.handle_error(None, ("127.0.0.1", 1))
-    ck("but a real bug is still printed, loudly", loud.get("printed"))
+    """The out-of-process commands the write routes run. The in-process safety
+    net (a handler that raises, a client that hangs up) is in test_api_faults.py,
+    which needs the server's own environment."""
+    print("\n== a graph command the server runs fails loudly, never raises ==")
+    from brain_api import commands
 
     ck("a graph command that fails is reported, not raised",
-       not serve.Handler._graph_cmd(["no-such-command"])["ok"])
+       not commands.graph_cmd(["no-such-command"])["ok"])
     ck("a graph command that hangs is bounded",
-       "timed out" in serve.Handler._graph_cmd(["export-skills"], timeout=0.001)["error"])
+       "timed out" in commands.graph_cmd(["export-skills"], timeout=0.001)["error"])
     ck("output that is not JSON is reported as itself",
-       not serve.Handler._graph_cmd(["--help"])["ok"])
-
-    # An in-process server, so a handler can be made to fail on demand. The
-    # subprocess test above proves the real entry point works; this one proves
-    # the safety net under it does.
-    srv = serve.QuietServer(("127.0.0.1", 0), serve.Handler)
-    port = srv.server_address[1]
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    orig = serve.brain_query.node_detail
-    try:
-        serve.brain_query.node_detail = lambda _id: (_ for _ in ()).throw(
-            RuntimeError("engine exploded"))
-        with urllib.request.urlopen(
-                f"http://127.0.0.1:{port}/api/node?id=x", timeout=5) as r:
-            body = json.loads(r.read())
-        ck("a 500 is never what happens", False, "should have raised")
-    except urllib.error.HTTPError as e:
-        ck("a handler bug comes back as a 500 with the reason",
-           e.code == 500 and "engine exploded" in json.loads(e.read())["error"])
-    finally:
-        serve.brain_query.node_detail = orig
-
-    orig_link = serve.graph.api_link
-    try:
-        serve.graph.api_link = lambda *a, **k: (_ for _ in ()).throw(
-            RuntimeError("write exploded"))
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{port}/api/link",
-            data=json.dumps({"src": "a", "dst": "b", "rel": "relates-to"}).encode(),
-            headers={"Content-Type": "application/json"})
-        try:
-            urllib.request.urlopen(req, timeout=5)
-            ck("a write bug comes back as a 500", False, "should have raised")
-        except urllib.error.HTTPError as e:
-            ck("a write bug comes back as a 500", e.code == 500)
-    finally:
-        serve.graph.api_link = orig_link
-
-    # The real-world case from the log: the map polls, the person reloads, and
-    # python raises out of the socket write. It must not print a traceback and
-    # must not take the server with it.
-    import socket as sk
-    import struct
-    for path in ("/api/graph", "/api/agenda", "/"):
-        c = sk.create_connection(("127.0.0.1", port))
-        c.sendall(f"GET {path} HTTP/1.1\r\nHost: x\r\n\r\n".encode())
-        time.sleep(0.03)
-        c.setsockopt(sk.SOL_SOCKET, sk.SO_LINGER, struct.pack("ii", 1, 0))
-        c.close()
-    time.sleep(0.5)
-    with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/meta", timeout=5) as r:
-        ck("three aborted requests later the server is still answering",
-           json.loads(r.read())["ok"])
-    with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/agenda", timeout=5) as r:
-        ck("a dashboard view answers", json.loads(r.read())["ok"])
-    try:
-        urllib.request.urlopen(
-            f"http://127.0.0.1:{port}/api/range?from=2026-01-01&to=oops", timeout=5)
-        ck("a bad query is a 400, not a crash", False, "should have raised")
-    except urllib.error.HTTPError as e:
-        ck("a bad query is a 400, not a crash", e.code == 400)
-    try:
-        urllib.request.urlopen(f"http://127.0.0.1:{port}/api/no-such-view", timeout=5)
-        ck("an unknown view is a 404", False, "should have raised")
-    except urllib.error.HTTPError as e:
-        ck("an unknown view is a 404", e.code == 404)
-    srv.shutdown()
-    srv.server_close()
+       not commands.graph_cmd(["--help"])["ok"])
+    ck("a staged token cannot name a file outside the staging area",
+       commands.staged("../../graph") is None)
+    ck("a bundle name cannot either", commands.bundle_path("../graph.db") is None)
 
 
 def test_web_odd_shapes():
     print("\n== the web routes, given nonsense ==")
     home = tempfile.mkdtemp(prefix="second-brain-contracts-x-")
-    import serve
-    srv = serve.QuietServer(("127.0.0.1", 0), serve.Handler)
-    port = srv.server_address[1]
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    port = 8797
+    proc = subprocess.Popen(
+        [sys.executable, str(ROOT / "scripts" / "serve.py"), "--port", str(port),
+         "--no-open", "--no-reload", "--no-build"],
+        env=env_for(home), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def call(path, body=None):
         req = urllib.request.Request(
@@ -640,6 +544,12 @@ def test_web_odd_shapes():
             return json.loads(e.read())
 
     try:
+        for _ in range(600):
+            try:
+                if call("/api/meta").get("ok"):
+                    break
+            except Exception:
+                time.sleep(0.2)
         ck("a rule with no title at all", not call("/api/create-rule", {})["ok"])
         ck("a rule whose source is invented",
            not call("/api/create-rule", {"title": "x", "source": "made-up"})["ok"])
@@ -667,8 +577,11 @@ def test_web_odd_shapes():
         ck("the node-type catalog reaches the page",
            any(t["type"] == "task" for t in call("/api/skills")["node_types"]))
     finally:
-        srv.shutdown()
-        srv.server_close()
+        proc.send_signal(signal.SIGINT)
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
         shutil.rmtree(home, ignore_errors=True)
 
 
@@ -940,16 +853,12 @@ def test_ui_build_is_decided_correctly():
 def test_api_docs_are_served():
     """The API describes itself, over the same port it answers on.
 
-    A spec that lives only in a file is one a reader has to go and find, and one
-    that can describe a server other than the one running. Serving it from the
-    process means the two cannot be different.
+    The document is generated from the routes by the running process, so there
+    is no second copy to drift. What is left to check is that it is served, and
+    that the SPA fallback does not swallow the API around it.
     """
     print("\n== the API documents itself ==")
     import urllib.request
-    import openapi
-
-    doc = openapi.build()
-    ck("the document builds", doc.get("openapi") == "3.1.0", str(doc.get("openapi")))
 
     home = tempfile.mkdtemp(prefix="second-brain-contracts-d-")
     port = 8798
@@ -960,7 +869,7 @@ def test_api_docs_are_served():
          "--no-open", "--no-reload", "--no-build"],
         env=env_for(home), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
-        for _ in range(60):
+        for _ in range(600):
             try:
                 urllib.request.urlopen(f"http://127.0.0.1:{port}/api/meta", timeout=5)
                 break
@@ -968,9 +877,9 @@ def test_api_docs_are_served():
                 time.sleep(0.2)
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/openapi.json") as r:
             served = json.loads(r.read())
-        ck("the running server serves the same document it was built from",
-           served["paths"].keys() == doc["paths"].keys(),
-           str(set(served["paths"]) ^ set(doc["paths"]))[:120])
+        ck("the running server serves a document of its own routes",
+           str(served.get("openapi", "")).startswith("3.") and "/api/meta" in served["paths"],
+           str(served.get("openapi")))
 
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/docs") as r:
             page = r.read().decode("utf-8")
@@ -1201,7 +1110,7 @@ def test_bundle_web():
             return json.loads(e.read())
 
     try:
-        for _ in range(60):
+        for _ in range(600):
             try:
                 if call("/api/meta").get("ok"):
                     break

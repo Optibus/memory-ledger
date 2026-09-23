@@ -3,7 +3,7 @@
  *
  * The shapes here are the shapes `serve.py` actually sends — they were read off
  * `brain_query._slim`, `graph.skill_trees` and `settings_payload`, and
- * `tests/test_openapi.py` keeps the spec those came from honest.
+ * `tests/test_api.py` pins those shapes against the real server.
  */
 import type {
   BackupList,

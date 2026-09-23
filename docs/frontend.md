@@ -191,7 +191,7 @@ The mock server is configured with `onUnhandledRequest: "error"`, so a component
 that quietly calls an endpoint nobody stubbed fails the run rather than passing
 silently. Its fixtures are the shapes `serve.py` really sends — they were read
 off `brain_query._slim`, `graph.skill_trees` and `settings_payload`, and
-`tests/test_openapi.py` keeps the spec those came from honest.
+`tests/test_api.py` pins those shapes against the real server.
 
 What the integration tests are actually for is the behaviour that is easy to
 break and invisible when broken:

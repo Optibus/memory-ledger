@@ -1,11 +1,16 @@
 # HTTP API
 
-`scripts/serve.py` is a dependency-free stdlib HTTP server. It serves two things
-over one port: this JSON API, and the React single-page app built from
-`frontend/`. It calls **no model** — it is the graph engine behind a socket, so
-everything it does is token-free.
+`scripts/serve.py` serves two things over one port: this JSON API, and the
+React single-page app built from `frontend/`. It calls **no model** — it is the
+graph engine behind a socket, so everything it does is token-free.
 
-Neither half needs a toolchain to run: `frontend/dist` is committed, so a machine
+The API is a FastAPI app in `scripts/brain_api/`, run under uvicorn. `serve.py`
+itself stays stdlib-only and is still the one command you run: on first start it
+builds a venv for the server from `scripts/requirements-server.txt` (see
+[The server's environment](#the-servers-environment)) and re-enters it on every
+start after that. The engine, the hooks and the CLI never import any of it.
+
+The UI needs no toolchain to run: `frontend/dist` is committed, so a machine
 with no `npm` serves the same page as any other. When the source IS newer than
 the bundle and npm is there, the server rebuilds it before binding the port;
 `--no-build` skips that and `--rebuild` forces it.
@@ -20,30 +25,26 @@ python3 scripts/serve.py --no-open          # don't open a browser
 ## The interactive reference
 
 **This file is the prose; [`/api/docs`](http://127.0.0.1:8770/api/docs) is the
-reference.** Start the server and open it: Swagger UI over an OpenAPI 3.1
-document with every endpoint, every parameter, every response shape, and a
-Try-it-out button that hits your own brain.
+reference.** Start the server and open it: Swagger UI with every endpoint, every
+parameter and request body, and a Try-it-out button that hits your own brain.
 
 | Where | What |
 |---|---|
 | `GET /api/docs` | Swagger UI. The viewer loads from a CDN; the document does not. |
-| `GET /api/openapi.json` | The document itself, built by the running process. |
-| `docs/openapi.json` | The same document on disk, for reading without a server. |
-| `scripts/openapi.py` | Where it is written. Run it with `--out` to regenerate the file. |
+| `GET /api/openapi.json` | The OpenAPI document, generated from the routes at runtime. |
 
-The document is **built by the process that answers the requests**, so what you
-browse always describes the server you are talking to. And it cannot drift from
-the router: `tests/test_openapi.py` reads serve.py's actual `do_GET` chain and
-`do_POST` dispatch table out of the source and fails if either side holds an
-endpoint the other has never heard of. Documentation nobody checks is a rumour.
+There is **no checked-in copy and nothing to regenerate.** FastAPI builds the
+document from the route decorators and the request models in
+`scripts/brain_api/models.py` when it is first asked for, so it is the router
+itself, described — it cannot hold an endpoint the server does not have, or
+miss one it does. Summaries and descriptions live on the decorators; field
+descriptions live on the models.
 
-Adding an endpoint therefore means adding it in two places, and CI tells you
-when you have done one of them:
-
-```bash
-python3 tests/test_openapi.py                      # the drift guard
-python3 scripts/openapi.py --out docs/openapi.json # refresh the checked-in copy
-```
+What the document does not check is the *behaviour*: the envelope, the status
+codes, the refusals. That is `tests/test_api.py`, which starts the real
+`serve.py` against a throwaway brain and pins every route from the outside —
+and which holds the route inventory, so a route appearing or disappearing
+without a matching edit there fails the suite.
 
 ## Security — read this before changing `--host`
 
@@ -56,8 +57,32 @@ protection. Anything that can reach the port can rewrite your graph.
   unauthenticated write API to whoever can reach the proxy.
 
 Writes are enabled unless `--no-write` is passed, in which case every `POST`
-returns `{"ok": false, "error": "server started with --no-write; writes are
-disabled"}`.
+returns 403 with `{"ok": false, "error": "server started with --no-write; writes
+are disabled"}`.
+
+## The envelope
+
+Every answer is JSON with an `ok` boolean, and every failure carries `error`: the
+reason worth showing a person. The page displays it as-is
+(`frontend/src/api/client.ts`), so FastAPI's own error shapes never reach it —
+`scripts/brain_api/errors.py` maps each one back:
+
+| Situation | Status | Body |
+|---|---|---|
+| A write the engine or a closed set refused | 400 | `{"ok": false, "error": "status must be one of open, doing, …"}` |
+| A body that is not JSON, not an object, or has a field of the wrong type | 400 | `{"ok": false, "error": "title: Input should be a valid string"}` |
+| `--no-write` and a known write route | 403 | as above |
+| An unknown route, or a method a route does not take | 404 | `{"ok": false, "error": "not found"}` (`unknown view: …` under `GET /api/`) |
+| A handler that raised | 500 | `{"error": "<the exception>"}` |
+
+A missing body is an empty object, so a route refuses it on its merits
+("missing id") rather than as malformed. `null` for a text field means empty.
+A junk entry inside a list of objects (`links`, `new_rules`) is skipped, not
+fatal. Text is length-capped, never refused for length. Most reads answer 200
+even when `ok` is false — an unknown node is a successful read of nothing; the
+exceptions are the date views (400 on a bad query) and `/api/bundle` (404).
+
+Every response is `Cache-Control: no-store`.
 
 ---
 
@@ -315,20 +340,23 @@ python3 scripts/serve.py --no-reload     # off
 
 This exists because of a failure that is genuinely hard to diagnose from the
 browser. The built page is read from disk on **every request**, but `serve.py`,
-`graph.py`, `brain_query.py` and `openapi.py` are imported **once at startup**. A
-server left running for hours therefore serves a CURRENT page against a STALE
-API: the page asks for a facet the process has never heard of, gets nothing back,
-and renders an empty filter that looks broken rather than out of date.
+the `brain_api` package, `graph.py` and `brain_query.py` are imported **once at
+startup**. A server left running for hours therefore serves a CURRENT page
+against a STALE API: the page asks for a facet the process has never heard of,
+gets nothing back, and renders an empty filter that looks broken rather than out
+of date.
 
 How it behaves:
 
-- Polls the mtimes of those five files once a second. No watch dependency for
-  five files.
-- On change it re-execs with the same argv, so the pid is unchanged and the port is
-  rebound after the listening socket closes. It does not reopen the browser.
+- Polls the mtimes of those files (and the built index and the requirements
+  file) once a second. No watch dependency for a dozen files. This is serve.py's
+  own watcher, not uvicorn's `--reload`, for the next point:
 - **It refuses to restart into code that does not compile.** A typo mid-edit prints
-  `reload held — does not compile: serve.py:112: invalid syntax` and the server
+  `reload held — does not compile: reads.py:112: invalid syntax` and the server
   keeps serving; fix the file and it restarts on the next poll.
+- On change it stops uvicorn, which closes the listening socket, and re-execs with
+  the same argv — so the pid is unchanged and the port is rebound. It does not
+  reopen the browser.
 - Every process has a `boot` id, returned in `/api/meta` and `meta.boot` of
   `/api/graph`. The page compares it on each poll and reloads itself when it
   changes, so an open tab picks up the new page without being touched.
@@ -431,17 +459,28 @@ Every one of those interactions is SQL. Leaving the dashboard open costs nothing
 
 ## Extending it
 
-The handler is a single `BaseHTTPRequestHandler` with a `GET` branch and a
-`POST` dispatch dict. To add a write:
+Reads are in `scripts/brain_api/reads.py`, writes in `writes.py`, their request
+bodies in `models.py`. To add a write:
 
-1. Add a method taking the parsed `data` dict, returning a JSON-able dict.
-2. Register it in the `POST` dispatch table.
-3. Validate and length-cap inputs with `self._str(data, key, max_len)`.
+1. Add a request model to `models.py`, with a `description` on each field that
+   is not obvious — it is what `/api/docs` shows.
+2. Add a function to `writes.py` under `@router.post("/your-route", tags=[...],
+   summary=...)`, taking `data: m.YourModel = body(m.YourModel)`. It is behind the
+   `--no-write` check automatically.
+3. Length-cap text with `clip(value, max_len)` and return `reply(result)`, which
+   answers 200 when `result["ok"]` and 400 otherwise.
 4. Go through a `graph.api_*` helper rather than raw SQL, so the neo4j outbox and
    FTS triggers stay correct.
-5. **Describe it in `scripts/openapi.py`.** `tests/test_openapi.py` fails until
-   you do, which is the point: the spec is generated from a table beside the
-   router precisely so the two cannot be edited apart.
+5. **Add it to `POST_ROUTES` in `tests/test_api.py`**, with a check of what it
+   does and what it refuses. The suite fails until you do: the document can only
+   say a route exists, and this is where what it does is written down.
+
+A read is the same in `reads.py`, registered ABOVE the `/{view}` route at the
+bottom of the file — that one matches any single segment under `/api/`.
+
+The dependencies are pinned in `scripts/requirements-server.txt`. Changing a pin
+changes the venv's name, so the next start builds a fresh environment beside the
+old one rather than upgrading a working one in place.
 
 On the client side, add it to the named surface in
 `frontend/src/api/client.ts` rather than calling `fetch` from a component. Every
@@ -451,3 +490,24 @@ fifty call sites the old single-file page had.
 
 That last point matters: writing straight to SQLite bypasses `_after_write()`,
 which is what enqueues the neo4j sync. See [the neo4j backend](neo4j.md).
+
+## The server's environment
+
+`serve.py` needs FastAPI and uvicorn, and the promise is still one command with
+no install step. So it owns its environment:
+
+- The venv lives at `~/.cache/memory-ledger/server-<hash>` (or under
+  `$XDG_CACHE_HOME`). The hash covers `scripts/requirements-server.txt` and the
+  Python version, since a venv is tied to both.
+- The first start creates it with `python -m venv` and `pip install -r`, which
+  **needs the network once**. It is built in a temp directory and renamed into
+  place only after pip succeeded, so a half-installed venv is never used, and two
+  servers starting at once cannot both write into it.
+- Every start then re-execs `serve.py` under that venv's interpreter.
+- `$MEMORY_LEDGER_VENV=/path/to/venv` uses a venv of your own instead, as it is:
+  nothing is installed into it. Use that on a machine with no network, or to pin
+  the server into an environment you already manage.
+- `rm -rf ~/.cache/memory-ledger` is always safe; the next start rebuilds it.
+
+On Debian and Ubuntu, `python -m venv` needs the `python3-venv` package; the
+server says so if it is missing.

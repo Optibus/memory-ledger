@@ -449,7 +449,7 @@ done
 
 ## Visualize the brain
 
-A dependency-free local server serves one page with **five sections**, behind a
+A local server serves one page with **five sections**, behind a
 hamburger menu on the left (`m` toggles it):
 
 - **Map** — the live graph, centred on you: your person node in the middle and
@@ -600,8 +600,10 @@ python3 scripts/serve.py            # opens http://127.0.0.1:8770/ in your brows
 python3 scripts/serve.py --no-open --host 0.0.0.0 --port 8770 &   # reachable on LAN / phone
 ```
 
-The UI is a React single-page app (`frontend/`). Its build is **committed**, so
-the command above needs no node and nothing installed; if you do have node and
+The UI is a React single-page app (`frontend/`) over a FastAPI backend
+(`scripts/brain_api/`). The UI's build is **committed**, so the command above
+needs no node; the backend's dependencies are installed by `serve.py` itself,
+into its own venv, on the first start; if you do have node and
 change the source, the server rebuilds the bundle for you on the next start. See
 [the frontend](docs/frontend.md) to work on it. The API describes itself at
 **`/api/docs`**: Swagger UI over an OpenAPI 3.1 document the running process
