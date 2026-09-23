@@ -1,5 +1,8 @@
 import { useCallback, useMemo, useState } from "react";
 
+/** Scripts are files, not nodes: their selection id is the filename behind this prefix. */
+export const SCRIPT_PREFIX = "script:";
+
 /**
  * Which corpus an id belongs to. Skills are always `skill_*`, but a process is
  * any node of type `process` — many were retyped from decisions and notes and
@@ -8,7 +11,8 @@ import { useCallback, useMemo, useState } from "react";
 export function kindOf(
   id: string,
   processIds?: ReadonlySet<string>,
-): "skills" | "rules" | "processes" {
+): "skills" | "rules" | "processes" | "scripts" {
+  if (id.startsWith(SCRIPT_PREFIX)) return "scripts";
   if (id.startsWith("skill_")) return "skills";
   if (processIds?.has(id) || id.startsWith("process_")) return "processes";
   return "rules";
@@ -21,11 +25,12 @@ export interface Selection {
   toggle: (id: string, want?: boolean) => void;
   selectAll: (ids: string[]) => void;
   clear: () => void;
-  /** The two lists the bundle endpoints want. */
+  /** The lists the bundle endpoints want, and the script filenames beside them. */
   split: (processIds?: ReadonlySet<string>) => {
     skills: string[];
     rules: string[];
     processes: string[];
+    scripts: string[];
   };
 }
 
@@ -55,8 +60,16 @@ export function useSelection(): Selection {
   const clear = useCallback(() => setPicked(new Set()), []);
 
   const split = useCallback((processIds?: ReadonlySet<string>) => {
-    const out = { skills: [] as string[], rules: [] as string[], processes: [] as string[] };
-    for (const id of picked) out[kindOf(id, processIds)].push(id);
+    const out = {
+      skills: [] as string[],
+      rules: [] as string[],
+      processes: [] as string[],
+      scripts: [] as string[],
+    };
+    for (const id of picked) {
+      const kind = kindOf(id, processIds);
+      out[kind].push(kind === "scripts" ? id.slice(SCRIPT_PREFIX.length) : id);
+    }
     return out;
   }, [picked]);
 

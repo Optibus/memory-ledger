@@ -147,6 +147,19 @@ def bundle(name: str = Query("", description="The bundle filename.")):
     return FileResponse(path, media_type="application/zip", filename=path.name)
 
 
+@router.get("/scripts", tags=["scripts"], summary="The local scripts in <home>/scripts",
+            description="Name, size, executable bit, language and the first line that "
+                        "says what each one is. Files only: the brain never runs them.")
+def scripts():
+    return graph.list_scripts()
+
+
+@router.get("/script", tags=["scripts"], summary="One local script's text",
+            description="`name` must be a bare filename in `<home>/scripts`.")
+def script(name: str = Query("", description="The script filename.")):
+    return graph.read_script(name)
+
+
 @router.get("/rule", tags=["contracts"], summary="One rule in full")
 def rule(id: str = Query("", description="The rule id.")):
     row = graph.connect().execute("SELECT * FROM nodes WHERE id=? AND type=?",

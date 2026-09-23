@@ -44,6 +44,7 @@ GET_ROUTES = [
     "/api/person-duplicates", "/api/kinds", "/api/skills", "/api/bundle",
     "/api/rule", "/api/settings", "/api/timezones", "/api/status", "/api/meta",
     "/api/suggest-links", "/api/search", "/api/trigger", "/api/trigger-request",
+    "/api/scripts", "/api/script",
 ]
 POST_ROUTES = [
     "/api/set-due", "/api/add-task", "/api/complete", "/api/set-status",
@@ -56,6 +57,7 @@ POST_ROUTES = [
     "/api/upload-bundle", "/api/import-bundle", "/api/delete-contracts",
     "/api/trigger-gate", "/api/trigger-action", "/api/trigger-config", "/api/trigger-check",
     "/api/trigger-channel", "/api/trigger-decline",
+    "/api/export-scripts", "/api/upload-scripts", "/api/import-scripts",
 ]
 VIEWS = ["agenda", "open", "today", "tomorrow", "week", "closed", "range"]
 
@@ -680,6 +682,77 @@ def test_contract_writes(s: Server):
     ck("delete-contracts", d.get("ok") and d.get("count") == 1, str(d)[:160])
 
 
+# ================================================================ scripts
+def test_scripts(s: Server):
+    print("\n== local scripts: list, read, export, import ==")
+    ls = s.get("/api/scripts").json()
+    ck("no scripts directory is an empty list, not an error",
+       ls.get("ok") and ls.get("count") == 0 and ls.get("exists") is False, str(ls)[:160])
+    ck("exporting nothing is refused", refused(s.post("/api/export-scripts", {}), 400,
+                                               "there are no scripts"))
+    d = Path(s.home) / "scripts"
+    d.mkdir()
+    (d / "hello.py").write_text('#!/usr/bin/env python3\n"""Say hello."""\nprint(1)\n')
+    (d / "hello.py").chmod(0o755)
+    (d / "notes.sh").write_text("# Jot a note.\necho hi\n")
+    (d / ".hidden").write_text("x")
+    (d / "__pycache__").mkdir()
+
+    ls = s.get("/api/scripts").json()
+    ck("lists files, not dotfiles or directories",
+       [x["name"] for x in ls["scripts"]] == ["hello.py", "notes.sh"], str(ls)[:200])
+    hello = ls["scripts"][0]
+    ck("with the first line that says what it is, and its mode",
+       hello["summary"] == "Say hello." and hello["executable"] is True
+       and ls["scripts"][1]["summary"] == "Jot a note.", str(hello)[:160])
+    ck("one script reads in full", "print(1)" in s.get("/api/script", name="hello.py")
+       .json().get("script", {}).get("text", ""))
+    ck("a name pointing out of the directory reads nothing",
+       s.get("/api/script", name="../graph.db").json().get("ok") is False)
+
+    exp = s.post("/api/export-scripts", {"names": ["hello.py"]}).json()
+    ck("export-scripts", exp.get("ok") and exp.get("scripts") == ["hello.py"]
+       and exp.get("download", "").startswith("/api/bundle?name=scripts-"), str(exp)[:160])
+    ck("an unknown name is refused", refused(
+        s.post("/api/export-scripts", {"names": ["nope.py"]}), 400, "no such script"))
+    r = s.request("GET", exp["download"])
+    ck("the scripts zip downloads", r.status == 200 and r.raw[:2] == b"PK")
+
+    ck("an upload with no file", refused(s.post("/api/upload-scripts", {}), 400,
+                                         "no file was sent"))
+    (d / "hello.py").write_text("changed\n")
+    up = s.post("/api/upload-scripts", {"filename": "s.zip",
+                                        "data": base64.b64encode(r.raw).decode()}).json()
+    ck("upload inspects before writing", up.get("ok") and up.get("token")
+       and up["items"][0]["exists"] and up["items"][0]["identical"] is False
+       and (d / "hello.py").read_text() == "changed\n", str(up)[:200])
+    ck("import needs a selection", refused(
+        s.post("/api/import-scripts", {"token": up["token"], "select": {"x": "explode"}}),
+        400, "nothing was selected"))
+    imp = s.post("/api/import-scripts", {"token": up["token"],
+                                         "select": {"hello.py": "replace"}}).json()
+    ck("import-scripts replaces, keeping a backup",
+       imp.get("ok") and imp["applied"][0]["action"] == "replaced"
+       and "print(1)" in (d / "hello.py").read_text()
+       and (Path(imp["backup"]) / "hello.py").read_text() == "changed\n", str(imp)[:200])
+    ck("and the executable bit came back", os.stat(d / "hello.py").st_mode & 0o111)
+    ck("the token is spent", refused(
+        s.post("/api/import-scripts", {"token": up["token"], "select": {"hello.py": "keep"}}),
+        400, "no longer staged"))
+
+    loose = base64.b64encode(b"#!/bin/sh\n# Loose one.\necho\n").decode()
+    ck("a loose file with an unsafe name is refused", refused(
+        s.post("/api/upload-scripts", {"filename": ".profile", "data": loose}), 400,
+        "cannot be a script name"))
+    up = s.post("/api/upload-scripts", {"filename": "loose.sh", "data": loose}).json()
+    ck("a loose file stages as one script", up.get("ok")
+       and [i["name"] for i in up["items"]] == ["loose.sh"], str(up)[:160])
+    imp = s.post("/api/import-scripts", {"token": up["token"],
+                                         "select": {"loose.sh": "keep"}}).json()
+    ck("and lands as new", imp.get("ok") and imp["applied"][0]["action"] == "created"
+       and (d / "loose.sh").is_file())
+
+
 # ================================================================ triggers
 def test_trigger_routes(s: Server):
     print("\n== triggers: the request log, its actions, the gate ==")
@@ -817,6 +890,7 @@ def main():
         test_people_writes(s)
         test_settings_writes(s)
         test_contract_writes(s)
+        test_scripts(s)
         test_trigger_routes(s)
     finally:
         s.stop()

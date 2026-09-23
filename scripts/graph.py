@@ -2913,6 +2913,310 @@ def cmd_import_bundle(args):
                       getattr(args, "process_realm", None) or ""))
 
 
+# ----------------------------------------------------- local scripts (§5c)
+# `<home>/scripts` holds one person's automation — the files that are NOT
+# agnostic enough to ship in the plugin (see the home README). They are files,
+# not nodes: the brain lists them, zips them and lands a zip back, and never
+# runs one.
+SCRIPTS_FORMAT = "second-brain/scripts"
+SCRIPTS_VERSION = 1
+SCRIPTS_PLAN = "scripts-plan.json"
+SCRIPTS_MEMBER_DIR = "scripts"
+# a script is source code; anything this size is a data file that wandered in,
+# and every byte of it is read into memory to hash and zip
+SCRIPT_MAX_BYTES = 2 * 1024 * 1024
+SCRIPT_MODES = ("replace", "keep")
+_SCRIPT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,120}")
+_SCRIPT_LANG = {".py": "python", ".sh": "shell", ".bash": "shell", ".zsh": "shell",
+                ".js": "javascript", ".mjs": "javascript", ".ts": "typescript",
+                ".rb": "ruby", ".pl": "perl", ".sql": "sql", ".applescript": "applescript"}
+
+
+def scripts_dir() -> Path:
+    """Where the person's local scripts live: `<home>/scripts`, flat."""
+    return home_dir() / "scripts"
+
+
+def script_name_ok(name: str) -> bool:
+    """A bare filename the scripts directory may hold.
+
+    The name reaches a filesystem join from a query string or a zip member, so
+    it is matched against a strict pattern — no separator, no leading dot, no
+    `..` — rather than cleaned up and trusted."""
+    return bool(name and _SCRIPT_NAME.fullmatch(name) and ".." not in name)
+
+
+def _script_summary(text: str) -> str:
+    """The first line a person wrote to say what the file is: a docstring or
+    a leading comment, past the shebang and the encoding line."""
+    lines = text.splitlines()[:40]
+    for i, raw in enumerate(lines):
+        line = raw.strip()
+        if not line or line.startswith("#!") or (line.startswith("#") and "coding" in line[:25]):
+            continue
+        if line.startswith(("from __future__", "set -", "'use strict'", '"use strict"')):
+            continue
+        for q in ('"""', "'''"):
+            if line.startswith(q):
+                rest = line[3:].strip().rstrip(q).strip()
+                if rest:
+                    return rest[:200]
+                nxt = next((l.strip() for l in lines[i + 1:] if l.strip()), "")
+                return nxt.rstrip(q).strip()[:200]
+        if line.startswith(("#", "//", "--")):
+            return line.lstrip("#/- ").strip()[:200]
+        return ""
+    return ""
+
+
+def _script_lang(name: str, text: str) -> str:
+    suffix = Path(name).suffix.lower()
+    if suffix in _SCRIPT_LANG:
+        return _SCRIPT_LANG[suffix]
+    first = text.split("\n", 1)[0]
+    if first.startswith("#!"):
+        for word, lang in (("python", "python"), ("bash", "shell"), ("zsh", "shell"),
+                           ("/sh", "shell"), ("node", "javascript"), ("ruby", "ruby")):
+            if word in first:
+                return lang
+    return "text"
+
+
+def _script_row(name: str, blob: bytes, executable: bool) -> dict:
+    text = blob.decode("utf-8", errors="replace")
+    return {"name": name, "bytes": len(blob), "executable": executable,
+            "sha256": hashlib.sha256(blob).hexdigest(),
+            "language": _script_lang(name, text), "summary": _script_summary(text)}
+
+
+def list_scripts() -> dict:
+    """Every script in `<home>/scripts`. Subdirectories and dotfiles are not
+    scripts (a `__pycache__`, an editor's swap file) and are left out."""
+    d = scripts_dir()
+    rows, skipped = [], []
+    if d.is_dir():
+        for p in sorted(d.iterdir(), key=lambda x: x.name.lower()):
+            if not p.is_file() or p.is_symlink() or not script_name_ok(p.name):
+                continue
+            st = p.stat()
+            if st.st_size > SCRIPT_MAX_BYTES:
+                skipped.append({"name": p.name, "why": "larger than "
+                                f"{SCRIPT_MAX_BYTES // (1024 * 1024)}MB"})
+                continue
+            row = _script_row(p.name, p.read_bytes(), bool(st.st_mode & 0o111))
+            row["modified"] = datetime.fromtimestamp(
+                st.st_mtime, timezone.utc).isoformat(timespec="seconds")
+            rows.append(row)
+    return {"ok": True, "dir": str(d), "exists": d.is_dir(), "count": len(rows),
+            "scripts": rows, "skipped": skipped}
+
+
+def read_script(name: str) -> dict:
+    """One script's text, for reading in the page. Never executed."""
+    if not script_name_ok(name):
+        return {"ok": False, "error": "no such script"}
+    p = scripts_dir() / name
+    if not p.is_file() or p.is_symlink():
+        return {"ok": False, "error": "no such script"}
+    if p.stat().st_size > SCRIPT_MAX_BYTES:
+        return {"ok": False, "error": "that script is too large to show"}
+    blob = p.read_bytes()
+    row = _script_row(name, blob, bool(p.stat().st_mode & 0o111))
+    row["text"] = blob.decode("utf-8", errors="replace")
+    return {"ok": True, "script": row}
+
+
+def _write_scripts_zip(dest: Path, files: dict) -> dict:
+    """`files` is {name: (bytes, executable)}. Returns the plan written."""
+    import zipfile
+    plan = {"format": SCRIPTS_FORMAT, "version": SCRIPTS_VERSION, "created": now(),
+            "items": {n: {k: v for k, v in _script_row(n, b, x).items() if k != "name"}
+                      for n, (b, x) in files.items()}}
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr(SCRIPTS_PLAN, json.dumps(plan, indent=2, sort_keys=True) + "\n")
+        for n, (blob, executable) in files.items():
+            info = zipfile.ZipInfo(f"{SCRIPTS_MEMBER_DIR}/{n}",
+                                   date_time=datetime.now().timetuple()[:6])
+            info.compress_type = zipfile.ZIP_DEFLATED
+            # the unix mode rides in the high bits, so an unzip -X keeps it too
+            info.external_attr = ((0o100755 if executable else 0o100644) & 0xFFFF) << 16
+            z.writestr(info, blob)
+    return plan
+
+
+def export_scripts(names=(), dest: Path = None) -> dict:
+    """Zip the named scripts (all of them when none are named) into
+    `<home>/bundles/scripts-<stamp>.zip`, keeping each one's executable bit."""
+    have = {r["name"]: r for r in list_scripts()["scripts"]}
+    picked = [n for n in dict.fromkeys(names) if n] or sorted(have)
+    missing = [n for n in picked if n not in have]
+    if missing:
+        return {"ok": False, "error": f"no such script: {', '.join(missing)}"}
+    if not picked:
+        return {"ok": False, "error": f"there are no scripts in {scripts_dir()}"}
+    files = {n: ((scripts_dir() / n).read_bytes(), have[n]["executable"]) for n in picked}
+    dest = Path(dest).expanduser() if dest else (
+        bundles_dir() / f"scripts-{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip")
+    if dest.suffix != ".zip":
+        dest = dest.with_suffix(".zip")
+    _write_scripts_zip(dest, files)
+    return {"ok": True, "path": str(dest), "name": dest.name,
+            "bytes": dest.stat().st_size, "count": len(files), "scripts": sorted(files)}
+
+
+def wrap_script(blob: bytes, name: str, dest: Path) -> dict:
+    """Stage ONE loose file as a one-script zip, so a single file and an
+    exported zip go through the same inspect and import."""
+    name = Path(name or "").name
+    if not script_name_ok(name):
+        return {"ok": False, "error": "that filename cannot be a script name "
+                "(letters, digits, dot, dash and underscore; no leading dot)"}
+    if len(blob) > SCRIPT_MAX_BYTES:
+        return {"ok": False, "error": "that file is larger than "
+                f"{SCRIPT_MAX_BYTES // (1024 * 1024)}MB"}
+    text = blob[:200].decode("utf-8", errors="replace")
+    _write_scripts_zip(dest, {name: (blob, text.startswith("#!"))})
+    return {"ok": True}
+
+
+def _read_scripts_zip(path: Path) -> tuple:
+    """({name: (bytes, executable)}, None) out of a scripts zip, or (None, error).
+
+    A zip is untrusted: only members named `scripts/<safe name>` are read, and
+    the name that reaches the filesystem is the pattern-checked bare filename,
+    never the member path."""
+    import zipfile
+    try:
+        with zipfile.ZipFile(path) as z:
+            names = set(z.namelist())
+            if SCRIPTS_PLAN not in names:
+                if BUNDLE_PLAN in names:
+                    return None, ("that is a skills bundle, not scripts — import it "
+                                  "from Bundles")
+                return None, f"not a scripts export: no {SCRIPTS_PLAN} inside"
+            plan = json.loads(z.read(SCRIPTS_PLAN).decode("utf-8"))
+            if plan.get("format") != SCRIPTS_FORMAT:
+                return None, f"unknown scripts format: {plan.get('format')!r}"
+            files = {}
+            for info in z.infolist():
+                head, _, name = info.filename.partition("/")
+                if head != SCRIPTS_MEMBER_DIR or not script_name_ok(name):
+                    continue
+                if info.file_size > SCRIPT_MAX_BYTES:
+                    continue
+                mode = (info.external_attr >> 16) & 0o777
+                meta = (plan.get("items") or {}).get(name) or {}
+                executable = bool(mode & 0o111) if mode else bool(meta.get("executable"))
+                files[name] = (z.read(info), executable)
+    except (OSError, ValueError, zipfile.BadZipFile) as exc:
+        return None, f"could not read the zip: {exc}"
+    if not files:
+        return None, "that zip carries no scripts"
+    return files, None
+
+
+def inspect_scripts(path: Path) -> dict:
+    """What a scripts zip holds and which of it collides with a local file,
+    changing nothing. A collision whose bytes match is `identical`, and needs
+    no choice."""
+    files, err = _read_scripts_zip(path)
+    if err:
+        return {"ok": False, "error": err}
+    rows = []
+    for name in sorted(files, key=str.lower):
+        blob, executable = files[name]
+        row = _script_row(name, blob, executable)
+        local = scripts_dir() / name
+        row["exists"] = local.is_file()
+        if row["exists"]:
+            mine = local.read_bytes()
+            row["identical"] = hashlib.sha256(mine).hexdigest() == row["sha256"]
+            row["existing_bytes"] = len(mine)
+        rows.append(row)
+    return {"ok": True, "path": str(path), "dir": str(scripts_dir()),
+            "count": len(rows), "items": rows}
+
+
+def import_scripts(path: Path, select: dict) -> dict:
+    """Land the selected scripts in `<home>/scripts`.
+
+    `select` maps a name to `replace` or `keep`. A name not in `select` is not
+    imported. A new file is written for either mode; an existing one is
+    overwritten only for `replace`, and its old bytes are copied to
+    `<home>/backups/scripts-<stamp>/` first — a script is code someone wrote,
+    and an import is not allowed to be the only copy of what it replaced."""
+    files, err = _read_scripts_zip(path)
+    if err:
+        return {"ok": False, "error": err}
+    select = {k: v for k, v in (select or {}).items() if v in SCRIPT_MODES}
+    if not select:
+        return {"ok": False, "error": "nothing was selected to import"}
+    d = scripts_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    backup = backups_dir() / f"scripts-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    applied, absent = [], []
+    for name, mode in select.items():
+        if name not in files:
+            absent.append(name)
+            continue
+        blob, executable = files[name]
+        target = d / name
+        if target.is_symlink():
+            applied.append({"name": name, "action": "kept",
+                            "why": "the local file is a symlink"})
+            continue
+        exists = target.is_file()
+        if exists and target.read_bytes() == blob:
+            applied.append({"name": name, "action": "unchanged"})
+            continue
+        if exists and mode != "replace":
+            applied.append({"name": name, "action": "kept"})
+            continue
+        if exists:
+            backup.mkdir(parents=True, exist_ok=True)
+            (backup / name).write_bytes(target.read_bytes())
+        tmp = d / f".{name}.{secrets.token_hex(4)}.tmp"
+        tmp.write_bytes(blob)
+        tmp.chmod(0o755 if executable else 0o644)
+        os.replace(tmp, target)
+        applied.append({"name": name, "action": "replaced" if exists else "created"})
+    res = {"ok": True, "dir": str(d), "applied": applied, "not_in_zip": absent}
+    if backup.is_dir():
+        res["backup"] = str(backup)
+    return res
+
+
+def cmd_scripts(args):
+    out(list_scripts())
+
+
+def cmd_export_scripts(args):
+    out(export_scripts(list(args.name or []),
+                       Path(args.out).expanduser() if args.out else None))
+
+
+def cmd_inspect_scripts(args):
+    out(inspect_scripts(Path(args.zip).expanduser()))
+
+
+def cmd_import_scripts(args):
+    select = {}
+    if args.spec:
+        spec = json.loads(Path(args.spec).expanduser().read_text(encoding="utf-8"))
+        select = spec.get("select") or spec
+    if args.all:
+        files, err = _read_scripts_zip(Path(args.zip).expanduser())
+        if err:
+            out({"ok": False, "error": err})
+            return
+        select = {n: args.mode for n in files} | select
+    for pair in (args.select or []):
+        name, _, mode = pair.partition(":")
+        select[name.strip()] = mode.strip() or args.mode
+    out(import_scripts(Path(args.zip).expanduser(), select))
+
+
 def delete_contracts(con, ids=(), force=False) -> dict:
     """Delete skill and rule nodes outright.
 
@@ -6069,6 +6373,36 @@ def build_parser():
     a.add_argument("--process-realm", dest="process_realm", default="",
                    help="realm the bundle's processes land in (default: the "
                         "configured realm)")
+
+    a = sub.add_parser("scripts", description=(
+        "List the person's local scripts in <home>/scripts — name, size, "
+        "executable bit, and the first line that says what each one is."))
+    a.set_defaults(func=cmd_scripts)
+
+    a = sub.add_parser("export-scripts", description=(
+        "Zip local scripts (all, or the ones named) with their executable bit, "
+        "into <home>/bundles/scripts-<stamp>.zip."))
+    a.set_defaults(func=cmd_export_scripts)
+    a.add_argument("--name", action="append", help="script filename (repeatable)")
+    a.add_argument("--out", help="destination zip")
+
+    a = sub.add_parser("inspect-scripts", description=(
+        "What a scripts zip holds and which of it is already here. Reads only."))
+    a.set_defaults(func=cmd_inspect_scripts)
+    a.add_argument("--zip", required=True)
+
+    a = sub.add_parser("import-scripts", description=(
+        "Land scripts from a zip in <home>/scripts. A new file is written; an "
+        "existing one is overwritten only with mode replace, after a copy goes "
+        "to <home>/backups/scripts-<stamp>/."))
+    a.set_defaults(func=cmd_import_scripts)
+    a.add_argument("--zip", required=True)
+    a.add_argument("--select", action="append", metavar="NAME[:MODE]",
+                   help="import this script, with mode replace|keep (repeatable)")
+    a.add_argument("--all", action="store_true", help="import every script in the zip")
+    a.add_argument("--spec", help="JSON file with {select:{name: mode}}")
+    a.add_argument("--mode", choices=list(SCRIPT_MODES), default="keep",
+                   help="mode for scripts that did not name one (default keep)")
 
     a = sub.add_parser("add-process", description=(
         "Record a way of working as a process node in a realm, part-of "

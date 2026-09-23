@@ -10,6 +10,7 @@ describe("kindOf", () => {
     // a process retyped from a decision keeps its id
     expect(kindOf("decision_use-jira-flags", new Set(["decision_use-jira-flags"]))).toBe("processes");
     expect(kindOf("decision_use-jira-flags")).toBe("rules");
+    expect(kindOf("script:dev_env.py")).toBe("scripts");
   });
 });
 
@@ -32,8 +33,13 @@ describe("useSelection", () => {
   it("splits the selection the way the bundle endpoints want it", () => {
     const { result } = renderHook(() => useSelection());
     act(() => result.current.selectAll(["skill_a", "rule_b", "skill_c"]));
-    act(() => result.current.selectAll(["skill_a", "rule_b", "skill_c", "process_d"]));
-    expect(result.current.split()).toEqual({ skills: ["skill_a", "skill_c"], rules: ["rule_b"], processes: ["process_d"] });
+    act(() => result.current.selectAll(["skill_a", "rule_b", "skill_c", "process_d", "script:x.sh"]));
+    expect(result.current.split()).toEqual({
+      skills: ["skill_a", "skill_c"],
+      rules: ["rule_b"],
+      processes: ["process_d"],
+      scripts: ["x.sh"],
+    });
   });
 
   it("drops the selection when selection mode is left, so no hidden tick survives", () => {

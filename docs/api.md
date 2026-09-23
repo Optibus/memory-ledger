@@ -116,6 +116,8 @@ Every response is `Cache-Control: no-store`.
 | `/api/meta` | the vocabulary — node types, realms, kinds, edge rels, statuses, and the two contract shapes (`skill_sections`, `rule_sections`, `decl_labels`, `node_types`) |
 | `/api/skills` | the two skill trees, the rule catalog, `node_types` (each with its description, how many of it the brain holds, and which skills read or write it), and the area titles the filters label themselves with |
 | `/api/rule?id=<id>` | one rule in full, for the skill drawer |
+| `/api/scripts` | the local scripts in `<home>/scripts`: `dir`, `exists`, and per script `name`, `bytes`, `executable`, `language`, `summary`, `sha256`, `modified`. Files the listing leaves out for size are in `skipped` |
+| `/api/script?name=<file>` | one script's `text`. `name` must be a bare filename in `<home>/scripts`; anything else is `no such script` |
 | `/api/bundle?name=<file>` | an exported bundle, as a zip attachment. `name` is reduced to a bare filename, so it can only name a file in `<home>/bundles` |
 | `/api/suggest-links` | proposed edges awaiting acceptance |
 | `/api/search?q=<q>` | node picker results for the relation editor |
@@ -211,6 +213,9 @@ since the dashboard lists tasks and a kind with none would be dead UI.
 | `/api/trigger-channel` | `{channel, name?, enabled}` | opens (`true`) or closes a Slack channel to everyone's mentions. `channel` is an id or any Slack link into it. Closing keeps the row, marked removed; reopening restores it. Returns the whole list as `channels` |
 | `/api/trigger-decline` | `{request_id, reason, rule?}` | what the session calls for a request that breaks a rule: marks it `declined`, logs the rule and reason, and returns the policy `notice` (with `{reason}` filled) and the `signature` to post |
 | `/api/trigger-action` | `{request_id, kind, target?, detail?}` | appends an action to a request's audit log (what `trigger.py action` does). Refused for an unknown request or an empty `kind` |
+| `/api/export-scripts` | `{names[]}` | `graph.py export-scripts` — the named scripts (all, when empty) as one zip under `<home>/bundles`, executable bits kept; returns `path`, `name`, `count`, `scripts` and a `download` URL through `/api/bundle` |
+| `/api/upload-scripts` | `{filename, data}` | base64, ≤32MB: a scripts zip, or one loose script (a name not ending in `.zip`), staged as a zip of one. Returns a one-shot `token`, the target `dir`, and every script with `exists` and `identical`. **Reads only — nothing is written** |
+| `/api/import-scripts` | `{token, select{name: replace\|keep}}` | lands the selected scripts in `<home>/scripts` and consumes the token. New files are written either way; an existing one is overwritten only for `replace`, after a copy to `<home>/backups/scripts-<stamp>/` (returned as `backup`). A name not in `select` is not imported |
 | `/api/delete-contracts` | `{ids[], force?}` | `graph.py del-contracts` — deletes skill/rule nodes and their edges. A built-in is refused unless `force`, since its file would re-ingest it |
 
 ### Authoring contracts

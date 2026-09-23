@@ -15,6 +15,7 @@ import type {
   NodeDetail,
   PersonDuplicates,
   Settings,
+  ScriptsPayload,
   SkillsPayload,
   Status,
   ViewPayload,
@@ -476,6 +477,34 @@ export const triggerFixture: import("@/api/types").TriggerStatus = {
       requester_name: "Isadora", requester_id: "U2", status: "done",
       received_at: "2026-09-23T12:01:00+00:00", text: "can you summarise this thread?",
       permalink: "https://x.slack.com/p1",
+    },
+  ],
+};
+
+export const scriptsFixture: ScriptsPayload = {
+  ok: true,
+  dir: "/home/brain/scripts",
+  exists: true,
+  count: 2,
+  skipped: [],
+  scripts: [
+    {
+      name: "dev_env.py",
+      bytes: 14127,
+      executable: true,
+      sha256: "a".repeat(64),
+      language: "python",
+      summary: "Is the dev environment usable right now.",
+      modified: "2026-09-18T19:21:54+00:00",
+    },
+    {
+      name: "mithra_token.sh",
+      bytes: 2644,
+      executable: true,
+      sha256: "b".repeat(64),
+      language: "shell",
+      summary: "Mint a token without the slash command.",
+      modified: "2026-09-23T15:23:30+00:00",
     },
   ],
 };

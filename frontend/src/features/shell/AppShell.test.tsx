@@ -26,8 +26,8 @@ describe("the app shell", () => {
     const { user } = renderApp(<App />, { route: "/map", withMeta: false });
     await screen.findByText(/nodes · 3 edges/);
     await user.click(screen.getByRole("button", { name: "sections" }));
-    await user.click(screen.getByRole("link", { name: /Skills/ }));
-    expect(await screen.findByRole("heading", { name: "Skills" })).toBeInTheDocument();
+    await user.click(screen.getByRole("link", { name: /Capabilities/ }));
+    expect(await screen.findByRole("heading", { name: "Capabilities" })).toBeInTheDocument();
   });
 
   it("reaches the People section, which the drawer now carries", async () => {
@@ -105,14 +105,15 @@ describe("the app shell", () => {
     expect(screen.queryByRole("button", { name: /create a process, a skill or a rule/ })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "sections" }));
-    await user.click(screen.getByRole("link", { name: /Skills/ }));
+    await user.click(screen.getByRole("link", { name: /Capabilities/ }));
     expect(await screen.findByRole("button", { name: /create a process, a skill or a rule/ })).toBeInTheDocument();
   });
 
   it("hides the create button on a read-only server", async () => {
     server.use(http.get("/api/meta", () => HttpResponse.json({ ...metaFixture, writable: false })));
+    // the old /skills link still lands on the tab it became
     renderApp(<App />, { route: "/skills", withMeta: false });
-    await screen.findByRole("heading", { name: "Skills" });
+    await screen.findByRole("heading", { name: "Capabilities" });
     expect(screen.queryByRole("button", { name: /create a process, a skill or a rule/ })).not.toBeInTheDocument();
   });
 });

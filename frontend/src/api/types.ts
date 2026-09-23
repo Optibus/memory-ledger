@@ -325,6 +325,64 @@ export interface UploadBundleResult extends Envelope {
 
 export type ImportChoice = "update" | "replace" | "ignore";
 
+/** One file in `<home>/scripts`. The brain lists them and never runs one. */
+export interface ScriptEntry {
+  name: string;
+  bytes: number;
+  executable: boolean;
+  sha256: string;
+  language: string;
+  /** The first docstring or comment line, past the shebang. */
+  summary: string;
+  modified?: string;
+}
+
+export interface ScriptsPayload extends Envelope {
+  dir: string;
+  exists: boolean;
+  count: number;
+  scripts: ScriptEntry[];
+  skipped: { name: string; why: string }[];
+}
+
+export interface ScriptDetail extends Envelope {
+  script?: ScriptEntry & { text: string };
+}
+
+export interface ExportScriptsResult extends Envelope {
+  path: string;
+  name: string;
+  download: string;
+  count: number;
+  scripts: string[];
+}
+
+export interface StagedScript extends ScriptEntry {
+  /** A local file by this name is already in `<home>/scripts`. */
+  exists: boolean;
+  /** Only when it exists: are the bytes the same? Then there is nothing to decide. */
+  identical?: boolean;
+  existing_bytes?: number;
+}
+
+export interface UploadScriptsResult extends Envelope {
+  token: string;
+  dir: string;
+  count: number;
+  items: StagedScript[];
+}
+
+/** An existing script is overwritten only for `replace`; a new one is written either way. */
+export type ScriptChoice = "replace" | "keep";
+
+export interface ImportScriptsResult extends Envelope {
+  dir: string;
+  applied: { name: string; action: string; why?: string }[];
+  not_in_zip: string[];
+  /** Where the bytes of every replaced script were copied first. */
+  backup?: string;
+}
+
 export interface ImportBundleResult extends Envelope {
   applied: { id: string; action: string; rules_not_found?: string[] }[];
   tree?: { added: number; pruned: number };

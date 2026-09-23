@@ -21,6 +21,8 @@ import { ImportDialog } from "./ImportDialog";
 import { PromptDialog } from "./PromptDialog";
 import { ProcessRow } from "./ProcessRow";
 import { ProcessDialog } from "./ProcessDialog";
+import { ScriptRow } from "./ScriptRow";
+import { ScriptImportDialog } from "./ScriptImportDialog";
 import type { ProcessDraft } from "./ProcessDialog";
 import {
   ITEM_TYPES,
@@ -31,11 +33,19 @@ import {
   emptySkillFilter,
   keepProcess,
   keepRule,
+  keepScript,
   keepSkill,
 } from "./filter";
 import type { ItemType, KeptSkill, SkillFilter, Source } from "./filter";
-import { useSelection } from "./useSelection";
-import type { ImportChoice, SkillsPayload, UploadBundleResult } from "@/api/types";
+import { SCRIPT_PREFIX, useSelection } from "./useSelection";
+import type {
+  ImportChoice,
+  ScriptChoice,
+  ScriptsPayload,
+  SkillsPayload,
+  UploadBundleResult,
+  UploadScriptsResult,
+} from "@/api/types";
 import type { Created } from "@/features/create/CreateLauncher";
 import "./SkillsSection.css";
 
@@ -55,9 +65,10 @@ const TREE_SUB: Record<string, JSX.Element> = {
 };
 
 const TYPE_LABEL: Record<ItemType, string> = {
-  process: "Processes",
   skill: "Skills",
   rule: "Rules",
+  process: "Processes",
+  script: "Scripts",
 };
 
 const SOURCE_LABEL: Record<Source, [string, string]> = {
@@ -69,11 +80,13 @@ const SOURCE_LABEL: Record<Source, [string, string]> = {
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 /**
- * The processes, the two skill trees, and the rule catalogue beside them.
+ * Capabilities: the two skill trees, the rule catalogue, the processes, and
+ * the person's local scripts.
  *
  * Every skill is a contract: what must be true when it finishes, what it reads
  * and writes in the graph, and the rules it answers to. Nesting is the
- * `requires` edge and nothing else.
+ * `requires` edge and nothing else. Scripts are the odd one out — files in
+ * `<home>/scripts`, not nodes — so they travel in a zip of their own.
  */
 export function SkillsSection() {
   const [filter, setFilter] = useState<SkillFilter>(emptySkillFilter);
@@ -88,10 +101,20 @@ export function SkillsSection() {
   const [processError, setProcessError] = useState<string | null>(null);
   const { writable } = useMeta();
   const fileRef = useRef<HTMLInputElement>(null);
+  const scriptFileRef = useRef<HTMLInputElement>(null);
+  const [stagedScripts, setStagedScripts] = useState<{ file: string; data: UploadScriptsResult } | null>(
+    null,
+  );
   const sel = useSelection();
 
   const skills = useAsync<SkillsPayload>((signal) => api.skills(signal), []);
   const data = skills.data;
+  const scripts = useAsync<ScriptsPayload>((signal) => api.scripts(signal), []);
+  const allScripts = useMemo(() => scripts.data?.scripts ?? [], [scripts.data]);
+  const keptScripts = useMemo(
+    () => allScripts.filter((sc) => keepScript(sc, filter)),
+    [allScripts, filter],
+  );
 
   const say = (text: string, tone: "info" | "error" | "success" = "info") => {
     setOut(text);
@@ -155,28 +178,60 @@ export function SkillsSection() {
         walk(s.children);
       }
     };
-    if (filter.types.has("process")) for (const p of keptProcesses) ids.push(p.id);
     if (filter.types.has("skill")) for (const t of trees) walk(t.kept);
     if (filter.types.has("rule")) for (const r of keptRules) ids.push(r.id);
+    if (filter.types.has("process")) for (const p of keptProcesses) ids.push(p.id);
+    if (filter.types.has("script")) for (const sc of keptScripts) ids.push(SCRIPT_PREFIX + sc.name);
     return ids;
-  }, [trees, keptRules, keptProcesses, filter.types]);
+  }, [trees, keptRules, keptProcesses, keptScripts, filter.types]);
 
   const nSkills = trees.reduce((n, t) => n + countSkills(t.kept), 0);
   const counts =
     [
-      show("process") ? plural(keptProcesses.length, "process", "processes") : null,
       show("skill") ? plural(nSkills, "skill") : null,
       show("rule") ? plural(keptRules.length, "rule") : null,
+      show("process") ? plural(keptProcesses.length, "process", "processes") : null,
+      show("script") ? plural(keptScripts.length, "script") : null,
     ]
       .filter(Boolean)
       .join(" · ") || "nothing shown";
   const narrowed = Boolean(filter.q) || !allSources(filter) || filter.dom !== "all";
 
   // ---- the actions behind the Options menu --------------------------------
+  /** Downloads through a real same-origin route, so the file also stays on disk at `path`. */
+  const download = (href: string, name: string) => {
+    const a = document.createElement("a");
+    a.href = href;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+
+  /** `before` is what an export of contracts in the same click already reported. */
+  const exportScripts = async (names: string[], before = "") => {
+    say(`${before}Zipping the scripts…`);
+    try {
+      const d = await api.exportScripts(names);
+      say(
+        `${before}Zipped ${plural(d.count, "script")} into\n${d.path}\n\nImport it on the other machine from Options → Import scripts. Each one keeps its executable bit.`,
+        "success",
+      );
+      download(d.download, d.name);
+    } catch (err) {
+      say(`${before}Script export failed: ${err instanceof Error ? err.message : String(err)}`, "error");
+    }
+  };
+
   const exportSelected = async () => {
-    const { skills: s, rules: r, processes: p } = sel.split(
-      new Set(allProcesses.map((x) => x.id)),
-    );
+    const {
+      skills: s,
+      rules: r,
+      processes: p,
+      scripts: sc,
+    } = sel.split(new Set(allProcesses.map((x) => x.id)));
+    // Scripts are files, not contracts: they ride in a zip of their own.
+    if (!s.length && !r.length && !p.length) return exportScripts(sc);
     say("Building the bundle…");
     try {
       const d = await api.exportBundle(s, r, p);
@@ -185,7 +240,7 @@ export function SkillsSection() {
         plural(d.skills, "skill"),
         plural(d.rules, "rule"),
       ].filter(Boolean);
-      say(
+      const report =
         `Bundled ${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]} into\n${d.path}\n\nThe zip holds one directory per kind and an import-plan.json naming the order they can be read back in — rules first, then processes, then each skill after the skills it requires.` +
           (d.missing_skills?.length
             ? `\n\nThese are REQUIRED by something you exported and did not travel:\n${d.missing_skills
@@ -196,27 +251,26 @@ export function SkillsSection() {
             ? `\n\nA dependency cycle was found and ordered arbitrarily:\n${d.cycles
                 .map((c) => `  ${c.join(" → ")}`)
                 .join("\n")}`
-            : ""),
-        "success",
-      );
+            : "");
+      say(report, "success");
       // A real same-origin route, so the browser downloads it AND the file stays
       // on disk at the path above — two machines wants the path, "send it to
       // someone" wants the download.
-      const a = document.createElement("a");
-      a.href = d.download;
-      a.download = d.name;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
+      download(d.download, d.name);
+      if (sc.length) await exportScripts(sc, `${report}\n\nScripts are files, not contracts, so they go in a zip of their own.\n`);
     } catch (err) {
       say(`Export failed: ${err instanceof Error ? err.message : String(err)}`, "error");
     }
   };
 
+  // Scripts are never deleted from here: a file in <home>/scripts is removed by
+  // the person, on disk, not by a tick left over from an export.
+  const pickedContracts = [...sel.picked].filter((id) => !id.startsWith(SCRIPT_PREFIX));
+
   const deleteSelected = async () => {
     setBusy(true);
     try {
-      const d = await api.deleteContracts([...sel.picked], forceBuiltins);
+      const d = await api.deleteContracts(pickedContracts, forceBuiltins);
       say(
         `Deleted ${d.count} item${d.count === 1 ? "" : "s"}.\n${d.deleted
           .map((x) => `  ${x.type.padEnd(6)} ${x.id}`)
@@ -290,6 +344,42 @@ export function SkillsSection() {
       skills.reload();
     } catch (err) {
       say(`Import failed: ${err instanceof Error ? err.message : String(err)}`, "error");
+    }
+  };
+
+  const onScriptFile = async (file: File) => {
+    say(`Reading ${file.name}…`);
+    try {
+      const got = await api.uploadScripts(file.name, await toBase64(file));
+      say(`${file.name}: ${plural(got.count, "script")}. Choose what to bring in.`);
+      setStagedScripts({ file: file.name, data: got });
+    } catch (err) {
+      say(`Those scripts could not be read: ${err instanceof Error ? err.message : String(err)}`, "error");
+    }
+  };
+
+  const runScriptImport = async (select: Record<string, ScriptChoice>) => {
+    if (!stagedScripts) return;
+    const { file, data: staged } = stagedScripts;
+    setStagedScripts(null);
+    say("Importing scripts…");
+    try {
+      const d = await api.importScripts(staged.token, select);
+      const words: Record<string, string> = {
+        created: "created",
+        replaced: "replaced",
+        kept: "left alone",
+        unchanged: "identical",
+      };
+      say(
+        `Imported scripts from ${file} into\n${d.dir}\n${d.applied
+          .map((a) => `  ${(words[a.action] || a.action).padEnd(10)} ${a.name}${a.why ? `  (${a.why})` : ""}`)
+          .join("\n")}` + (d.backup ? `\n\nThe replaced files were copied to\n${d.backup}` : ""),
+        "success",
+      );
+      scripts.reload();
+    } catch (err) {
+      say(`Script import failed: ${err instanceof Error ? err.message : String(err)}`, "error");
     }
   };
 
@@ -376,7 +466,7 @@ export function SkillsSection() {
       items: [
         {
           id: "select",
-          label: "Select processes, skills and rules",
+          label: "Select skills, rules, processes and scripts",
           description: "Checkboxes on every card, then export or delete what you ticked.",
           onSelect: () => sel.setPicking(!sel.picking),
         },
@@ -410,16 +500,34 @@ export function SkillsSection() {
         },
       ],
     },
+    {
+      heading: "Scripts — the files in <home>/scripts",
+      items: [
+        {
+          id: "export-scripts",
+          label: "Export all scripts",
+          description: "One zip of every local script, executable bits kept.",
+          onSelect: () => void exportScripts([]),
+        },
+        {
+          id: "import-scripts",
+          label: "Import scripts…",
+          description: "A scripts .zip from another machine, or a single script file. You choose what lands.",
+          onSelect: () => scriptFileRef.current?.click(),
+        },
+      ],
+    },
   ];
 
   return (
     <Section
-      title="Skills"
+      title="Capabilities"
       lead={
         <>
-          Processes are the ways of working this brain was told, kept per realm. Every skill is a
-          contract: what must be true when it finishes, what it reads and writes in the graph, and the
-          rules it answers to. Nesting is the <code>requires</code> edge. Click anything to open it.
+          Everything this brain can do and must honor. Every skill is a contract: what must be true
+          when it finishes, what it reads and writes in the graph, and the rules it answers to. Nesting
+          is the <code>requires</code> edge. Processes are the ways of working this brain was told,
+          kept per realm; scripts are your own automation, kept as files. Click anything to open it.
         </>
       }
       actions={<Menu label="Options" groups={menu} />}
@@ -437,6 +545,17 @@ export function SkillsSection() {
           if (f) void onFile(f);
         }}
       />
+      <input
+        ref={scriptFileRef}
+        type="file"
+        hidden
+        aria-label="scripts file"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          e.target.value = "";
+          if (f) void onScriptFile(f);
+        }}
+      />
 
       {sel.picking ? (
         <div className="ml-skills__selbar">
@@ -452,7 +571,8 @@ export function SkillsSection() {
           <Button
             size="sm"
             variant="danger"
-            disabled={!sel.picked.size}
+            disabled={!pickedContracts.length}
+            title="Scripts are never deleted from here"
             onClick={() => setConfirmDelete(true)}
           >
             Delete selected…
@@ -477,7 +597,9 @@ export function SkillsSection() {
                 ? allProcesses.filter((p) => shownRealms.has(p.realm)).length
                 : t === "skill"
                   ? (data?.trees ?? []).reduce((n, tr) => n + tr.count, 0)
-                  : (data?.rules?.length ?? 0),
+                  : t === "script"
+                    ? allScripts.length
+                    : (data?.rules?.length ?? 0),
           }))}
           selected={filter.types as Set<string>}
           onChange={(next) => setFilter((f) => ({ ...f, types: next as Set<ItemType> }))}
@@ -505,7 +627,7 @@ export function SkillsSection() {
           }))}
           selected={filter.src as Set<string>}
           onChange={(next) => setFilter((f) => ({ ...f, src: next as Set<Source> }))}
-          note={<>A skill in the learned tree counts as both user and learned.</>}
+          note={<>A skill in the learned tree counts as both user and learned. Every script is a user one.</>}
         />
         <Select
           aria-label="domain"
@@ -525,49 +647,6 @@ export function SkillsSection() {
           {skills.error}. If the trees were never built, run{" "}
           <code>python3 scripts/graph.py sync-skill-tree</code>.
         </StatusMessage>
-      ) : null}
-
-      {show("process") && data ? (
-        <section className="ml-skills__tree">
-          <h2 className="ml-skills__treeh">
-            Processes
-            <span className="ml-skills__ct">
-              {keptProcesses.length}
-              {keptProcesses.length !== allProcesses.length ? ` of ${allProcesses.length}` : ""}
-            </span>
-          </h2>
-          <p className="ml-skills__sub">
-            Ways of working: <code>process</code> nodes part-of <code>hub_process</code>, each in one
-            realm. Showing {[...shownRealms].join(", ") || "no realm"}; use the Realms filter to read
-            another realm&rsquo;s.
-          </p>
-          {keptProcesses.length ? (
-            keptProcesses.map((p) => (
-              <ProcessRow
-                key={p.id}
-                process={p}
-                currentRealm={currentRealm}
-                query={filter.q}
-                selectable={sel.picking}
-                selected={sel.picked.has(p.id)}
-                onSelect={(on) => sel.toggle(p.id, on)}
-              />
-            ))
-          ) : (
-            <EmptyState
-              title={
-                allProcesses.length
-                  ? "No process matches this filter."
-                  : "No processes recorded yet."
-              }
-            />
-          )}
-          {writable ? (
-            <Button size="sm" onClick={() => setNewProcess(true)}>
-              New process…
-            </Button>
-          ) : null}
-        </section>
       ) : null}
 
       {show("skill")
@@ -637,6 +716,88 @@ export function SkillsSection() {
         </section>
       ) : null}
 
+      {show("process") && data ? (
+        <section className="ml-skills__tree">
+          <h2 className="ml-skills__treeh">
+            Processes
+            <span className="ml-skills__ct">
+              {keptProcesses.length}
+              {keptProcesses.length !== allProcesses.length ? ` of ${allProcesses.length}` : ""}
+            </span>
+          </h2>
+          <p className="ml-skills__sub">
+            Ways of working: <code>process</code> nodes part-of <code>hub_process</code>, each in one
+            realm. Showing {[...shownRealms].join(", ") || "no realm"}; use the Realms filter to read
+            another realm&rsquo;s.
+          </p>
+          {keptProcesses.length ? (
+            keptProcesses.map((p) => (
+              <ProcessRow
+                key={p.id}
+                process={p}
+                currentRealm={currentRealm}
+                query={filter.q}
+                selectable={sel.picking}
+                selected={sel.picked.has(p.id)}
+                onSelect={(on) => sel.toggle(p.id, on)}
+              />
+            ))
+          ) : (
+            <EmptyState
+              title={
+                allProcesses.length
+                  ? "No process matches this filter."
+                  : "No processes recorded yet."
+              }
+            />
+          )}
+          {writable ? (
+            <Button size="sm" onClick={() => setNewProcess(true)}>
+              New process…
+            </Button>
+          ) : null}
+        </section>
+      ) : null}
+
+      {show("script") ? (
+        <section className="ml-skills__tree">
+          <h2 className="ml-skills__treeh">
+            Scripts
+            <span className="ml-skills__ct">
+              {keptScripts.length}
+              {keptScripts.length !== allScripts.length ? ` of ${allScripts.length}` : ""}
+            </span>
+          </h2>
+          <p className="ml-skills__sub">
+            Your own automation, as files in <code>{scripts.data?.dir ?? "<home>/scripts"}</code>: too
+            tied to one person&rsquo;s setup to ship in the plugin. The brain lists, exports and imports
+            them, and never runs one.
+          </p>
+          {scripts.error ? <StatusMessage tone="error">{scripts.error}</StatusMessage> : null}
+          {keptScripts.length ? (
+            keptScripts.map((sc) => (
+              <ScriptRow
+                key={sc.name}
+                script={sc}
+                query={filter.q}
+                selectable={sel.picking}
+                selected={sel.picked.has(SCRIPT_PREFIX + sc.name)}
+                onSelect={(on) => sel.toggle(SCRIPT_PREFIX + sc.name, on)}
+              />
+            ))
+          ) : scripts.loading ? null : (
+            <EmptyState
+              title={allScripts.length ? "No script matches this filter." : "No local scripts yet."}
+            />
+          )}
+          {scripts.data?.skipped?.length ? (
+            <p className="ml-skills__sub">
+              Not listed: {scripts.data.skipped.map((x) => `${x.name} (${x.why})`).join(", ")}.
+            </p>
+          ) : null}
+        </section>
+      ) : null}
+
       {staged ? (
         <ImportDialog
           filename={staged.file}
@@ -651,9 +812,21 @@ export function SkillsSection() {
         />
       ) : null}
 
+      {stagedScripts ? (
+        <ScriptImportDialog
+          filename={stagedScripts.file}
+          staged={stagedScripts.data}
+          onCancel={() => {
+            setStagedScripts(null);
+            say("Import cancelled. No script was written.");
+          }}
+          onConfirm={(select) => void runScriptImport(select)}
+        />
+      ) : null}
+
       {confirmDelete ? (
         <ConfirmDialog
-          title={`Delete ${sel.picked.size} item${sel.picked.size === 1 ? "" : "s"}?`}
+          title={`Delete ${pickedContracts.length} item${pickedContracts.length === 1 ? "" : "s"}?`}
           danger
           busy={busy}
           confirmLabel="Delete"
@@ -670,10 +843,10 @@ export function SkillsSection() {
                 edge on them, and it cannot be undone from here.
               </p>
               <div className="ml-skills__dellist">
-                {[...sel.picked].slice(0, 200).map((id) => (
+                {pickedContracts.slice(0, 200).map((id) => (
                   <div key={id}>{id}</div>
                 ))}
-                {sel.picked.size > 200 ? <p>…and {sel.picked.size - 200} more.</p> : null}
+                {pickedContracts.length > 200 ? <p>…and {pickedContracts.length - 200} more.</p> : null}
               </div>
               <Button
                 size="sm"

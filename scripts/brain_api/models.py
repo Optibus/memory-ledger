@@ -311,6 +311,23 @@ class ImportBundle(Body):
                             "configured realm.")
 
 
+class ExportScripts(Body):
+    names: list[LooseStr] = Field(default_factory=list,
+                                  description="Script filenames; empty exports them all.")
+
+
+class UploadScripts(Body):
+    filename: Text = T("The file's name. A name not ending in .zip is staged as one "
+                       "script by that name.")
+    data: Text = T("A scripts zip or one script file, base64 (a data: URL is accepted).")
+
+
+class ImportScripts(Body):
+    token: Text = T("From upload-scripts.")
+    select: Annotated[Optional[dict[str, Any]], BeforeValidator(_dict_or_none)] = Field(
+        None, description="Script name to replace | keep. A name left out is not imported.")
+
+
 class DeleteContracts(Body):
     ids: list[LooseStr] = Field(default_factory=list)
     force: Any = Field(False, description="Delete built-ins too.")

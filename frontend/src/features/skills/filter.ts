@@ -1,8 +1,8 @@
-import type { ProcessNode, RuleNode, SkillNode } from "@/api/types";
+import type { ProcessNode, RuleNode, ScriptEntry, SkillNode } from "@/api/types";
 
-/** The three kinds of thing the page lists. Multi-select: any mix is a view. */
-export type ItemType = "process" | "skill" | "rule";
-export const ITEM_TYPES: ItemType[] = ["process", "skill", "rule"];
+/** The four kinds of thing the page lists, in page order. Multi-select: any mix is a view. */
+export type ItemType = "skill" | "rule" | "process" | "script";
+export const ITEM_TYPES: ItemType[] = ["skill", "rule", "process", "script"];
 
 /** Who authored a thing. Multi-select, like the types. */
 export type Source = "plugin" | "user" | "learned";
@@ -120,6 +120,21 @@ export function keepProcess(p: ProcessNode, f: SkillFilter, realms: Set<string>)
   if (!allSources(f) && !f.src.has("user")) return false;
   if (f.dom !== "all" && !p.domains.includes(f.dom)) return false;
   return !f.q || processHaystack(p).includes(f.q.toLowerCase());
+}
+
+export function scriptHaystack(sc: ScriptEntry): string {
+  return [sc.name, sc.summary, sc.language].join(" ").toLowerCase();
+}
+
+/**
+ * A script is a file a person wrote, so only the `user` source keeps it, and it
+ * has no domain: narrowing to one hides every script, as it would a rule
+ * tagged with no domain.
+ */
+export function keepScript(sc: ScriptEntry, f: SkillFilter): boolean {
+  if (!allSources(f) && !f.src.has("user")) return false;
+  if (f.dom !== "all") return false;
+  return !f.q || scriptHaystack(sc).includes(f.q.toLowerCase());
 }
 
 /** How many skills a filtered tree actually holds, counting every level. */

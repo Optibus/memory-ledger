@@ -14,7 +14,7 @@ export const SECTIONS: SectionLink[] = [
   { to: "/map", label: "Map", icon: "🗺" },
   { to: "/dashboard", label: "Dashboard", icon: "📋" },
   { to: "/people", label: "People", icon: "👥" },
-  { to: "/skills", label: "Skills", icon: "🧩" },
+  { to: "/capabilities", label: "Capabilities", icon: "🧩" },
   { to: "/settings", label: "Settings", icon: "⚙", foot: true },
 ];
 

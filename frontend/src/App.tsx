@@ -32,8 +32,10 @@ export function App() {
             <Route path="/map" element={<MapSection />} />
             <Route path="/dashboard" element={<DashboardSection />} />
             <Route path="/people" element={<PeopleSection />} />
+            {/* The tab was "Skills" before it held rules, processes and scripts too. */}
+            <Route path="/skills" element={<Navigate to="/capabilities" replace />} />
             <Route
-              path="/skills"
+              path="/capabilities"
               element={
                 <>
                   <SkillsSection />
