@@ -182,6 +182,13 @@ export const api = {
       "/api/trigger-config",
       body,
     ),
+  /** Open (`enabled: true`) or close a channel. `channel` may be a link. */
+  setTriggerChannel: (channel: string, enabled: boolean, name = "") =>
+    post<{ ok: boolean; channels: import("./types").TriggerChannels }>("/api/trigger-channel", {
+      channel,
+      name,
+      enabled,
+    }),
   checkTrigger: (only: import("./types").TriggerService) =>
     post<import("./types").TriggerCheck>("/api/trigger-check", { only }),
   flush: () => post("/api/flush", {}),

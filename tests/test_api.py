@@ -55,6 +55,7 @@ POST_ROUTES = [
     "/api/export-skills", "/api/ingest-skills", "/api/export-bundle",
     "/api/upload-bundle", "/api/import-bundle", "/api/delete-contracts",
     "/api/trigger-gate", "/api/trigger-action", "/api/trigger-config", "/api/trigger-check",
+    "/api/trigger-channel", "/api/trigger-decline",
 ]
 VIEWS = ["agenda", "open", "today", "tomorrow", "week", "closed", "range"]
 
@@ -754,6 +755,29 @@ def test_trigger_routes(s: Server):
        and any("app_token" in p for p in k["problems"]))
     ck("an unknown service is refused", refused(s.post("/api/trigger-check", {"only": "fax"}),
                                                 400, "only must be one of"))
+
+    ch = s.post("/api/trigger-channel", {"channel": "https://x.slack.com/archives/C0ABC123/p1",
+                                         "name": "#ops", "enabled": True})
+    ck("trigger-channel opens a channel from a link", ch.status == 200
+       and [c["channel_id"] for c in ch.json()["channels"]["active"]] == ["C0ABC123"],
+       str(ch.raw[:200]))
+    ch = s.post("/api/trigger-channel", {"channel": "C0ABC123", "enabled": False}).json()
+    ck("closing it keeps the row, marked removed",
+       ch.get("ok") and [c["channel_id"] for c in ch["channels"]["removed"]] == ["C0ABC123"])
+    ck("and status lists it that way",
+       s.get("/api/trigger").json()["channels"]["removed"][0]["name"] == "ops")
+    ck("a channel must be an id or a link", refused(
+        s.post("/api/trigger-channel", {"channel": "#general", "enabled": True}), 400, "its id"))
+    ck("enabled must be a boolean", refused(
+        s.post("/api/trigger-channel", {"channel": "C0ABC123"}), 400, "true or false"))
+
+    dcl = s.post("/api/trigger-decline", {"request_id": rid, "reason": "It is personal.",
+                                          "rule": "rule_x"})
+    ck("trigger-decline declines and returns the notice", dcl.status == 200
+       and dcl.json()["status"] == "declined" and dcl.json()["notice"].endswith("It is personal."),
+       str(dcl.raw[:200]))
+    ck("a decline needs a reason", refused(s.post("/api/trigger-decline", {"request_id": rid}),
+                                           400, "missing reason"))
 
     ck("a malformed scope is refused", refused(s.post("/api/trigger-gate",
                                                       {"scope": "bogus", "enabled": True}),

@@ -52,6 +52,13 @@ with open(log, "a") as f:
 if "--version" in args:
     print("9.9.9 (fake)"); sys.exit(0)
 prompt = args[args.index("-p") + 1]
+if prompt.startswith("Rewrite NOTICE"):
+    # A translation: mark it, so a test can see it happened and to what.
+    notice = prompt.split("<<<NOTICE\\n", 1)[1].split("\\nNOTICE>>>", 1)[0]
+    print(json.dumps({"result": "[translated] " + notice})); sys.exit(0)
+if prompt.startswith("Post one Slack message"):
+    where = "DM" if "FORCE-DM" in prompt else "THREAD"
+    print(json.dumps({"result": "posted it\\n" + where})); sys.exit(0)
 if "FAIL-ME" in prompt:
     print(json.dumps({"is_error": True, "result": "it broke"})); sys.exit(1)
 print(json.dumps({"result": "replied in thread", "total_cost_usd": 0.0123}))
@@ -64,7 +71,7 @@ CFG = {
     "claude": {"bin": str(FAKE_CLAUDE), "timeout_s": 60, "mcp_config": "",
                "extra_args": ["--model", "x"]},
     "slack": {"enabled": True, "owner_user_id": "UOWNER", "bot_token": "xoxb-t",
-              "app_token": "xapp-t", "user_token": "xoxp-t", "channels": ["C1"]},
+              "app_token": "xapp-t", "user_token": "xoxp-t"},
     "jira": {"enabled": True, "base_url": "https://j.example", "email": "o@example.com",
              "token": "jt", "owner_account_id": "acc-owner", "marker": "@cérebro"},
 }
@@ -162,9 +169,12 @@ def test_gate(cfg):
     res = trigger.handle(ev, cfg, dispatch, trigger.slack_notify(cfg))
     ck("someone else, not enabled: refused and nothing runs",
        res["action"] == "refused" and not ran, str(res))
+    posts = calls_to(fake, "chat.postMessage")
     ck("the refusal is posted once, in the thread, with the USER token",
-       len(calls_to(fake, "chat.postMessage")) == 1
-       and calls_to(fake, "chat.postMessage")[0]["form"]["thread_ts"] == "100.1")
+       len(posts) == 1 and posts[0]["form"]["thread_ts"] == "100.1")
+    ck("translated into the message's language, the signature left as it is",
+       posts[0]["form"]["text"].startswith("[translated] I'm not enabled")
+       and posts[0]["form"]["text"].endswith("\n_sent by Owner's second brain_"))
     con = trigger.db()
     req = trigger.get_request(con, res["request_id"])
     ck("the refusal is logged anyway", req["status"] == "refused" and req["reason"] == "not-enabled")
@@ -355,6 +365,8 @@ def test_slack_catch_up(cfg):
         {"ts": "800.0", "user": "UX", "text": "an old thread"},
         {"ts": "1002.0", "user": "UOWNER", "text": "<@UBOT> in an old thread",
          "thread_ts": "800.0"}]}
+    fake.on("POST", s + "users.conversations",
+            lambda **_: {"ok": True, "channels": [{"id": "C1"}]})
     fake.on("POST", s + "conversations.history", lambda **_: history)
     fake.on("POST", s + "conversations.replies", lambda **_: replies)
     res = trigger.slack_catch_up(cfg, dispatch, now=2000.0)
@@ -372,6 +384,201 @@ def test_slack_catch_up(cfg):
     trigger.set_checkpoint(con, "slack", "10.0")
     ck("the checkpoint never moves backwards",
        trigger.get_checkpoint(con, "slack") == "3000.000000")
+
+
+# ================================================================ channels
+def test_channels(cfg):
+    print("\n== channels: an open list in the brain, removals kept ==")
+    fake = install_http()
+    fake.on("POST", trigger.SLACK_API + "conversations.info",
+            lambda form, **_: {"ok": True, "channel": {"name": f"name-{form['channel']}"}})
+    con = trigger.db()
+    ck("an id is a channel", trigger.parse_channel("c0abc123") == "C0ABC123")
+    ck("so is a link to it",
+       trigger.parse_channel("https://x.slack.com/archives/C0ABC123/p1700000000") == "C0ABC123")
+    ck("anything else is not", trigger.parse_channel("#general") == "")
+    res = trigger.add_channel(con, "C0ABC123", by="test", cfg=cfg)
+    ck("adding one opens it, its name looked up from Slack",
+       res["ok"] and res["channel"]["name"] == "name-C0ABC123"
+       and trigger.gate_enabled(con, "slack:C0ABC123"))
+    trigger.add_channel(con, "C0DEF456", name="#ops", by="test", cfg=cfg)
+    ck("a name given by hand wins, without the #",
+       any(c["name"] == "ops" for c in trigger.list_channels(con)["active"]))
+    res = trigger.remove_channel(con, "C0ABC123", by="test")
+    lst = trigger.list_channels(con)
+    ck("removing one closes it", res["ok"] and not trigger.gate_enabled(con, "slack:C0ABC123"))
+    ck("but keeps its row, marked removed, with who and when",
+       [c["channel_id"] for c in lst["removed"]] == ["C0ABC123"]
+       and lst["removed"][0]["removed_by"] == "test" and lst["removed"][0]["removed_at"])
+    ck("removing a channel that is not open says so",
+       trigger.remove_channel(con, "C0ABC123")["ok"] is False)
+    res = trigger.add_channel(con, "C0ABC123", by="again", cfg=cfg)
+    lst = trigger.list_channels(con)
+    ck("re-adding restores the same row rather than making a second",
+       res["ok"] and "C0ABC123" in [c["channel_id"] for c in lst["active"]]
+       and not lst["removed"]
+       and con.execute("SELECT count(*) FROM trigger_channel WHERE channel_id='C0ABC123'"
+                       ).fetchone()[0] == 1)
+    ck("a channel-wide gate IS the list: set_gate writes it",
+       trigger.set_gate(con, "slack:C0DEF456", False, by="t")["ok"]
+       and "C0DEF456" in [c["channel_id"] for c in trigger.list_channels(con)["removed"]])
+    ck("status carries the list", "C0ABC123" in
+       [c["channel_id"] for c in trigger.status_payload()["channels"]["active"]])
+
+
+# ================================================================= notices
+def _req(cfg, ts, user="UOTHER", text="<@UBOT> por favor faz isso"):
+    ev = trigger.slack_event(slack_msg(ts, user, text), "C9", cfg, bot_user_id="UBOT")
+    rid = trigger.intake(ev, cfg)["request_id"]      # no notify: posted by hand below
+    return rid
+
+
+def test_notices(cfg):
+    print("\n== notices: translated, as the owner, DM when the channel is out of reach ==")
+    con = trigger.db()
+
+    fake = install_http()
+    rid = _req(cfg, "700.1")
+    res = trigger.deliver_notice(rid, "Not here.", cfg)
+    post = calls_to(fake, "chat.postMessage")[-1]["form"]
+    ck("with a user token: translated, posted in the thread",
+       res["how"] == "thread" and post["text"] == "[translated] Not here.\n"
+                                                  "_sent by Owner's second brain_")
+    ck("and logged as a refusal notice",
+       trigger.actions_for(con, rid)[-1]["kind"] == "refusal-notice")
+
+    fake = install_http()
+    sent = []
+
+    def post_msg(form, **_):
+        sent.append(form)
+        if form["channel"] == "C9":
+            return {"ok": False, "error": "channel_not_found"}
+        return {"ok": True}
+    fake.on("POST", trigger.SLACK_API + "chat.postMessage", post_msg)
+    fake.on("POST", trigger.SLACK_API + "conversations.open",
+            lambda form, **_: {"ok": True, "channel": {"id": f"D-{form['users']}"}})
+    rid = _req(cfg, "700.2")
+    res = trigger.deliver_notice(rid, "Not here.", cfg)
+    ck("the owner cannot reach the channel: the requester gets a DM instead",
+       res["how"] == "dm" and sent[-1]["channel"] == "D-UOTHER")
+    ck("with a link to what they wrote, the signature still last",
+       "https://x.slack.com/p700.2" in sent[-1]["text"]
+       and sent[-1]["text"].endswith("_sent by Owner's second brain_"))
+    ck("logged as a DM", trigger.actions_for(con, rid)[-1]["kind"] == "refusal-notice-dm")
+
+    def denied(form, **_):
+        return {"ok": False, "error": "ratelimited"}
+    fake.on("POST", trigger.SLACK_API + "chat.postMessage", denied)
+    rid = _req(cfg, "700.3")
+    res = trigger.deliver_notice(rid, "Not here.", cfg)
+    ck("any other failure is a failure, not a DM",
+       res["ok"] is False and trigger.actions_for(con, rid)[-1]["kind"] == "refusal-notice-failed")
+
+    no_user = json.loads(json.dumps(cfg))
+    no_user["slack"].pop("user_token")
+    fake = install_http()
+    rid = _req(no_user, "700.4")
+    before = len((Path(HOME) / "claude-calls.jsonl").read_text().splitlines())
+    res = trigger.deliver_notice(rid, "Not here.", no_user)
+    calls = [json.loads(x) for x in (Path(HOME) / "claude-calls.jsonl").read_text().splitlines()]
+    prompt = calls[-1]["args"][1]
+    ck("without a user token: one session through the Slack MCP, no direct post",
+       res["ok"] and len(calls) == before + 1 and not calls_to(fake, "chat.postMessage"))
+    ck("told to translate, sign untranslated, and DM when it cannot post",
+       "language the ORIGINAL MESSAGE" in prompt and "untranslated" in prompt
+       and "direct message to the user UOTHER" in prompt and "por favor" in prompt)
+    ck("and where it landed is logged", "thread (via the Slack MCP)"
+       in trigger.actions_for(con, rid)[-1]["detail"])
+    rid = _req(no_user, "700.5", text="<@UBOT> FORCE-DM please")
+    trigger.deliver_notice(rid, "Not here.", no_user)
+    ck("a session that had to DM says so, and it is logged as a DM",
+       trigger.actions_for(con, rid)[-1]["kind"] == "refusal-notice-dm")
+
+    plain = json.loads(json.dumps(cfg))
+    plain["translate_notices"] = False
+    fake = install_http()
+    rid = _req(plain, "700.6")
+    before = len((Path(HOME) / "claude-calls.jsonl").read_text().splitlines())
+    trigger.deliver_notice(rid, "Not here.", plain)
+    ck("translation off: the template as written, and no model call at all",
+       calls_to(fake, "chat.postMessage")[-1]["form"]["text"].startswith("Not here.")
+       and len((Path(HOME) / "claude-calls.jsonl").read_text().splitlines()) == before)
+
+    ck("the old single `refusal` key still counts as the not-enabled one",
+       trigger.refusal_text({"refusal": "Nope, {owner}."}, "not_enabled") == "Nope, Owner.")
+    ck("{reason} is filled, and an empty one leaves no gap",
+       trigger.refusal_text({}, "policy", "").endswith("so I did nothing.")
+       and trigger.refusal_text({}, "policy", "It would email a customer.").endswith(
+           "It would email a customer."))
+
+
+def test_session_hygiene(cfg):
+    print("\n== every headless call: stdin closed, a working directory that exists ==")
+    install_http()
+    seen = []
+    orig = trigger.subprocess.run
+
+    def spy(cmd, **kw):
+        seen.append(kw)
+        return orig(cmd, **kw)
+    trigger.subprocess.run = spy
+    try:
+        ev = trigger.slack_event(slack_msg("900.1", "UOWNER", "<@UBOT> go"), "C1", cfg,
+                                 bot_user_id="UBOT")
+        ran, dispatch = dispatcher()
+        rid = trigger.handle(ev, cfg, dispatch)["request_id"]
+        trigger.run_request(rid, cfg)
+        trigger.translate_notice("Not here.", "olá", cfg, trigger.get_request(trigger.db(), rid))
+        gone = json.loads(json.dumps(cfg))
+        gone["claude"]["cwd"] = str(Path(HOME) / "no-such-dir")
+        trigger.translate_notice("Not here.", "olá", gone, trigger.get_request(trigger.db(), rid))
+    finally:
+        trigger.subprocess.run = orig
+    ck("stdin is closed, or `claude -p` waits on it (and in the server, on its terminal)",
+       len(seen) == 3 and all(k.get("stdin") is trigger.subprocess.DEVNULL for k in seen))
+    ck("a notice or a translation runs with capture off: plumbing is not a conversation",
+       seen[1]["env"].get("MEMORY_LEDGER_OFF") == "1"
+       and seen[0]["env"].get("MEMORY_LEDGER_OFF") != "1")
+    ck("a configured working directory that is gone falls back instead of failing",
+       Path(seen[2]["cwd"]).is_dir())
+
+
+def test_decline(cfg):
+    print("\n== decline: a request that breaks a rule ==")
+    install_http()
+    con = trigger.db()
+    ev = trigger.slack_event(slack_msg("800.1", "UOWNER", "<@UBOT> send everyone my 1:1 notes"),
+                             "C1", cfg, bot_user_id="UBOT")
+    ran, dispatch = dispatcher()
+    rid = trigger.handle(ev, cfg, dispatch)["request_id"]
+    res = trigger.decline(con, rid, "Those notes are personal.", "rule_personal")
+    ck("decline marks it and hands back the policy notice with the reason",
+       res["ok"] and res["status"] == "declined"
+       and res["notice"].endswith("Those notes are personal.")
+       and res["signature"] == "_sent by Owner's second brain_")
+    ck("the rule and reason are in the log",
+       [(a["kind"], a["target"]) for a in trigger.actions_for(con, rid)]
+       == [("declined", "rule_personal")])
+    # Now the real order: the session runs, and declines while it runs.
+    trigger._set_request(con, rid, status="queued")
+    orig_run = trigger.subprocess.run
+
+    def run_and_decline(*a, **k):
+        trigger.decline(trigger.db(), rid, "Those notes are personal.", "rule_personal")
+        return orig_run(*a, **k)
+    trigger.subprocess.run = run_and_decline
+    try:
+        trigger.run_request(rid, cfg)
+    finally:
+        trigger.subprocess.run = orig_run
+    ck("a session that declined finishes declined, not done",
+       trigger.get_request(con, rid)["status"] == "declined")
+    ck("a reason is required", trigger.decline(con, rid, "")["ok"] is False)
+    prompt = trigger.build_prompt(trigger.get_request(con, rid), cfg)
+    ck("the prompt says how to decline, in which language, and to DM when it must",
+       " decline --request " in prompt and "language the message above is written in" in prompt
+       and "--kind reply-dm" in prompt)
 
 
 # ==================================================================== jira
@@ -526,17 +733,18 @@ def test_save():
         ({"jira": {"poll_seconds": 1}}, "from 15 to 3600"),
         ({"jira": {"base_url": "ftp://x"}}, "http(s) URL"),
         ({"slack": {"bot_token": "xoxp-wrong"}}, "should start with xoxb-"),
-        ({"slack": {"channels": ["C1", "not a channel"]}}, "not valid"),
+        ({"refusals": {"policy": 5}}, "must be text"),
         ({"clear": ["jira.email"]}, "is not a secret"),
     ):
         r = trigger.save_config(patch)
         ck(f"refused: {needle}", r["ok"] is False and needle in r["error"], str(r))
-    trigger.save_config({"slack": {"channels": "C1, C2 C3"}})
-    ck("channels may be typed as one string",
-       json.loads(trigger.config_path().read_text())["slack"]["channels"] == ["C1", "C2", "C3"])
+    trigger.save_config({"refusals": {"policy": "Não posso: {reason}"}, "translate_notices": False})
+    raw = json.loads(trigger.config_path().read_text())
+    ck("both notices and the translation switch are saved",
+       raw["refusals"]["policy"] == "Não posso: {reason}" and raw["translate_notices"] is False)
     trigger.save_config({"bogus": 1, "slack": {"bogus": 2}})
     raw = json.loads(trigger.config_path().read_text())
-    ck("an unknown key is not written", "bogus" not in raw and "bogus" not in raw["slack"])
+    ck("an unknown key is not written", "bogus" not in raw and "bogus" not in raw.get("slack", {}))
 
 
 def main():
@@ -550,6 +758,10 @@ def main():
         test_slack_catch_up(cfg)
         test_jira(cfg)
         test_check(cfg)
+        test_channels(cfg)
+        test_notices(cfg)
+        test_decline(cfg)
+        test_session_hygiene(cfg)
         test_save()
     finally:
         import shutil

@@ -953,7 +953,14 @@ answers **as the owner**, through the owner's own MCP servers, using the
 - **Closed until the owner opens it.** The owner's mention runs and enables that
   conversation (a Slack thread or a Jira issue); anyone else's runs only in an
   enabled one, otherwise it is refused with one notice per conversation. The
-  gate is `trigger_gate` in `graph.db`.
+  gate is `trigger_gate` in `graph.db`; whole Slack channels opened to everyone
+  are `trigger_channel`, kept (marked removed) when closed.
+- **Two noes.** `refused` (the conversation is not open, notice sent by the
+  engine) and `declined` (the request breaks a rule: the session runs
+  `trigger.py decline` and posts the policy notice it prints).
+- **In the sender's language, as the owner.** Replies and notices follow the
+  language of the mentioning message; the signature is never translated. When
+  the owner cannot post in the channel, the requester gets a DM instead.
 - **Logged before it runs.** Each mention gets a request id (UUID) in
   `trigger_request` and a `request` node; every action the session takes is
   appended to `trigger_action` with `trigger.py action --request <id>`. A skill

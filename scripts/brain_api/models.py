@@ -191,10 +191,15 @@ class TriggerConfig(Body):
     enabled: Any = Field(None, description="The master switch for every trigger.")
     signature: Any = Field(None, description="The line every reply ends with; `{owner}` "
                                              "is the owner's name. Also the loop guard.")
-    refusal: Any = Field(None, description="The notice a refused mention gets.")
+    refusals: _obj = Field(None, description="`not_enabled`: the notice for a mention in a "
+                                             "conversation nobody opened. `policy`: the one "
+                                             "for a request that breaks a rule; `{reason}` "
+                                             "is the one-line why.")
+    translate_notices: Any = Field(None, description="Send notices in the language of the "
+                                                     "message they answer (a model call).")
     claude: _obj = Field(None, description="`bin`, `mcp_config`, `strict_mcp_config`, "
                                            "`timeout_s`, `max_concurrent`, `extra_args`, `cwd`.")
-    slack: _obj = Field(None, description="`enabled`, `owner_user_id`, `channels`, "
+    slack: _obj = Field(None, description="`enabled`, `owner_user_id`, "
                                           "`thread_lookback_days`, and the write-only "
                                           "`app_token`, `bot_token`, `user_token`.")
     jira: _obj = Field(None, description="`enabled`, `base_url`, `email`, `owner_account_id`, "
@@ -202,6 +207,19 @@ class TriggerConfig(Body):
                                          "and the write-only `token`.")
     clear: Optional[list[LooseStr]] = Field(None, description="Secrets to remove, e.g. "
                                                               "`[\"slack.user_token\"]`.")
+
+
+class TriggerChannel(Body):
+    channel: Text = T("A channel id (C0123ABCD) or a link to it.")
+    name: Text = T("How to show it. Looked up from Slack when empty and the bot can.")
+    enabled: Any = Field(None, description="true opens the channel, false closes it again "
+                                           "(the row is kept, marked removed).")
+
+
+class TriggerDecline(Body):
+    request_id: Text = T("The request the session will not do.")
+    reason: Text = T("One short line, safe to show the requester.")
+    rule: Text = T("The rule or guardrail it breaks.")
 
 
 class TriggerCheck(Body):

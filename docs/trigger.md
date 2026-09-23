@@ -47,22 +47,67 @@ A conversation is **closed until you open it**.
 | someone else | an enabled conversation | runs |
 | someone else | not enabled | **refused**: nothing runs, and one short notice says so |
 
-A conversation is a Slack thread (`slack:<channel>:<thread_ts>`), a whole Slack
-channel (`slack:<channel>`, only by hand), or a Jira issue (`jira:<KEY>`). The
-state lives in `graph.db` (`trigger_gate`), so it survives restarts and is the
-same for the Slack and the Jira side.
+A conversation is a Slack thread (`slack:<channel>:<thread_ts>`), a Jira issue
+(`jira:<KEY>`), or a **whole Slack channel**. Threads and issues are opened by
+your own mention and live in `trigger_gate`. Whole channels are a list you keep
+by hand, in `trigger_channel`: an open channel runs everyone's mentions in every
+thread. Both are in `graph.db`, so they survive restarts.
 
-The refusal notice is posted **with your user token directly**, not by a model:
-refusing costs no tokens, and it is sent once per conversation rather than once
-per mention, so a colleague hammering the bot does not fill the thread. Without a
-user token configured the refusal is logged and nothing is posted.
-
-Open or close a conversation by hand:
+**The channel list is history, not just state.** Closing a channel keeps its row,
+marked with who closed it and when, and reopening it restores that same row. In
+the UI it is the **Open channels** list in the Slack panel, folded until you
+click it, with **Close** on each row, a field to open one by id or by pasting a
+link, and a **Closed** list to reopen from.
 
 ```bash
-python3 scripts/trigger.py enable  --scope slack:C0123ABCD          # the whole channel
-python3 scripts/trigger.py disable --scope jira:PROJ-42
+python3 scripts/trigger.py channels                                  # the list
+python3 scripts/trigger.py channels --add https://…/archives/C0123ABCD --name ops
+python3 scripts/trigger.py channels --remove C0123ABCD
+python3 scripts/trigger.py enable  --scope jira:PROJ-42              # a thread or issue
 ```
+
+## Saying no — two notices
+
+| Notice | When | Sent by |
+|---|---|---|
+| **not enabled here** (`refusals.not_enabled`) | someone mentions the brain in a conversation you have not opened | the engine, before any session. Once per conversation, so a colleague hammering the bot does not fill the thread. The request is `refused` |
+| **against a rule** (`refusals.policy`) | the session reads the request and finds it breaks one of your rules or guardrails | the session, through `trigger.py decline`, which records the rule and reason and prints the notice. `{reason}` is a one-line why, safe to show. The request is `declined` |
+
+**Both go out as you, never as the bot**, and both end with the signature:
+
+- **With a Slack user token** (`xoxp-…`), the engine posts the not-enabled notice
+  itself.
+- **Without one** (it is optional), it goes out through **your Slack MCP**, in a
+  short headless session whose only job is to post that one message. You still
+  post it, and it costs a model call.
+- **On Jira**, it is a comment made with the Jira token.
+
+**Every notice is in the sender's language.** The message that mentioned the
+brain decides, not the channel or the person: someone writing in Hebrew gets
+Hebrew, and the same person writing in English the next day gets English.
+
+- With a user token, and on Jira, a small tool-less model (`claude.notice_model`,
+  default `haiku`) rewrites the template first.
+- Without a user token, the MCP session does it on its way.
+- Measured on 2026-09-23 with `haiku`: about 6 s and $0.004 per notice. Hebrew
+  and Italian were translated, and an English message left the English template
+  alone. Names, @mentions and links stay as written.
+- `translate_notices: false` sends the templates exactly as written, and then a
+  refusal with a user token costs no model call at all.
+- Notice and translation calls run with the brain's capture **off**
+  (`MEMORY_LEDGER_OFF=1`). They are plumbing, not conversations. The `respond`
+  session itself is captured like any other.
+- **The signature is never translated.** It is the loop guard, and a translated
+  one would not be recognised.
+
+**Can't reach the channel? The requester gets a DM.** When posting in the thread
+fails because you cannot reach that channel (you are not in it, or it is not
+found, archived or restricted), the notice goes to the person who mentioned the
+brain as a DM instead, with a link to their message. It is logged as
+`refusal-notice-dm`. The `respond` skill does the same with its answers
+(`reply-dm`). Any other failure, a rate limit say, is logged as a failure rather
+than turned into a DM. Jira has no DM, so a comment that cannot be posted is
+logged as failed.
 
 ## Loops
 
@@ -98,6 +143,9 @@ endpoint. It subscribes to `app_mention` and listens while the server runs.
   is up, trailing it by two minutes, since then every mention arrives live. It
   only ever moves forward. A first run has no checkpoint and starts from now: it
   does not answer a backlog nobody expected it to.
+- **Catch-up reads every channel the bot is in**, not only the open ones. Your
+  own mention counts anywhere, and someone else's in a closed conversation still
+  has to be logged and refused.
 
 This half needs `slack_sdk` for the websocket, so it lives in the server
 (`scripts/brain_api/trigger_runtime.py`) with the server's other dependencies.
@@ -145,7 +193,9 @@ prompt. The prompt carries the three things the session cannot work without:
   thread reply, or a comment on the issue.
 
 It also carries the request id, in the prompt and as `$MEMORY_LEDGER_REQUEST_ID`,
-and tells the session to use the [`respond`](../skills/respond/SKILL.md) skill.
+tells the session to use the [`respond`](../skills/respond/SKILL.md) skill, to
+answer in the language of the message, to DM the requester when it cannot post
+in place, and how to decline a request that breaks a rule.
 That skill is the contract: read the rules that apply, do what was asked, log
 every outward action against the request id, reply in place, end with the
 signature.
@@ -160,8 +210,9 @@ Two tables in `graph.db`, and one node per request:
 
 | Where | What |
 |---|---|
-| `trigger_request` | one row per mention noticed: `id` (UUID), `source`, `event_id`, `scope`, requester id and name, permalink, text, `received_at`, `status` (`queued` → `running` → `done` / `failed` / `timeout` / `interrupted`, or `refused`), exit code, result, cost |
-| `trigger_action` | append-only: every action taken for a request — `kind` (`reply`, `jira-transition`, `slack-message`, …), `target`, `detail`, `at` |
+| `trigger_request` | one row per mention noticed: `id` (UUID), `source`, `event_id`, `scope`, requester id and name, permalink, text, `received_at`, `status` (`queued` → `running` → `done` / `declined` / `failed` / `timeout` / `interrupted`, or `refused`), exit code, result, cost |
+| `trigger_action` | append-only: every action taken for a request — `kind` (`reply`, `reply-dm`, `declined`, `refusal-notice`, `refusal-notice-dm`, `jira-transition`, …), `target`, `detail`, `at` |
+| `trigger_channel` | the Slack channels open to everyone, with who opened and closed each and when. Closed ones are kept |
 | a `request` node | the same request in the graph, so `recall "who asked me to …"` finds it, and it mirrors to neo4j like any other node |
 
 Refused mentions are logged too. A mention that was never logged never ran.
@@ -197,8 +248,14 @@ The file itself, for editing by hand or scripting:
 {
   "enabled": true,
   "signature": "_sent by {owner}'s second brain_",
+  "refusals": {
+    "not_enabled": "I'm not enabled in this conversation, so I did nothing. {owner} can enable me by mentioning me here.",
+    "policy": "I can't do that: it goes against a rule {owner} has set for me, so I did nothing. {reason}"
+  },
+  "translate_notices": true,
   "claude": {
     "bin": "claude",
+    "notice_model": "haiku",
     "mcp_config": "~/.second_brain/trigger-mcp.json",
     "strict_mcp_config": false,
     "timeout_s": 900,
@@ -208,7 +265,7 @@ The file itself, for editing by hand or scripting:
   "slack": {
     "enabled": true,
     "owner_user_id": "U00000000",
-    "channels": []
+    "thread_lookback_days": 7
   },
   "jira": {
     "enabled": true,
@@ -231,13 +288,16 @@ from the page, and the page says so:
 |---|---|---|
 | Slack app-level token (`xapp-…`, opens the socket) | `MEMORY_LEDGER_SLACK_APP_TOKEN` | `slack.app_token` |
 | Slack bot token (`xoxb-…`, reads only) | `MEMORY_LEDGER_SLACK_BOT_TOKEN` | `slack.bot_token` |
-| Slack user token (`xoxp-…`, only for the refusal notice) | `MEMORY_LEDGER_SLACK_USER_TOKEN` | `slack.user_token` |
+| Slack user token (`xoxp-…`, **optional**: posts refusal notices directly; without it they go through your Slack MCP). Needs `chat:write` and `im:write` for the DM fallback | `MEMORY_LEDGER_SLACK_USER_TOKEN` | `slack.user_token` |
 | Jira API token | `MEMORY_LEDGER_JIRA_TOKEN` | `jira.token` |
 
 - `signature` — `{owner}` is the brain's `owner` setting. Keep it distinctive: it
   is also the loop guard.
-- `slack.channels` — limit catch-up to these channel ids; empty means every
-  channel the bot is in.
+- `refusals` — the two notices; see [Saying no](#saying-no--two-notices).
+- `translate_notices` — send them in the sender's language (default on).
+- `claude.notice_model` — the model that translates a notice (default `haiku`).
+- Open channels are **not** in this file: they are a list in `graph.db`, edited
+  from the UI or `trigger.py channels`.
 - `jira.owner_account_id` — left empty, it is looked up once (`/myself`).
 - `jira.jql` — ANDed onto the search, e.g. `project in (PROJ, OPS)`.
 - `claude.mcp_config` — the MCP servers the session may use. Empty means the

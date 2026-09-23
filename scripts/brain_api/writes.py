@@ -501,6 +501,35 @@ def trigger_check(data: m.TriggerCheck = body(m.TriggerCheck)):
                                only=clip(data.only, 20)))
 
 
+@router.post("/trigger-channel", tags=["trigger"], summary="Open or close a Slack channel",
+             description="An open channel runs everyone's mentions in every thread. Closing "
+                         "one keeps its row, marked removed, so the list is also the history "
+                         "of who opened what.")
+def trigger_channel(data: m.TriggerChannel = body(m.TriggerChannel)):
+    if not isinstance(data.enabled, bool):
+        return reply({"ok": False, "error": "enabled must be true or false"})
+    con = trigger.db()
+    if data.enabled:
+        res = trigger.add_channel(con, clip(data.channel, 300), clip(data.name, 80),
+                                  by="web-ui", cfg=trigger.load_config())
+    else:
+        res = trigger.remove_channel(con, clip(data.channel, 300), by="web-ui")
+    if res.get("ok"):
+        res["channels"] = trigger.list_channels(con)
+    return reply(res)
+
+
+@router.post("/trigger-decline", tags=["trigger"], summary="Decline a request that breaks a rule",
+             description="What the session calls instead of doing the work. Marks the request "
+                         "`declined`, logs why, and returns the policy notice and the "
+                         "signature for the session to post.")
+def trigger_decline(data: m.TriggerDecline = body(m.TriggerDecline)):
+    rid = clip(data.request_id, 60)
+    if not rid:
+        return reply({"ok": False, "error": "missing request_id"})
+    return reply(trigger.decline(trigger.db(), rid, clip(data.reason, 300), clip(data.rule, 120)))
+
+
 @router.post("/trigger-action", tags=["trigger"], summary="Log an action taken for a request",
              description="Append-only. What the headless session did, under the request id "
                          "it was started with.")

@@ -30,6 +30,10 @@ by the owner at an interactive prompt: that is an ordinary turn.
   answer builds on what is already known.
 - **The audit command**, printed in the prompt:
   `python3 "$CLAUDE_PLUGIN_ROOT/scripts/trigger.py" action --request <id> --kind <kind> --target <where> --detail "<what>"`.
+- **The decline command**, for a request that breaks a rule:
+  `trigger.py decline --request <id> --rule <rule-id> --reason "<one line>"`. It
+  marks the request `declined` and prints the owner's policy notice and the
+  signature.
 
 ## Rules honored
 
@@ -72,25 +76,36 @@ See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTION
   thread or issue, not only the one line that mentioned the brain.
 - **What was asked was done, or declined with a reason.** A request the brain
   cannot or may not fulfil gets a short, honest "no, because", never silence.
+  One that breaks a rule or a guardrail went through `trigger.py decline`, so
+  the audit log says which rule, and the reply is the policy notice it printed.
 - **Every outward action is in the audit log**, under the request id, with a
   `kind`, a `target` and a `detail` a person could audit, including the reply
   itself (`kind: reply`). An action that is not logged did not happen as far as
   the owner can tell.
 - **The reply is in place.** Slack: in the thread of the mentioning message.
-  Jira: a comment on the issue. Never a new channel message, never a DM unless the
-  request was for one.
+  Jira: a comment on the issue. Never a new channel message. The one exception:
+  when the owner cannot post in that channel (not in it, not found, out of
+  reach), the reply went to the requester as a DM, with the permalink, logged as
+  `reply-dm`.
 - **The reply ends with the signature line**, exactly as the prompt gives it, in
   italics, on its own line.
-- **The reply is in the requester's language** and at their register.
+- **The reply is in the language the mentioning message was written in**, at the
+  requester's register. The message decides, not the channel, the thread or the
+  requester's usual language: the same person writing in Hebrew one day and in
+  English the next gets Hebrew, then English. The policy notice is translated the
+  same way. **The signature is never translated.**
 
 ## Judged against
 
 - **`trigger.py show --id <request_id>` lists a `reply` action whose target is
   the thread or issue** of the permalink.
 - **Every other outward action in the transcript has a matching action row.**
-- **The reply's last line is the signature.** Without it, the loop guard cannot
-  recognise the brain's own words, and the owner's colleagues cannot tell a
-  machine answered.
+- **The reply's last line is the signature, character for character.** Without
+  it, the loop guard cannot recognise the brain's own words, and the owner's
+  colleagues cannot tell a machine answered.
+- **The reply's language is the mentioning message's language.**
+- **A declined request has a `declined` action naming the rule**, and its reply
+  is the policy notice, not a free-form refusal.
 - **Nothing in the reply comes from a personal node** unless the owner is the
   requester and asked for it.
 
@@ -107,6 +122,10 @@ See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTION
 - **Must not repeat the Jira marker or mention the bot in the reply.** The brain
   answering itself is a loop the signature guard should never have to catch.
 - **Must not reply twice.** One reply per request; follow-ups go in the same one.
+  A DM sent because the thread was out of reach is that one reply, not a second.
+- **Must not name a personal rule's content in a decline.** The `--reason` is
+  shown to the requester: say what kind of thing it is ("that would share
+  someone's private notes"), never quote the rule.
 
 ## Reply (focus contract)
 

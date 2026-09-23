@@ -5,6 +5,8 @@ import { useAsync } from "@/hooks/useAsync";
 import { Badge, Button, Card, Checkbox, Field, Spinner, StatusMessage, TextInput } from "@/components";
 import type { BadgeTone } from "@/components";
 import type {
+  TriggerChannelRow,
+  TriggerChannels,
   TriggerCheck,
   TriggerConfig,
   TriggerSecret,
@@ -65,6 +67,7 @@ export function TriggerCard({ writable }: { writable: boolean }) {
 
       <SlackPanel
         config={config}
+        channels={status.data.channels}
         watcher={runtime.slack}
         writable={writable}
         onSaved={reload}
@@ -111,11 +114,13 @@ function MasterSwitch({
 }) {
   const { busy, out, save } = useSave(onSaved);
   const [signature, setSignature] = useState(config.signature_template);
-  const [refusal, setRefusal] = useState(config.refusal);
+  const [notEnabled, setNotEnabled] = useState(config.refusals.not_enabled);
+  const [policy, setPolicy] = useState(config.refusals.policy);
   useEffect(() => {
     setSignature(config.signature_template);
-    setRefusal(config.refusal);
-  }, [config.signature_template, config.refusal]);
+    setNotEnabled(config.refusals.not_enabled);
+    setPolicy(config.refusals.policy);
+  }, [config.signature_template, config.refusals.not_enabled, config.refusals.policy]);
 
   return (
     <>
@@ -130,25 +135,59 @@ function MasterSwitch({
           The master switch. Off, no service listens, whatever its own switch says.
         </p>
       </div>
+
+      <h3 className="ml-settings__h3">Replies</h3>
+      <Field
+        label="Signature"
+        hint={
+          <>
+            The last line of every reply, never translated. <code>{"{owner}"}</code> is your
+            name; now it reads <em>{config.signature.replace(/^_|_$/g, "")}</em>. It is also how
+            the brain knows its own words, so keep it distinctive.
+          </>
+        }
+      >
+        {(id) => <TextInput id={id} value={signature} onChange={(e) => setSignature(e.target.value)} />}
+      </Field>
       <div className="ml-settings__grid">
         <Field
-          label="Signature"
+          label="Refusal: not enabled here"
+          hint="For a mention in a conversation you have not opened. Sent by the brain itself, once per conversation."
+        >
+          {(id) => <TextInput id={id} value={notEnabled} onChange={(e) => setNotEnabled(e.target.value)} />}
+        </Field>
+        <Field
+          label="Refusal: against a rule"
           hint={
             <>
-              The last line of every reply. <code>{"{owner}"}</code> is your name; now it reads{" "}
-              <em>{config.signature.replace(/^_|_$/g, "")}</em>. It is also how the brain knows its
-              own words, so keep it distinctive.
+              For a request that breaks one of your rules or guardrails. The session sends it when
+              it declines. <code>{"{reason}"}</code> is the one-line why.
             </>
           }
         >
-          {(id) => <TextInput id={id} value={signature} onChange={(e) => setSignature(e.target.value)} />}
-        </Field>
-        <Field label="Refusal notice" hint="What someone gets when they mention the brain in a conversation you have not opened. Sent once per conversation.">
-          {(id) => <TextInput id={id} value={refusal} onChange={(e) => setRefusal(e.target.value)} />}
+          {(id) => <TextInput id={id} value={policy} onChange={(e) => setPolicy(e.target.value)} />}
         </Field>
       </div>
+      <div className="ml-settings__switch">
+        <Checkbox
+          label="Reply in the sender's language"
+          checked={config.translate_notices}
+          disabled={!writable || busy}
+          onChange={(v) => save({ translate_notices: v }, v ? "Notices will be translated." : "Notices go out as written.")}
+        />
+        <p className="ml-settings__hint ml-settings__hint--switch">
+          The brain&rsquo;s answers always follow the language of the message. This is for the two
+          notices above: on, each is rewritten in the sender&rsquo;s language (Hebrew for someone who
+          wrote in Hebrew, English for the same person writing in English), which is a small model
+          call. Off, they
+          go out exactly as written, with none.
+        </p>
+      </div>
       <div className="ml-settings__foot">
-        <Button disabled={!writable || busy} onClick={() => save({ signature, refusal })}>
+        <Button
+          disabled={!writable || busy}
+          onClick={() => save({ signature, refusals: { not_enabled: notEnabled, policy } })}
+        >
           Save replies
         </Button>
       </div>
@@ -182,6 +221,7 @@ function Panel({
   onSave,
   out,
   children,
+  after,
 }: {
   title: string;
   service: TriggerService;
@@ -195,6 +235,8 @@ function Panel({
   onSave: () => void;
   out: Out;
   children: ReactNode;
+  /** Below the fields: something with its own saves, like the channel list. */
+  after?: ReactNode;
 }) {
   const [check, setCheck] = useState<TriggerCheck | null>(null);
   const [checking, setChecking] = useState(false);
@@ -240,6 +282,7 @@ function Panel({
       ) : null}
 
       <div className="ml-settings__grid">{children}</div>
+      {after}
 
       <div className="ml-settings__foot">
         <Button variant="primary" disabled={!writable || busy} onClick={onSave}>
@@ -365,11 +408,13 @@ function num(label: string, value: string, set: (v: string) => void, hint: strin
 
 function SlackPanel({
   config,
+  channels,
   watcher,
   writable,
   onSaved,
 }: {
   config: TriggerConfig;
+  channels: TriggerChannels;
   watcher: TriggerWatcher;
   writable: boolean;
   onSaved: () => void;
@@ -377,21 +422,18 @@ function SlackPanel({
   const s = config.slack;
   const { busy, out, save } = useSave(onSaved);
   const [owner, setOwner] = useState(s.owner_user_id ?? "");
-  const [channels, setChannels] = useState((s.channels ?? []).join(", "));
   const [lookback, setLookback] = useState(String(s.thread_lookback_days ?? 7));
   const [appToken, setAppToken] = useState("");
   const [botToken, setBotToken] = useState("");
   const [userToken, setUserToken] = useState("");
   useEffect(() => {
     setOwner(s.owner_user_id ?? "");
-    setChannels((s.channels ?? []).join(", "));
     setLookback(String(s.thread_lookback_days ?? 7));
-  }, [s.owner_user_id, s.channels, s.thread_lookback_days]);
+  }, [s.owner_user_id, s.thread_lookback_days]);
 
   const submit = async () => {
     const slack: Record<string, unknown> = {
       owner_user_id: owner,
-      channels,
       thread_lookback_days: Number(lookback),
     };
     // Only a typed token travels. Blank means keep, never "set to empty".
@@ -419,9 +461,9 @@ function SlackPanel({
       onToggle={(v) => save({ slack: { enabled: v } }, v ? "Slack on." : "Slack off.")}
       onSave={submit}
       out={out}
+      after={<ChannelsCard channels={channels} writable={writable} onChanged={onSaved} />}
     >
       {txt("Your Slack user id", owner, setOwner, "Your own U… id. Your mention opens a thread; nobody else's can.", "U0123ABCD")}
-      {txt("Channels", channels, setChannels, "Channel ids for catch-up, comma separated. Empty means every channel the bot is in.", "C0123ABCD, C0456EFGH")}
       {num("Thread look-back (days)", lookback, setLookback, "How far back catch-up looks for threads with new replies.", 0, 90)}
       <SecretField
         label="App token"
@@ -451,7 +493,7 @@ function SlackPanel({
         onRemove={() => remove("slack.user_token")}
         writable={writable}
         placeholder="xoxp-…"
-        hint="Optional. Only posts the refusal notice, as you. Without it refusals are logged, not posted."
+        hint="Optional. Posts refusal notices as you, directly. Without it they go out through your Slack MCP instead, as you all the same, in a short headless session."
       />
     </Panel>
   );
@@ -549,17 +591,19 @@ function ClaudePanel({
   const c = config.claude;
   const { busy, out, save } = useSave(onSaved);
   const [bin, setBin] = useState(c.bin ?? "claude");
+  const [noticeModel, setNoticeModel] = useState(c.notice_model ?? "haiku");
   const [mcp, setMcp] = useState(c.mcp_config ?? "");
   const [strict, setStrict] = useState(!!c.strict_mcp_config);
   const [timeout, setTimeoutS] = useState(String(c.timeout_s ?? 900));
   const [concurrent, setConcurrent] = useState(String(c.max_concurrent ?? 3));
   useEffect(() => {
     setBin(c.bin ?? "claude");
+    setNoticeModel(c.notice_model ?? "haiku");
     setMcp(c.mcp_config ?? "");
     setStrict(!!c.strict_mcp_config);
     setTimeoutS(String(c.timeout_s ?? 900));
     setConcurrent(String(c.max_concurrent ?? 3));
-  }, [c.bin, c.mcp_config, c.strict_mcp_config, c.timeout_s, c.max_concurrent]);
+  }, [c.bin, c.notice_model, c.mcp_config, c.strict_mcp_config, c.timeout_s, c.max_concurrent]);
 
   return (
     <Panel
@@ -572,6 +616,7 @@ function ClaudePanel({
           {
             claude: {
               bin,
+              notice_model: noticeModel,
               mcp_config: mcp,
               strict_mcp_config: strict,
               timeout_s: Number(timeout),
@@ -585,6 +630,7 @@ function ClaudePanel({
     >
       {txt("Command", bin, setBin, "The claude binary each mention runs as `claude -p`.", "claude")}
       {txt("MCP config", mcp, setMcp, "The MCP servers the session may use: your Slack, Jira, Gmail, Drive. Empty uses what Claude Code loads anyway.", "~/.second_brain/trigger-mcp.json")}
+      {txt("Notice model", noticeModel, setNoticeModel, "The small model that translates a refusal notice. Only used with a Slack user token or on Jira; without a token the notice session does it.", "haiku")}
       {num("Timeout (seconds)", timeout, setTimeoutS, "A session running longer is killed and marked timeout.", 30, 7200)}
       {num("At once", concurrent, setConcurrent, "How many mentions may run at the same time.", 1, 16)}
       <div className="ml-settings__switch">
@@ -602,9 +648,183 @@ function ClaudePanel({
   );
 }
 
+// ---------------------------------------------------------------- channels
+/**
+ * The channels open to everyone's mentions, kept in the brain's database.
+ *
+ * Collapsed by default: it can grow long, and most visits to Settings are not
+ * about it. A closed channel is not deleted. It moves to "Closed", with who
+ * closed it and when, and can be reopened from there.
+ */
+export function ChannelsCard({
+  channels,
+  writable,
+  onChanged,
+}: {
+  channels: TriggerChannels;
+  writable: boolean;
+  onChanged: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [showClosed, setShowClosed] = useState(false);
+  const [channel, setChannel] = useState("");
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [out, setOut] = useState<Out>(null);
+
+  const change = async (id: string, enabled: boolean, name = "") => {
+    setBusy(true);
+    setOut(null);
+    try {
+      await api.setTriggerChannel(id, enabled, name);
+      const shown = name ? `#${name}` : id;
+      setOut({ text: enabled ? `Opened ${shown}.` : `Closed ${shown}.`, tone: "success" });
+      if (enabled) {
+        setChannel("");
+        setName("");
+      }
+      onChanged();
+    } catch (err) {
+      setOut({ text: err instanceof Error ? err.message : String(err), tone: "error" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const count = channels.active.length;
+  return (
+    <div className="ml-settings__preview ml-trigger__channels">
+      <button
+        type="button"
+        className="ml-trigger__toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span aria-hidden="true">{open ? "▾" : "▸"}</span> Open channels{" "}
+        <Badge tone={count ? "accent" : "neutral"}>{count}</Badge>
+      </button>
+      <p className="ml-settings__hint">
+        Everyone&rsquo;s mentions run in these channels, in every thread. Elsewhere only a thread
+        you opened with your own mention accepts them.
+      </p>
+
+      {open ? (
+        <>
+          {count ? (
+            <ul className="ml-trigger__rows" aria-label="open channels">
+              {channels.active.map((c) => (
+                <ChannelRow key={c.channel_id} row={c}>
+                  <Button
+                    size="sm"
+                    disabled={!writable || busy}
+                    onClick={() => change(c.channel_id, false, c.name)}
+                    aria-label={`Close ${label(c)}`}
+                  >
+                    Close
+                  </Button>
+                </ChannelRow>
+              ))}
+            </ul>
+          ) : (
+            <p className="ml-settings__hint">No channel is open to everyone yet.</p>
+          )}
+
+          <div className="ml-settings__grid">
+            <Field label="Channel" hint="Its id (C0123ABCD), or paste a link to it or to any message in it.">
+              {(id) => (
+                <TextInput
+                  id={id}
+                  value={channel}
+                  placeholder="C0123ABCD or https://…/archives/C0123ABCD"
+                  onChange={(e) => setChannel(e.target.value)}
+                />
+              )}
+            </Field>
+            <Field label="Name" hint="Optional. Looked up from Slack when left empty.">
+              {(id) => (
+                <TextInput id={id} value={name} placeholder="#general" onChange={(e) => setName(e.target.value)} />
+              )}
+            </Field>
+          </div>
+          <div className="ml-settings__foot">
+            <Button
+              variant="primary"
+              disabled={!writable || busy || !channel.trim()}
+              onClick={() => change(channel.trim(), true, name.trim())}
+            >
+              Open channel
+            </Button>
+          </div>
+
+          {channels.removed.length ? (
+            <div className="ml-trigger__closed">
+              <button
+                type="button"
+                className="ml-trigger__toggle ml-trigger__toggle--minor"
+                aria-expanded={showClosed}
+                onClick={() => setShowClosed((v) => !v)}
+              >
+                <span aria-hidden="true">{showClosed ? "▾" : "▸"}</span> Closed{" "}
+                <Badge>{channels.removed.length}</Badge>
+              </button>
+              {showClosed ? (
+                <ul className="ml-trigger__rows" aria-label="closed channels">
+                  {channels.removed.map((c) => (
+                    <ChannelRow key={c.channel_id} row={c} closed>
+                      <Button
+                        size="sm"
+                        disabled={!writable || busy}
+                        onClick={() => change(c.channel_id, true, c.name)}
+                        aria-label={`Reopen ${label(c)}`}
+                      >
+                        Reopen
+                      </Button>
+                    </ChannelRow>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          ) : null}
+        </>
+      ) : null}
+      {out ? <StatusMessage tone={out.tone}>{out.text}</StatusMessage> : null}
+    </div>
+  );
+}
+
+/** How a channel reads to a person: `#name`, or its id when it has none. */
+const label = (c: TriggerChannelRow) => (c.name ? `#${c.name}` : c.channel_id);
+
+function ChannelRow({
+  row,
+  closed,
+  children,
+}: {
+  row: TriggerChannelRow;
+  closed?: boolean;
+  children: ReactNode;
+}) {
+  const when = (closed ? row.removed_at : row.added_at).slice(0, 10);
+  const who = closed ? row.removed_by : row.added_by;
+  return (
+    <li className="ml-trigger__row">
+      <span>
+        <strong>{label(row)}</strong>{" "}
+        {row.name ? <code>{row.channel_id}</code> : null}
+      </span>
+      <span className="ml-settings__note">
+        {closed ? "closed" : "opened"} {when}
+        {who ? ` by ${who}` : ""}
+      </span>
+      {children}
+    </li>
+  );
+}
+
 // ---------------------------------------------------------------- recent
 const REQUEST_TONE: Record<string, BadgeTone> = {
   done: "success",
+  declined: "warn",
   running: "accent",
   queued: "accent",
   refused: "warn",

@@ -54,6 +54,20 @@ def _dispatch(request_id: str) -> None:
         _pool.submit(_run, request_id)
 
 
+def _notice(request_id: str, body: str) -> None:
+    """A refusal notice, on the pool: translating one is a model call, and a
+    watcher must not wait on it."""
+    if _pool is not None:
+        _pool.submit(_deliver, request_id, body)
+
+
+def _deliver(request_id: str, body: str) -> None:
+    try:
+        trigger.deliver_notice(request_id, body)
+    except Exception:
+        traceback.print_exc()
+
+
 def _run(request_id: str) -> None:
     try:
         trigger.run_request(request_id)
@@ -134,7 +148,7 @@ def _jira_loop(cfg: dict, stop_event: threading.Event) -> None:
     _note("jira", state="polling", every_s=every)
     while not stop_event.is_set():
         try:
-            res = trigger.jira_poll(cfg, _dispatch, jira=jira)
+            res = trigger.jira_poll(cfg, _dispatch, jira=jira, notice=_notice)
             if res.get("ok"):
                 _note("jira", state="polling", last_ok=_now(), last_error="",
                       last={k: res.get(k) for k in ("issues", "seen", "handled", "first_run")})
@@ -165,7 +179,7 @@ def _slack_main(cfg: dict, stop_event: threading.Event) -> None:
     except trigger.TriggerError as e:
         _note("slack", state="misconfigured", last_error=str(e))
         return
-    notify = trigger.slack_notify(cfg)
+    notify = trigger.slack_notify(cfg, _notice)
 
     def on_mention(event: dict) -> None:
         try:
@@ -207,7 +221,7 @@ def _slack_main(cfg: dict, stop_event: threading.Event) -> None:
             # (Re)connected: whatever arrived while we were away is in history.
             _note("slack", state="connected", connected_at=_now())
             try:
-                res = trigger.slack_catch_up(cfg, _dispatch)
+                res = trigger.slack_catch_up(cfg, _dispatch, notice=_notice)
                 _note("slack", last_catch_up={k: res.get(k) for k in
                                               ("channels", "seen", "handled", "first_run")})
             except Exception as e:

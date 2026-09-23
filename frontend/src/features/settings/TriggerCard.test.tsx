@@ -39,7 +39,8 @@ describe("Triggers", () => {
     await user.click(slack.getByRole("button", { name: "Save Slack" }));
     await waitFor(() => expect(sent()).toHaveLength(1));
     const body = sent()[0].slack as Record<string, unknown>;
-    expect(body).toMatchObject({ owner_user_id: "U0OWNER", channels: "C1" });
+    expect(body).toMatchObject({ owner_user_id: "U0OWNER" });
+    expect(body).not.toHaveProperty("channels");
     expect(body).not.toHaveProperty("app_token");
     expect(body).not.toHaveProperty("user_token");
   });
@@ -130,6 +131,82 @@ describe("Triggers", () => {
     expect(slack.getByRole("button", { name: "Save Slack" })).toBeDisabled();
     expect(slack.getByRole("button", { name: "Check Slack" })).toBeDisabled();
     expect(slack.getByRole("checkbox", { name: "Listen on Slack" })).toBeDisabled();
+  });
+
+  it("saves both refusal notices, and switches translation on its own", async () => {
+    const { user } = renderApp(<TriggerCard writable />, { route: "/settings" });
+    const policy = await screen.findByLabelText("Refusal: against a rule");
+    await user.clear(policy);
+    await user.type(policy, "No: {{reason}");
+    await user.click(screen.getByRole("button", { name: "Save replies" }));
+    await waitFor(() =>
+      expect(sent()[0]).toMatchObject({
+        refusals: {
+          not_enabled: "I'm not enabled in this conversation, so I did nothing.",
+          policy: "No: {reason}",
+        },
+      }),
+    );
+    await user.click(screen.getByRole("checkbox", { name: "Reply in the sender's language" }));
+    await waitFor(() => expect(sent()).toContainEqual({ translate_notices: false }));
+  });
+
+  it("says a missing user token is fine: notices go through the MCP", async () => {
+    renderApp(<TriggerCard writable />, { route: "/settings" });
+    const slack = await panel("Slack");
+    expect(slack.getByText(/through your Slack MCP instead/)).toBeInTheDocument();
+  });
+
+  it("keeps the channel list folded until it is clicked open", async () => {
+    const { user } = renderApp(<TriggerCard writable />, { route: "/settings" });
+    const slack = await panel("Slack");
+    const toggle = slack.getByRole("button", { name: /Open channels/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(within(toggle).getByText("2")).toBeInTheDocument();
+    expect(slack.queryByRole("list", { name: "open channels" })).not.toBeInTheDocument();
+    await user.click(toggle);
+    const list = slack.getByRole("list", { name: "open channels" });
+    expect(within(list).getByText("#general")).toBeInTheDocument();
+    expect(within(list).getByText("#ops")).toBeInTheDocument();
+  });
+
+  it("opens a channel from what is pasted, and closes one", async () => {
+    const { user } = renderApp(<TriggerCard writable />, { route: "/settings" });
+    const slack = await panel("Slack");
+    await user.click(slack.getByRole("button", { name: /Open channels/ }));
+    await user.type(slack.getByLabelText("Channel"), "https://x.slack.com/archives/C0NEW/p1");
+    await user.click(slack.getByRole("button", { name: "Open channel" }));
+    await waitFor(() =>
+      expect(sent("/api/trigger-channel")).toContainEqual({
+        channel: "https://x.slack.com/archives/C0NEW/p1", name: "", enabled: true,
+      }),
+    );
+    await user.click(slack.getByRole("button", { name: "Close #ops" }));
+    await waitFor(() =>
+      expect(sent("/api/trigger-channel")).toContainEqual({ channel: "C0OPS", name: "ops", enabled: false }),
+    );
+  });
+
+  it("keeps closed channels, and can reopen one", async () => {
+    const { user } = renderApp(<TriggerCard writable />, { route: "/settings" });
+    const slack = await panel("Slack");
+    await user.click(slack.getByRole("button", { name: /Open channels/ }));
+    expect(slack.queryByRole("list", { name: "closed channels" })).not.toBeInTheDocument();
+    await user.click(slack.getByRole("button", { name: /Closed/ }));
+    const closed = slack.getByRole("list", { name: "closed channels" });
+    expect(within(closed).getByText("#old-project")).toBeInTheDocument();
+    expect(within(closed).getByText(/closed 2026-09-10 by web-ui/)).toBeInTheDocument();
+    await user.click(within(closed).getByRole("button", { name: "Reopen #old-project" }));
+    await waitFor(() =>
+      expect(sent("/api/trigger-channel")).toContainEqual({ channel: "C0OLD", name: "old-project", enabled: true }),
+    );
+  });
+
+  it("will not open an empty channel", async () => {
+    const { user } = renderApp(<TriggerCard writable />, { route: "/settings" });
+    const slack = await panel("Slack");
+    await user.click(slack.getByRole("button", { name: /Open channels/ }));
+    expect(slack.getByRole("button", { name: "Open channel" })).toBeDisabled();
   });
 
   it("lists the newest requests", async () => {

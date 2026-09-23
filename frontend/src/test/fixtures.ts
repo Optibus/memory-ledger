@@ -433,12 +433,16 @@ export const triggerFixture: import("@/api/types").TriggerStatus = {
     stored_enabled: true,
     signature: "_sent by Gabriel's second brain_",
     signature_template: "_sent by {owner}'s second brain_",
-    refusal: "I'm not enabled in this conversation, so I did nothing.",
+    refusals: {
+      not_enabled: "I'm not enabled in this conversation, so I did nothing.",
+      policy: "I can't do that: it goes against a rule {owner} has set for me. {reason}",
+    },
+    translate_notices: true,
     claude: {
-      bin: "claude", mcp_config: "", strict_mcp_config: false, timeout_s: 900,
+      bin: "claude", notice_model: "haiku", mcp_config: "", strict_mcp_config: false, timeout_s: 900,
       max_concurrent: 3, extra_args: [], cwd: "",
     },
-    slack: { enabled: true, active: true, owner_user_id: "U0OWNER", channels: ["C1"], thread_lookback_days: 7 },
+    slack: { enabled: true, active: true, owner_user_id: "U0OWNER", thread_lookback_days: 7 },
     jira: {
       enabled: false, active: false, base_url: "https://j.example", email: "me@example.com",
       owner_account_id: "", marker: "@brain", poll_seconds: 60, jql: "", max_catchup_hours: 72,
@@ -457,6 +461,15 @@ export const triggerFixture: import("@/api/types").TriggerStatus = {
   },
   counts: { done: 3, refused: 1 },
   enabled_scopes: [{ scope: "slack:C1:1.0", by: "U0OWNER", at: "2026-09-23T12:00:00+00:00" }],
+  channels: {
+    active: [
+      { channel_id: "C0GENERAL", name: "general", added_by: "web-ui", added_at: "2026-09-20T10:00:00+00:00", removed_by: "", removed_at: "" },
+      { channel_id: "C0OPS", name: "ops", added_by: "web-ui", added_at: "2026-09-21T10:00:00+00:00", removed_by: "", removed_at: "" },
+    ],
+    removed: [
+      { channel_id: "C0OLD", name: "old-project", added_by: "cli", added_at: "2026-09-01T10:00:00+00:00", removed_by: "web-ui", removed_at: "2026-09-10T10:00:00+00:00" },
+    ],
+  },
   recent: [
     {
       id: "0b7c6f2e-1111-4222-8333-944455556666", source: "slack", scope: "slack:C1:1.0",

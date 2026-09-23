@@ -118,6 +118,7 @@ export const handlers = [
   write("/api/neo4j-config"),
   write("/api/neo4j-test"),
   write("/api/trigger-config", () => ok({ config: triggerFixture.config, runtime: triggerFixture.runtime })),
+  write("/api/trigger-channel", () => ok({ channels: triggerFixture.channels })),
   write("/api/trigger-check", (body: { only?: string }) =>
     ok({ ready: true, target: body.only || "all", problems: [], notes: [`${body.only}: fine`] }),
   ),

@@ -129,7 +129,7 @@ Every response is `Cache-Control: no-store`.
 | `/api/consolidate-preview?keep_days=N` | what a consolidation run **would** change. A read: it writes nothing |
 | `/api/backups` | the snapshots consolidation leaves behind, each with when it expires |
 | `/api/ui-prefs` | the browser's stored view state, and whether syncing it is on |
-| `/api/trigger?limit=N` | the [trigger](trigger.md) config (whether each token is set, never the token), what this process's watchers are doing, request counts by status, enabled conversations, and the newest requests |
+| `/api/trigger?limit=N` | the [trigger](trigger.md) config (whether each token is set, never the token), what this process's watchers are doing, request counts by status, enabled conversations, the open and closed Slack `channels`, and the newest requests |
 | `/api/trigger-request?id=<uuid>` | one request and every action taken for it |
 | `/api/<view>?<params>` | any `brain_query.py` view: `agenda`, `open`, `today`, `tomorrow`, `week`, `closed`, `range` |
 
@@ -208,6 +208,8 @@ since the dashboard lists tasks and a kind with none would be dead UI.
 | `/api/trigger-gate` | `{scope, enabled}` | opens (`true`) or closes a conversation to other people's mentions. `scope` is `slack:<channel>`, `slack:<channel>:<thread_ts>` or `jira:<KEY>`; anything else is refused. `enabled` must be a boolean |
 | `/api/trigger-config` | `{enabled?, signature?, refusal?, claude?{…}, slack?{…}, jira?{…}, clear?[]}` | merges a validated patch into `<home>/trigger.json` (mode 600) and restarts this server's watchers on it. Only the keys sent change; an unknown key is ignored. **Secrets are write-only**: `slack.app_token` / `bot_token` / `user_token` and `jira.token` are replaced by a non-empty value, kept by an empty or missing one, and removed by naming them in `clear`. None is ever sent back; `config.secrets` says only `set`, `stored` and `source` (`env` outranks the file). A Slack token with the wrong prefix (`xapp-`, `xoxb-`, `xoxp-`) is refused, as are out-of-range numbers and a non-http(s) Jira URL |
 | `/api/trigger-check` | `{only?, offline?}` | checks `claude`, `slack` or `jira` (empty: everything switched on), calling Slack and Jira with the stored tokens unless `offline`. Starts and writes nothing. `ok` means the check ran; **`ready`** is the verdict, with `problems` and `notes` |
+| `/api/trigger-channel` | `{channel, name?, enabled}` | opens (`true`) or closes a Slack channel to everyone's mentions. `channel` is an id or any Slack link into it. Closing keeps the row, marked removed; reopening restores it. Returns the whole list as `channels` |
+| `/api/trigger-decline` | `{request_id, reason, rule?}` | what the session calls for a request that breaks a rule: marks it `declined`, logs the rule and reason, and returns the policy `notice` (with `{reason}` filled) and the `signature` to post |
 | `/api/trigger-action` | `{request_id, kind, target?, detail?}` | appends an action to a request's audit log (what `trigger.py action` does). Refused for an unknown request or an empty `kind` |
 | `/api/delete-contracts` | `{ids[], force?}` | `graph.py del-contracts` — deletes skill/rule nodes and their edges. A built-in is refused unless `force`, since its file would re-ingest it |
 

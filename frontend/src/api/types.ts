@@ -589,9 +589,11 @@ export interface TriggerConfig {
   stored_enabled: boolean;
   signature: string;
   signature_template: string;
-  refusal: string;
+  refusals: { not_enabled: string; policy: string };
+  translate_notices: boolean;
   claude: {
     bin: string;
+    notice_model: string;
     mcp_config: string;
     strict_mcp_config: boolean;
     timeout_s: number;
@@ -603,7 +605,6 @@ export interface TriggerConfig {
     enabled: boolean;
     active: boolean;
     owner_user_id: string;
-    channels: string[];
     thread_lookback_days: number;
   };
   jira: {
@@ -647,6 +648,21 @@ export interface TriggerRequestRow {
   permalink: string;
 }
 
+/** A Slack channel open to everyone's mentions. Closing one keeps the row. */
+export interface TriggerChannelRow {
+  channel_id: string;
+  name: string;
+  added_by: string;
+  added_at: string;
+  removed_by: string;
+  removed_at: string;
+}
+
+export interface TriggerChannels {
+  active: TriggerChannelRow[];
+  removed: TriggerChannelRow[];
+}
+
 export interface TriggerStatus extends Envelope {
   config: TriggerConfig;
   runtime: TriggerRuntime;
@@ -654,6 +670,7 @@ export interface TriggerStatus extends Envelope {
   watching: boolean;
   counts: Record<string, number>;
   enabled_scopes: { scope: string; by: string; at: string }[];
+  channels: TriggerChannels;
   recent: TriggerRequestRow[];
 }
 
