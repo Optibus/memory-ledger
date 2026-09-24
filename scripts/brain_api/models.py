@@ -178,7 +178,8 @@ class Backup(Body):
 
 # ---------------------------------------------------------------- trigger
 class TriggerGate(Body):
-    scope: Text = T("`slack:<channel>`, `slack:<channel>:<thread_ts>` or `jira:<ISSUE-KEY>`.")
+    scope: Text = T("`slack:<channel>`, `slack:<channel>:<thread_ts>`, `jira:<ISSUE-KEY>` "
+                    "or `github:<owner>/<repo>#<number>`.")
     enabled: Any = Field(None, description="true opens the conversation to other people's "
                                            "mentions, false closes it again.")
 
@@ -194,17 +195,32 @@ class TriggerConfig(Body):
     refusals: _obj = Field(None, description="`not_enabled`: the notice for a mention in a "
                                              "conversation nobody opened. `policy`: the one "
                                              "for a request that breaks a rule; `{reason}` "
-                                             "is the one-line why.")
+                                             "is the one-line why. `not_allowed`: the one for "
+                                             "a blocked user or an owner-only command.")
     translate_notices: Any = Field(None, description="Send notices in the language of the "
                                                      "message they answer (a model call).")
     claude: _obj = Field(None, description="`bin`, `mcp_config`, `strict_mcp_config`, "
                                            "`timeout_s`, `max_concurrent`, `extra_args`, `cwd`.")
+    refuse_without_model: Any = Field(None, description="A refusal is posted as written "
+                                                        "through the source's API, or only "
+                                                        "logged: never a model call.")
     slack: _obj = Field(None, description="`enabled`, `owner_user_id`, "
-                                          "`thread_lookback_days`, and the write-only "
-                                          "`app_token`, `bot_token`, `user_token`.")
-    jira: _obj = Field(None, description="`enabled`, `base_url`, `email`, `owner_account_id`, "
-                                         "`marker`, `poll_seconds`, `jql`, `max_catchup_hours`, "
+                                          "`thread_lookback_days`, `dms`, `dms_open`, "
+                                          "`allowed_users`, "
+                                          "`blocked_users`, `events` (`{kind: {on, do, action, "
+                                          "http, script}}`), `commands` (the whole list), "
+                                          "`prompt` (the old mention run command), and the "
+                                          "write-only `app_token`, `bot_token`, `user_token`.")
+    jira: _obj = Field(None, description="`enabled`, `base_url`, `email`, "
+                                         "`owner_account_id`, `marker`, `poll_seconds`, `jql`, "
+                                         "`watch_jql`, `max_catchup_hours`, `events`, `prompt`, "
                                          "and the write-only `token`.")
+    github: _obj = Field(None, description="`enabled`, `api_url`, `login`, `marker`, "
+                                           "`poll_seconds`, `repos`, `trusted_associations`, "
+                                           "`refusal_notice`, `max_catchup_hours`, `events` "
+                                           "(`{kind: {on, do}}`, `do` being that event's run "
+                                           "command), and the write-only `token`. An unknown "
+                                           "`{variable}` in a run command is refused.")
     clear: Optional[list[LooseStr]] = Field(None, description="Secrets to remove, e.g. "
                                                               "`[\"slack.user_token\"]`.")
 
@@ -223,7 +239,7 @@ class TriggerDecline(Body):
 
 
 class TriggerCheck(Body):
-    only: Text = T("`claude`, `slack` or `jira`; empty checks everything switched on.")
+    only: Text = T("`claude`, `slack`, `jira` or `github`; empty checks everything switched on.")
     offline: Any = Field(False, description="true skips the calls to Slack and Jira.")
 
 
@@ -309,6 +325,30 @@ class ImportBundle(Body):
         None, description="Item id to update | replace | ignore.")
     process_realm: Text = T("Realm the bundle's processes land in; default the "
                             "configured realm.")
+
+
+class ExportScripts(Body):
+    names: list[LooseStr] = Field(default_factory=list,
+                                  description="Script filenames; empty exports them all.")
+
+
+class UploadScripts(Body):
+    filename: Text = T("The file's name. A name not ending in .zip is staged as one "
+                       "script by that name.")
+    data: Text = T("A scripts zip or one script file, base64 (a data: URL is accepted).")
+
+
+class CreateScript(Body):
+    name: Text = T("A bare filename, e.g. `deploy.sh`.")
+    text: Text = T("The script itself.")
+    executable: Any = Field(True, description="Write it with the executable bit (default).")
+    replace: Any = Field(False, description="Overwrite one by that name, after a backup.")
+
+
+class ImportScripts(Body):
+    token: Text = T("From upload-scripts.")
+    select: Annotated[Optional[dict[str, Any]], BeforeValidator(_dict_or_none)] = Field(
+        None, description="Script name to replace | keep. A name left out is not imported.")
 
 
 class DeleteContracts(Body):

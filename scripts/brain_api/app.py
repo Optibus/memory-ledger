@@ -24,10 +24,13 @@ TAGS = [
     {"name": "contracts", "description": "Skills, rules and processes — the two trees, "
                                          "the realm-scoped processes, and the file and "
                                          "bundle routes between machines."},
+    {"name": "scripts", "description": "The person's own automation in <home>/scripts: "
+                                       "listed, read, exported as a zip and imported "
+                                       "back. Never executed."},
     {"name": "vocabulary", "description": "The open and closed sets a client must read "
                                           "rather than hard-code."},
     {"name": "settings", "description": "Preferences, store health, and upkeep."},
-    {"name": "trigger", "description": "Slack and Jira mentions that summon the brain: "
+    {"name": "trigger", "description": "Slack, Jira and GitHub events that summon the brain: "
                                        "the request log, its actions, and the "
                                        "per-conversation gate (docs/trigger.md)."},
 ]

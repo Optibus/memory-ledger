@@ -61,3 +61,44 @@
 .ml-trigger__row code { color: var(--muted); }
 .ml-trigger__closed { margin-top: var(--space-4); font-size: 11.5px; }
 .ml-trigger__toggle--minor { color: var(--muted); font-weight: 500; font-size: 11.5px; }
+
+/* The GitHub events: one switch each, and its instruction when it is on. */
+.ml-trigger__events { margin: 0 0 var(--space-4); }
+.ml-trigger__events-h {
+  display: flex; align-items: center; gap: var(--space-2);
+  margin: var(--space-2) 0; font-size: 12.5px; font-weight: 600;
+}
+.ml-trigger__event { padding: var(--space-2) 0; border-bottom: 1px solid var(--border); }
+.ml-trigger__event .ml-settings__hint--switch { margin-bottom: var(--space-2); }
+
+/* Run commands: the variables reference, and a command with example values */
+.ml-trigger__vars { margin: 0 0 var(--space-4); }
+.ml-trigger__vars > summary { cursor: pointer; font-size: 12.5px; font-weight: 600; }
+.ml-trigger__vars-table { overflow-x: auto; }
+.ml-trigger__vars-table table { border-collapse: collapse; width: 100%; font-size: 11.5px; }
+.ml-trigger__vars-table th, .ml-trigger__vars-table td {
+  text-align: left; vertical-align: top; padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+.ml-trigger__vars-table th { color: var(--muted); font-weight: 600; }
+.ml-trigger__preview { color: var(--muted); font-size: 11.5px; margin: var(--space-1) 0 0; white-space: pre-wrap; }
+.ml-trigger__preview > span { color: var(--fg); }
+
+/* Each event or command: its switch and a one-line summary of what it does,
+   with the configuration folded under it. */
+.ml-trigger__event-head { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.ml-trigger__event-head .ml-trigger__toggle { margin: 0; }
+.ml-trigger__event-head > .ml-btn:last-child { margin-left: auto; }
+.ml-trigger__event-label { font-size: 12.5px; }
+.ml-settings__h3 .ml-trigger__toggle { margin: 0; }
+
+/* What a trigger does: a session, an API call, or a script. */
+.ml-trigger__action { margin: var(--space-2) 0 var(--space-2) 22px; display: grid; gap: var(--space-3); }
+.ml-trigger__action .ml-pills { justify-self: start; }
+.ml-trigger__http { grid-template-columns: minmax(90px, 120px) 1fr; }
+.ml-trigger__http > :nth-child(n + 3) { grid-column: 1 / -1; }
+.ml-trigger__new-script {
+  border-left: 2px solid var(--border); padding-left: var(--space-3); margin-top: var(--space-2);
+  display: grid; gap: var(--space-2);
+}
+.ml-trigger__code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; }

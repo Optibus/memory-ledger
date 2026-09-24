@@ -26,7 +26,7 @@ os.environ["SECOND_BRAIN_NO_AUTOSYNC"] = "1"
 os.environ["MEMORY_LEDGER_OWNER"] = "Owner"
 for k in list(os.environ):
     if k.startswith(("SECOND_BRAIN_NEO4J", "MEMORY_LEDGER_NEO4J", "MEMORY_LEDGER_SLACK_",
-                     "MEMORY_LEDGER_JIRA_")):
+                     "MEMORY_LEDGER_JIRA_", "MEMORY_LEDGER_GITHUB_")):
         del os.environ[k]
 sys.path.insert(0, str(ROOT / "scripts"))
 
@@ -67,6 +67,9 @@ FAKE_CLAUDE.chmod(FAKE_CLAUDE.stat().st_mode | stat.S_IEXEC)
 
 CFG = {
     "enabled": True,
+    # The notice tests below are about translating; the default, refusing with
+    # no model call at all, has its own (test_access).
+    "refuse_without_model": False,
     "signature": "_sent by {owner}'s second brain_",
     "claude": {"bin": str(FAKE_CLAUDE), "timeout_s": 60, "mcp_config": "",
                "extra_args": ["--model", "x"]},
@@ -74,6 +77,9 @@ CFG = {
               "app_token": "xapp-t", "user_token": "xoxp-t"},
     "jira": {"enabled": True, "base_url": "https://j.example", "email": "o@example.com",
              "token": "jt", "owner_account_id": "acc-owner", "marker": "@cérebro"},
+    "github": {"enabled": True, "token": "ghp_t", "login": "owner", "marker": "/brain",
+               "events": {"ci_failed": {"on": True}, "merged": {"on": True},
+                          "pushed": {"on": True}}},
 }
 
 
@@ -341,6 +347,118 @@ def test_dispatch(cfg):
     ck("on start, a running request is interrupted",
        trigger.get_request(con, running)["status"] == "interrupted" and res["interrupted"] >= 1)
     ck("and a queued one is dispatched", queued in again)
+
+
+# ================================================================= logging
+def test_logging(cfg):
+    print("\n== logging: the server's line for every new request and task ==")
+    import logging
+    path = trigger.setup_logging()
+    ck("setting it up twice does not double the handlers",
+       trigger.setup_logging() == path and len(trigger.log.handlers) == 2)
+    lines = []
+
+    class Keep(logging.Handler):
+        def emit(self, record):
+            lines.append(record.getMessage())
+
+    keep = Keep()
+    trigger.log.addHandler(keep)
+    try:
+        install_http()
+        ran, dispatch = dispatcher()
+        ev = trigger.slack_event(slack_msg("650.1", "UOWNER", "<@UBOT> log me"), "C1", cfg,
+                                 bot_user_id="UBOT")
+        rid = trigger.handle(ev, cfg, dispatch)["request_id"]
+        ck("a new request is logged with its source, requester and decision",
+           any(rid in m and "new request" in m and "slack" in m and "(owner)" in m
+               and "log me" in m and "queued" in m for m in lines), lines[-1:])
+        trigger.run_request(rid, cfg)
+        ck("its task is logged when it starts and when it ends, with the cost",
+           any(f"task {rid} started" in m for m in lines)
+           and any(f"task {rid} done" in m and "$0.01" in m for m in lines), lines[-2:])
+        n = len(lines)
+        trigger.handle(ev, cfg, dispatch)
+        ck("a mention seen before is not logged again", len(lines) == n)
+        ev = trigger.slack_event(slack_msg("650.2", "USTRANGER", "<@UBOT> hi"), "C9", cfg,
+                                 bot_user_id="UBOT")
+        trigger.handle(ev, cfg, dispatch)
+        ck("a refusal is logged as one", "refused" in lines[-1], lines[-1:])
+    finally:
+        for h in list(trigger.log.handlers):
+            trigger.log.removeHandler(h)
+            h.close()
+        trigger.log._brain_path = None
+    ck("and it all lands in <home>/logs/trigger.log",
+       "new request" in path.read_text() and path.parent == Path(HOME) / "logs")
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from brain_api import trigger_runtime
+    summary = trigger_runtime._summary(cfg, 3)
+    ck("the start line names the sources, the pool and the log",
+       "slack" in summary and "jira (poll 60s)" in summary and "3 sessions" in summary
+       and str(path) in summary, summary)
+
+
+# ============================================================ run commands
+def test_run_commands(cfg):
+    print("\n== run commands: a template per trigger, with variables ==")
+    install_http()
+    ran, dispatch = dispatcher()
+    ev = trigger.slack_event(slack_msg("1700000000.000200", "UOWNER", "<@UBOT> sum it up"),
+                             "C1", cfg, bot_user_id="UBOT")
+    req = trigger.get_request(trigger.db(), trigger.handle(ev, cfg, dispatch)["request_id"])
+    v = trigger.request_variables(req, cfg)
+    ck("Slack: source, kind, user, content, link, channel and thread",
+       v["trigger_source"] == "slack" and v["trigger_kind"] == "mention"
+       and v["trigger_user"] == "Name UOWNER" and v["trigger_user_id"] == "UOWNER"
+       and v["trigger_user_is_owner"] == "true" and v["trigger_content"] == "<@UBOT> sum it up"
+       and v["trigger_link"] == ev["permalink"] and v["slack_channel"] == "C1"
+       and v["slack_thread"] == "1700000000.000200" and v["github_repo"] == "", v)
+    ck("the trigger time is the message's own, not when it was read",
+       v["trigger_time"] == "2023-11-14T22:13:20+00:00" and v["trigger_received"])
+    ck("every catalogued variable has a value, even if empty",
+       set(v) == set(trigger.VARIABLES))
+
+    ck("no run command: the prompt has no instructions block",
+       "<<<INSTRUCTIONS" not in trigger.build_prompt(req, cfg))
+    pcfg = json.loads(json.dumps(cfg))
+    pcfg["slack"]["prompt"] = ("{trigger_source} sent this task. Pick it up and reply to "
+                               "{trigger_user} in {trigger_where}. Braces {like this} stay.")
+    ev = trigger.slack_event(slack_msg("1700000000.000201", "UOWNER", "<@UBOT> sum it up"),
+                             "C1", pcfg, bot_user_id="UBOT")
+    preq = trigger.get_request(trigger.db(), trigger.handle(ev, pcfg, dispatch)["request_id"])
+    ck("the run command is kept on the request, as it was when it fired",
+       preq["meta"]["do"].startswith("{trigger_source} sent this task")
+       and preq["meta"]["action"] == {"type": "claude"})
+    prompt = trigger.build_prompt(preq, cfg)
+    ck("a run command is rendered into the prompt, ahead of the guardrails",
+       "slack sent this task. Pick it up and reply to Name UOWNER in Slack channel C1" in prompt
+       and "Braces {like this} stay." in prompt
+       and prompt.index("<<<INSTRUCTIONS") < prompt.index(" decline --request "))
+    ck("and the message is still quoted verbatim below it", "<<<MESSAGE\n<@UBOT> sum it up" in prompt)
+
+    issue = {"key": "K-7", "fields": {"summary": "Fix the export"}}
+    comment = {"id": "9", "body": "@cérebro please", "created": "2026-09-23T11:18:00.000-0300",
+               "author": {"accountId": "acc-owner", "displayName": "Owner"}}
+    jev = trigger.jira_event(issue, comment, cfg, base="https://j.example", owner_id="acc-owner")
+    jreq = trigger.get_request(trigger.db(), trigger.handle(jev, cfg, dispatch)["request_id"])
+    jv = trigger.request_variables(jreq, cfg)
+    ck("Jira: the issue, its summary, and the comment's time in UTC",
+       jv["jira_issue"] == "K-7" and jv["trigger_title"] == "Fix the export"
+       and jv["trigger_time"] == "2026-09-23T14:18:00+00:00", jv)
+
+    res = trigger.save_config({"slack": {"prompt": "hi {trigger_usr}"}})
+    ck("saving an unknown variable is refused, naming it and the real ones",
+       not res["ok"] and "{trigger_usr}" in res["error"] and "{trigger_user}" in res["error"])
+    res = trigger.save_config({"github": {"events": {"merged": {"do": "{github_repo} {oops}"}}}})
+    ck("so is one in a GitHub event's command", not res["ok"] and "{oops}" in res["error"])
+    res = trigger.save_config({"jira": {"prompt": "{trigger_user} on {jira_issue}"}})
+    ck("a good one saves, and the page gets the catalogue",
+       res["ok"] and res["config"]["jira"]["prompt"] == "{trigger_user} on {jira_issue}"
+       and any(x["name"] == "trigger_content" and x["global"] for x in res["config"]["variables"])
+       and any(x["name"] == "github_repo" and x["sources"] == ["github"]
+               for x in res["config"]["variables"]))
+    trigger.save_config({"jira": {"prompt": ""}})
 
 
 # ============================================================ slack catch-up
@@ -665,6 +783,197 @@ def test_jira(cfg):
                                             dispatch)["error"])
 
 
+# ================================================================== github
+def test_github(cfg):
+    print("\n== github: PR changes the owner picked, mentions, the marker ==")
+    ck("a mention is the whole login, any case",
+       trigger.mentions_login("hey @Owner, look", "owner")
+       and not trigger.mentions_login("hey @owner-bot", "owner")
+       and not trigger.mentions_login("mail owner@x.com", "owner"))
+    kinds = trigger.github_events_cfg(cfg)
+    ck("defaults fill the kinds the file does not name, and the file wins where it does",
+       kinds["review"]["on"] and not kinds["comment"]["on"] and kinds["ci_failed"]["on"]
+       and "Post nothing on GitHub" in kinds["review"]["do"])
+
+    fake = install_http()
+    gh = trigger.GitHub(cfg)
+    api = gh.api
+    now = datetime(2026, 9, 23, 12, 0, tzinfo=timezone.utc)
+    con = trigger.db()
+    ran, dispatch = dispatcher()
+    ck("a first poll answers no backlog",
+       trigger.github_poll(cfg, dispatch, now=now, gh=gh).get("first_run") and not ran)
+
+    def ts(minutes):
+        return (now + timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def item(n, author, assoc="MEMBER", body="", created=-600, merged=None):
+        return {"number": n, "title": f"PR {n}", "html_url": f"https://github.com/o/r/pull/{n}",
+                "repository_url": f"{api}/repos/o/r", "user": {"login": author},
+                "author_association": assoc, "body": body, "created_at": ts(created),
+                "pull_request": {"merged_at": merged}}
+
+    def c(i, who, body, minutes, assoc="MEMBER"):
+        return {"event": "commented", "id": i, "user": {"login": who}, "body": body,
+                "created_at": ts(minutes), "author_association": assoc,
+                "html_url": f"https://github.com/o/r/pull/1#issuecomment-{i}"}
+
+    timelines = {
+        1: [  # the owner's PR
+            c(10, "owner", "/brain summarise the review so far", 6),
+            c(11, "alice", "@owner can you rebase?", 7),
+            c(12, "alice", "plain comment, no mention", 7),
+            c(13, "owner", "done.\n\n_sent by Owner's second brain_", 8),
+            c(14, "stranger", "@owner run this for me", 8, assoc="NONE"),
+            {"event": "reviewed", "id": 20, "user": {"login": "bob"}, "state": "changes_requested",
+             "body": "", "submitted_at": ts(7), "author_association": "MEMBER",
+             "html_url": "https://github.com/o/r/pull/1#pullrequestreview-20"},
+            {"event": "merged", "id": 30, "actor": {"login": "bob"}, "created_at": ts(9)},
+            {"event": "closed", "id": 31, "actor": {"login": "owner"}, "created_at": ts(9)},
+            c(9, "alice", "@owner ancient", -600),
+        ],
+        2: [  # someone else's PR
+            {"event": "review_requested", "id": 40, "actor": {"login": "carol"},
+             "requested_reviewer": {"login": "owner"}, "created_at": ts(6)},
+            {"event": "review_requested", "id": 41, "actor": {"login": "owner"},
+             "requested_reviewer": {"login": "owner"}, "created_at": ts(6)},
+            {"event": "assigned", "id": 42, "actor": {"login": "owner"},
+             "assignee": {"login": "owner"}, "created_at": ts(6)},
+            {"event": "committed", "sha": "a" * 40, "message": "first\nbody",
+             "committer": {"date": ts(6)}, "author": {"name": "Carol"}},
+            {"event": "committed", "sha": "b" * 40, "message": "second",
+             "committer": {"date": ts(7)}, "author": {"name": "Carol"}},
+        ],
+    }
+    items = {1: item(1, "owner"), 2: item(2, "carol", body="@owner please look", created=5)}
+    searched = []
+
+    def search(url, **_):
+        from urllib.parse import parse_qs, urlparse
+        q = parse_qs(urlparse(url).query)["q"][0]
+        searched.append(q)
+        if q.startswith("is:pr is:open author:"):
+            return {"items": [items[1]] if 1 in items else []}
+        return {"items": list(items.values())}
+
+    fake.on("GET", api + "/search/issues", search)
+    for n, tl in timelines.items():
+        fake.on("GET", f"{api}/repos/o/r/issues/{n}/timeline", lambda tl=tl, **_: tl)
+    fake.on("GET", f"{api}/repos/o/r/pulls/1", lambda **_: {"head": {"sha": "c" * 40}})
+    fake.on("GET", f"{api}/repos/o/r/commits/{'c' * 40}/check-runs", lambda **_: {"check_runs": [
+        {"id": 1, "name": "build", "conclusion": "failure", "completed_at": ts(8),
+         "html_url": "https://github.com/o/r/runs/1"},
+        {"id": 2, "name": "lint", "conclusion": "success", "completed_at": ts(8)},
+        {"id": 3, "name": "e2e", "conclusion": "cancelled", "completed_at": ts(8)}]})
+    posted = []
+    fake.on("POST", f"{api}/repos/o/r/issues/1/comments", lambda body, **_: posted.append(body) or {})
+
+    res = trigger.github_poll(cfg, dispatch, now=now + timedelta(minutes=10), gh=gh)
+    ck("the poll ran", res.get("ok"), str(res))
+    ck("the search is since the checkpoint, and asks for review requests and reviewed PRs",
+       any(q.startswith("involves:owner updated:>=2026-09-23T11:58:00Z") for q in searched)
+       and any("review-requested:owner" in q for q in searched)
+       and any("reviewed-by:owner" in q for q in searched), str(searched))
+    reqs = {r["event_id"]: r for r in trigger.list_requests(con, 100)}
+    ids = set(reqs)
+    ck("the owner's own comment with the marker runs, and opens the PR",
+       reqs.get("o/r#1:c10", {}).get("status") == "queued"
+       and trigger.gate_enabled(con, "github:o/r#1"))
+    own = trigger.get_request(con, reqs["o/r#1:c10"]["id"])
+    ck("and it carries the mention's run command, since it is a mention by the owner",
+       own["meta"].get("kind") == "request"
+       and own["meta"].get("do") == trigger.github_events_cfg(cfg)["mention"]["do"])
+    ck("a teammate's mention runs", reqs.get("o/r#1:c11", {}).get("status") == "queued")
+    ck("a comment with no mention does not, while `comment` is off", "o/r#1:c12" not in ids)
+    ck("the brain's own signed comment is not a mention", "o/r#1:c13" not in ids)
+    ck("a stranger's mention runs only because the owner opened this PR",
+       reqs.get("o/r#1:c14", {}).get("reason") == "enabled")
+    ck("a review on the owner's PR runs as a subscription",
+       reqs.get("o/r#1:r20", {}).get("reason") == "subscribed: review")
+    ck("so does the merge", "o/r#1:m30" in ids)
+    ck("nothing older than the window", "o/r#1:c9" not in ids)
+    ck("a review request for the owner runs", "o/r#2:rr40" in ids)
+    ck("so does one the owner made for themselves: what they fire, they act on",
+       reqs.get("o/r#2:rr41", {}).get("reason") == "subscribed: review_requested"
+       and "added yourself as a reviewer" in reqs["o/r#2:rr41"]["text"])
+    ck("assigned and closed stay off until switched on", not {"o/r#2:a42", "o/r#1:x31"} & ids)
+    on = json.loads(json.dumps(cfg))
+    on["github"]["events"] = {**(on["github"].get("events") or {}),
+                              "assigned": {"on": True}, "closed": {"on": True}}
+    evs = {e["event_id"]: e for n in (1, 2) for e in trigger.github_item_events(
+        gh, items[n], now - timedelta(hours=1), on, "owner")}
+    ck("switched on, assigning themselves and closing their own PR count, trusted",
+       evs.get("o/r#2:a42", {}).get("subscribed") and evs.get("o/r#1:x31", {}).get("subscribed")
+       and "You assigned yourself" in evs["o/r#2:a42"]["text"], str(list(evs)))
+    ck("a description that mentions the owner runs", "o/r#2:body" in ids)
+    ck("several commits are one push, named by the newest",
+       "o/r#2:pbbbbbbbbbbbb" in ids and not any(":paaaa" in i for i in ids))
+    ci = reqs.get("o/r#1:ci" + "c" * 12, {})
+    ck("failed checks are one event per commit, and cancelled is not a failure",
+       ci and "build" in ci["text"] and "e2e" not in ci["text"], ci.get("text", ""))
+    order = [trigger.get_request(con, r)["event_id"] for r in ran]
+    ck("handled oldest first, across PRs", order.index("o/r#1:c10") < order.index("o/r#1:c11"))
+
+    req = trigger.get_request(con, reqs["o/r#1:r20"]["id"])
+    prompt = trigger.build_prompt(req, cfg)
+    ck("a subscription's prompt carries its instruction and says not to answer on GitHub",
+       "github_event: review" in prompt and "<<<INSTRUCTIONS\nRead the review" in prompt
+       and "not a\nmessage to answer" not in prompt and "subscribed to" in prompt)
+    prompt = trigger.build_prompt(trigger.get_request(con, reqs["o/r#1:c11"]["id"]), cfg)
+    ck("a mention's prompt replies with a comment",
+       "add a comment on that GitHub pull request" in prompt)
+
+    v = trigger.request_variables(req, cfg)
+    ck("a GitHub request's variables: who, what, where, the title",
+       v["trigger_source"] == "github" and v["trigger_kind"] == "review"
+       and v["trigger_user"] and v["github_repo"] == "o/r" and v["github_number"] == "1"
+       and v["github_item"] == "pull request" and v["trigger_title"]
+       and v["trigger_time"].endswith("+00:00") and v["slack_channel"] == "", v)
+    vcfg = json.loads(json.dumps(cfg))
+    vreq = {**req, "meta": {**req["meta"], "do": "{trigger_user} reviewed {github_repo}#"
+                                                  "{github_number}; see {trigger_link}. {nope}"}}
+    prompt = trigger.build_prompt(vreq, vcfg)
+    ck("a GitHub event's run command has its variables filled in, and an unknown one kept",
+       f"{v['trigger_user']} reviewed o/r#1; see {req['permalink']}. {{nope}}" in prompt)
+
+    before = len(trigger.list_requests(con, 500))
+    trigger.github_poll(cfg, dispatch, now=now + timedelta(minutes=11), gh=gh)
+    ck("an overlapping poll runs nothing twice", len(trigger.list_requests(con, 500)) == before)
+
+    # A stranger on a PR nobody opened: refused, and by default nothing posted.
+    timelines[3] = [c(50, "stranger", "@owner do my homework", 20, assoc="NONE")]
+    items.clear()
+    items[3] = item(3, "stranger", assoc="NONE")
+    fake.on("GET", f"{api}/repos/o/r/issues/3/timeline", lambda **_: timelines[3])
+    fake.on("POST", f"{api}/repos/o/r/issues/3/comments", lambda body, **_: posted.append(body) or {})
+    trigger.github_poll(cfg, dispatch, now=now + timedelta(minutes=21), gh=gh)
+    r = {x["event_id"]: x for x in trigger.list_requests(con, 500)}.get("o/r#3:c50", {})
+    ck("an untrusted mention on a PR nobody opened is refused", r.get("status") == "refused")
+    ck("and, with refusal_notice off, nothing is posted on GitHub", not posted)
+    ck("a GitHub scope can be opened by hand",
+       trigger.set_gate(con, "github:o/r#3", True, by="cli")["ok"]
+       and not trigger.set_gate(con, "github:o/r", True)["ok"])
+
+    loud = {**cfg, "github": {**cfg["github"], "refusal_notice": True}}
+    items.clear()
+    items[4] = item(4, "stranger", assoc="NONE")
+    fake.on("GET", f"{api}/repos/o/r/issues/4/timeline",
+            lambda **_: [c(51, "stranger", "@owner again", 25, assoc="NONE")])
+    fake.on("POST", f"{api}/repos/o/r/issues/4/comments", lambda body, **_: posted.append(body) or {})
+    trigger.github_poll({**loud, "translate_notices": False}, dispatch,
+                        now=now + timedelta(minutes=26), gh=gh)
+    ck("with refusal_notice on, one signed comment says no",
+       len(posted) == 1 and "sent by Owner's second brain" in posted[0]["body"]
+       and "/brain" not in posted[0]["body"], str(posted))
+
+    ck("without a token it says what is missing",
+       "token" in trigger.github_poll({**cfg, "github": {**cfg["github"], "token": ""}},
+                                      dispatch)["error"])
+    res = trigger.check(cfg, offline=True, only="github")
+    ck("the offline check names the events that trigger",
+       res["ready"] and any("ci_failed" in n for n in res["notes"]), str(res))
+
+
 # =================================================================== check
 def test_check(cfg):
     print("\n== check: ready or not, starting nothing ==")
@@ -735,6 +1044,11 @@ def test_save():
         ({"slack": {"bot_token": "xoxp-wrong"}}, "should start with xoxb-"),
         ({"refusals": {"policy": 5}}, "must be text"),
         ({"clear": ["jira.email"]}, "is not a secret"),
+        ({"github": {"token": "xoxb-nope"}}, "should start with ghp_"),
+        ({"github": {"events": {"deploy": {"on": True}}}}, "is not an event"),
+        ({"github": {"events": {"review": {"on": "yes"}}}}, "true or false"),
+        ({"github": {"repos": ["o/r", "bad repo"]}}, "not valid"),
+        ({"github": {"poll_seconds": 5}}, "from 30 to 3600"),
     ):
         r = trigger.save_config(patch)
         ck(f"refused: {needle}", r["ok"] is False and needle in r["error"], str(r))
@@ -742,9 +1056,404 @@ def test_save():
     raw = json.loads(trigger.config_path().read_text())
     ck("both notices and the translation switch are saved",
        raw["refusals"]["policy"] == "Não posso: {reason}" and raw["translate_notices"] is False)
+    trigger.save_config({"github": {"token": "github_pat_abc", "repos": "o/r, acme",
+                                    "events": {"review": {"on": False},
+                                               "ci_failed": {"on": True, "do": "  fix it  "}}}})
+    trigger.save_config({"github": {"events": {"review": {"do": "tell me"}}}})
+    raw = json.loads(trigger.config_path().read_text())
+    ev = trigger.config_summary(trigger.load_config())["github"]["events"]
+    ck("github events merge per kind and per field",
+       raw["github"]["events"]["review"] == {"on": False, "do": "tell me"}
+       and (ev["ci_failed"]["on"], ev["ci_failed"]["do"], ev["ci_failed"]["action"]) == (True, "fix it", "claude")
+       and ev["mention"]["on"] is True
+       and raw["github"]["repos"] == ["o/r", "acme"])
+    ck("a fine-grained token is accepted and never shown",
+       "github_pat_abc" not in json.dumps(trigger.config_summary(trigger.load_config())))
     trigger.save_config({"bogus": 1, "slack": {"bogus": 2}})
     raw = json.loads(trigger.config_path().read_text())
     ck("an unknown key is not written", "bogus" not in raw and "bogus" not in raw.get("slack", {}))
+
+
+# ============================================ access + refusals with no model
+def _calls():
+    f = Path(HOME) / "claude-calls.jsonl"
+    return len(f.read_text().splitlines()) if f.exists() else 0
+
+
+def test_access(cfg):
+    print("\n== access: allowed and blocked users, refusals that cost no model call ==")
+    base = json.loads(json.dumps(cfg))
+    base.pop("refuse_without_model")                       # the default: on
+    base["slack"].update(allowed_users=["UFRIEND"], blocked_users=["UPEST"])
+    ran, dispatch = dispatcher()
+    con = trigger.db()
+
+    fake = install_http()
+    before = _calls()
+    ev = trigger.slack_event(slack_msg("800.1", "UOTHER", "<@UBOT> please"), "C8", base,
+                             bot_user_id="UBOT")
+    res = trigger.handle(ev, base, dispatch, trigger.slack_notify(base))
+    post = calls_to(fake, "chat.postMessage")
+    ck("not accepted: refused, and the notice goes out as written, through the API",
+       res["action"] == "refused" and not ran and len(post) == 1
+       and post[0]["form"]["text"].startswith("I'm not enabled"), str(res))
+    ck("and no model was called for it", _calls() == before)
+
+    no_user = json.loads(json.dumps(base))
+    no_user["slack"].pop("user_token")
+    fake = install_http()
+    ev = trigger.slack_event(slack_msg("800.2", "UOTHER", "<@UBOT> please"), "C7", no_user,
+                             bot_user_id="UBOT")
+    res = trigger.handle(ev, no_user, dispatch, trigger.slack_notify(no_user))
+    ck("with no user token there is no model-free way to post: only logged, no session",
+       res["action"] == "refused" and _calls() == before and not calls_to(fake, "chat.postMessage")
+       and trigger.actions_for(con, res["request_id"])[-1]["kind"] == "refusal-notice-skipped")
+
+    ev = trigger.slack_event(slack_msg("800.3", "UFRIEND", "<@UBOT> hi"), "C8", base,
+                             bot_user_id="UBOT")
+    res = trigger.handle(ev, base, dispatch)
+    ck("an allowed user runs in a conversation nobody opened",
+       res["action"] == "run" and ran == [res["request_id"]]
+       and trigger.get_request(con, res["request_id"])["reason"] == "allowed user")
+    ck("and opens nothing for anyone else", not trigger.gate_enabled(con, "slack:C8:800.3"))
+
+    trigger.set_gate(con, "slack:C8", True, by="test")
+    fake = install_http()
+    ev = trigger.slack_event(slack_msg("800.4", "UPEST", "<@UBOT> hi"), "C8", base,
+                             bot_user_id="UBOT")
+    res = trigger.handle(ev, base, dispatch, trigger.slack_notify(base))
+    post = calls_to(fake, "chat.postMessage")
+    ck("a blocked user is refused even in an open channel, with the not-allowed notice",
+       res["action"] == "refused" and len(ran) == 1 and post
+       and post[0]["form"]["text"].startswith("You can't ask me that here")
+       and trigger.get_request(con, res["request_id"])["reason"] == "blocked")
+    trigger.set_gate(con, "slack:C8", False, by="test")
+    ev = trigger.slack_event(slack_msg("800.5", "UOWNER", "<@UBOT> go"), "C8",
+                             {**base, "slack": {**base["slack"], "blocked_users": ["UOWNER"]}},
+                             bot_user_id="UBOT")
+    ck("the owner is never blocked", trigger.handle(ev, base, dispatch)["action"] == "run")
+    ck("the lists save upper-cased and checked",
+       trigger.save_config({"slack": {"allowed_users": "u1abc, U2DEF"}})["ok"]
+       and trigger.load_config()["slack"]["allowed_users"] == ["U1ABC", "U2DEF"]
+       and not trigger.save_config({"slack": {"blocked_users": ["not a user"]}})["ok"])
+    trigger.save_config({"slack": {"allowed_users": []}})
+
+
+# ============================================================ actions
+def _script(name, text, mode=0o755):
+    d = trigger.graph.scripts_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    (d / name).write_text(text)
+    (d / name).chmod(mode)
+
+
+ECHO = """#!/usr/bin/env python3
+import json, os, sys
+print(json.dumps({"argv": sys.argv[1:], "user": os.environ.get("BRAIN_TRIGGER_USER"),
+                  "command": os.environ.get("BRAIN_COMMAND"),
+                  "args": json.loads(os.environ.get("BRAIN_ARGS_JSON") or "[]"),
+                  "rid": os.environ.get("MEMORY_LEDGER_REQUEST_ID")}))
+"""
+
+
+def test_commands(cfg):
+    print("\n== commands: @brain <name> {a, b}, matched by a pattern, any action ==")
+    _script("echo.py", ECHO)
+    _script("plain.py", ECHO, mode=0o644)
+    ccfg = json.loads(json.dumps(cfg))
+    ccfg["slack"]["commands"] = [
+        {"name": "deploy", "action": "script", "script": {"name": "echo.py"}},
+        {"name": "ship", "action": "script", "anyone": True,
+         "script": {"name": "plain.py", "args": ["--env={arg_1}", "{trigger_user_id}"]}},
+        {"name": "ticket", "pattern": r"^ticket (?P<key>[A-Z]+-\d+)", "anyone": True,
+         "action": "http", "http": {"method": "POST", "url": "https://hook.example/t/{key}?who={trigger_user}",
+                                    "headers": {"X-Who": "{trigger_user}"},
+                                    "body": '{"text": "{trigger_content}", "key": "{key}"}'}},
+        {"name": "ask", "anyone": True, "do": "Answer {arg_1} briefly."},
+        {"name": "off", "on": False, "action": "script", "script": {"name": "echo.py"}},
+    ]
+    ran, dispatch = dispatcher()
+    con = trigger.db()
+    install_http()
+
+    cmd, v = trigger.match_command(ccfg, "<@UBOT> deploy {staging, v1.2 ,  now}", "UBOT")
+    ck("the name, then the braces: split on commas and trimmed",
+       cmd["name"] == "deploy" and v["args"] == "staging, v1.2 ,  now" and v["arg_1"] == "staging"
+       and v["arg_2"] == "v1.2" and v["arg_3"] == "now" and v["arg_4"] == ""
+       and v["args_list"] == ["staging", "v1.2", "now"], str(v))
+    ck("case does not matter, a longer word is not the command, and an off one never matches",
+       trigger.match_command(ccfg, "<@UBOT> DEPLOY", "UBOT")[0]["name"] == "deploy"
+       and trigger.match_command(ccfg, "<@UBOT> deployment plan", "UBOT")[0] is None
+       and trigger.match_command(ccfg, "<@UBOT> off {x}", "UBOT")[0] is None)
+    cmd, v = trigger.match_command(ccfg, "<@UBOT> ticket PROJ-12 please", "UBOT")
+    ck("a pattern's named groups are variables", cmd["name"] == "ticket" and v["key"] == "PROJ-12")
+
+    ev = trigger.slack_event(slack_msg("900.1", "UOWNER", "<@UBOT> deploy {staging; rm -rf ~, $(id)}"),
+                             "C5", ccfg, bot_user_id="UBOT")
+    ck("a command is its own kind, carries its action, and opens nothing",
+       ev["meta"]["kind"] == "command" and ev["meta"]["command"] == "deploy"
+       and ev["meta"]["action"]["type"] == "script" and ev["opens"] is False)
+    res = trigger.handle(ev, ccfg, dispatch)
+    out = trigger.run_request(res["request_id"], ccfg)
+    req = trigger.get_request(con, res["request_id"])
+    got = json.loads(req["result"])
+    ck("the owner's command runs the script, no session", out["status"] == "done"
+       and not trigger.gate_enabled(con, "slack:C5:900.1"), str(out))
+    ck("its arguments arrive as argv items, never through a shell",
+       got["argv"] == ["staging; rm -rf ~", "$(id)"] and got["args"] == got["argv"], str(got))
+    ck("with every variable in the environment, and the request id",
+       got["user"] == "Name UOWNER" and got["command"] == "deploy"
+       and got["rid"] == res["request_id"])
+    ck("and the run is logged as an action",
+       [a["kind"] for a in trigger.actions_for(con, res["request_id"])] == ["script"])
+
+    fake = install_http()
+    ev = trigger.slack_event(slack_msg("900.2", "UOTHER", "<@UBOT> deploy {prod}"), "C5", ccfg,
+                             bot_user_id="UBOT")
+    trigger.set_gate(con, "slack:C5", True, by="test")
+    res = trigger.handle(ev, ccfg, dispatch, trigger.slack_notify(ccfg))
+    ck("someone else may not run an owner-only command, even in an open channel",
+       res["action"] == "refused" and trigger.get_request(con, res["request_id"])["reason"]
+       == "owner-only command")
+    ev = trigger.slack_event(slack_msg("900.3", "UOTHER", "<@UBOT> ship {prod}"), "C5", ccfg,
+                             bot_user_id="UBOT")
+    res = trigger.handle(ev, ccfg, dispatch)
+    out = trigger.run_request(res["request_id"], ccfg)
+    got = json.loads(trigger.get_request(con, res["request_id"])["result"])
+    ck("an `anyone` command runs for someone the gate lets in, and a file that is not "
+       "executable runs through its interpreter", out["status"] == "done", str(out))
+    ck("its own arguments are templates, one argv item each",
+       got["argv"] == ["--env=prod", "UOTHER"], str(got))
+    trigger.set_gate(con, "slack:C5", False, by="test")
+
+    sent = []
+    trigger.http_raw = lambda method, url, headers=None, data=None, timeout=30: (
+        sent.append({"method": method, "url": url, "headers": headers, "data": data}) or (201, "ok"))
+    ev = trigger.slack_event(slack_msg("900.4", "UOWNER", '<@UBOT> ticket PROJ-9 "quoted" & more'),
+                             "C5", ccfg, bot_user_id="UBOT")
+    res = trigger.handle(ev, ccfg, dispatch)
+    out = trigger.run_request(res["request_id"], ccfg)
+    body = json.loads(sent[-1]["data"].decode())
+    ck("an http command calls the API", out["status"] == "done" and sent[-1]["method"] == "POST")
+    ck("values are percent-encoded in the URL",
+       sent[-1]["url"] == "https://hook.example/t/PROJ-9?who=Name%20UOWNER", sent[-1]["url"])
+    ck("and JSON-escaped in a JSON body, so a quote cannot end the string",
+       body == {"text": '<@UBOT> ticket PROJ-9 "quoted" & more', "key": "PROJ-9"}
+       and sent[-1]["headers"]["Content-Type"].startswith("application/json"), str(body))
+    trigger.http_raw = lambda method, url, headers=None, data=None, timeout=30: (500, "boom")
+    ev = trigger.slack_event(slack_msg("900.5", "UOWNER", "<@UBOT> ticket PROJ-10"), "C5", ccfg,
+                             bot_user_id="UBOT")
+    out = trigger.run_request(trigger.handle(ev, ccfg, dispatch)["request_id"], ccfg)
+    ck("a 500 is a failure", out["status"] == "failed")
+
+    ev = trigger.slack_event(slack_msg("900.6", "UOWNER", "<@UBOT> ask {the rota}"), "C5", ccfg,
+                             bot_user_id="UBOT")
+    req = trigger.get_request(con, trigger.handle(ev, ccfg, dispatch)["request_id"])
+    prompt = trigger.build_prompt(req, ccfg)
+    ck("a claude command's run command fills in its arguments, and the session is told",
+       "Answer the rota briefly." in prompt and "command: ask" in prompt
+       and 'command_args: ["the rota"]' in prompt and "slack_event: command" in prompt)
+
+    for patch, needle in (
+        ({"slack": {"commands": [{"name": "bad name"}]}}, "is not a name"),
+        ({"slack": {"commands": [{"name": "a"}, {"name": "A"}]}}, "two commands"),
+        ({"slack": {"commands": [{"name": "a", "pattern": "("}]}}, "not a regular expression"),
+        ({"slack": {"commands": [{"name": "a", "pattern": "(?P<owner>x)"}]}}, "already a variable"),
+        ({"slack": {"commands": [{"name": "a", "do": "{nope}"}]}}, "{nope}"),
+        ({"slack": {"commands": [{"name": "a", "action": "script",
+                                  "script": {"name": "missing.sh"}}]}}, "no script missing.sh"),
+        ({"slack": {"commands": [{"name": "a", "action": "http"}]}}, "needs a URL"),
+        ({"slack": {"commands": [{"name": "a", "action": "http",
+                                  "http": {"url": "{trigger_link}"}}]}}, "must start with http"),
+        ({"slack": {"commands": [{"name": "a", "action": "http",
+                                  "http": {"url": "https://x", "headers": {"X": "a\nb"}}}]}},
+         "one line"),
+        ({"slack": {"commands": [{"name": "a", "action": "script",
+                                  "script": {"name": "../x"}}]}}, "bare filename"),
+        ({"jira": {"events": {"transitioned": {"on": True, "action": "shell"}}}}, "must be one of"),
+    ):
+        r = trigger.save_config(patch)
+        ck(f"refused: {needle}", r["ok"] is False and needle in r["error"], str(r))
+    r = trigger.save_config({"slack": {"commands": [
+        {"name": "t", "pattern": r"^t (?P<key>\w+)", "do": "look at {key} for {trigger_user}"}]}})
+    ck("a pattern's groups may be used in its own run command",
+       r["ok"] and r["config"]["slack"]["commands"][0]["do"] == "look at {key} for {trigger_user}",
+       str(r)[:200])
+    trigger.save_config({"slack": {"commands": []}})
+
+
+def test_slack_member(cfg):
+    print("\n== slack: the bot added to or removed from a channel ==")
+    fake = install_http()
+    fake.on("POST", trigger.SLACK_API + "conversations.info",
+            lambda form, **_: {"ok": True, "channel": {"name": "ops"}})
+    mcfg = json.loads(json.dumps(cfg))
+    joined = {"type": "member_joined_channel", "user": "UBOT", "channel": "C77",
+              "inviter": "UOWNER", "event_ts": "1700000100.000001"}
+    ck("switched off, it is nothing",
+       trigger.slack_member_event(joined, mcfg, bot_user_id="UBOT") is None)
+    mcfg["slack"]["events"] = {"joined_channel": {"on": True},
+                               "left_channel": {"on": True, "action": "script",
+                                                "script": {"name": "echo.py"}}}
+    ck("another member joining is nothing", trigger.slack_member_event(
+        {**joined, "user": "USOMEONE"}, mcfg, bot_user_id="UBOT") is None)
+    ev = trigger.slack_member_event(joined, mcfg, bot_user_id="UBOT")
+    ran, dispatch = dispatcher()
+    con = trigger.db()
+    res = trigger.handle(ev, mcfg, dispatch)
+    req = trigger.get_request(con, res["request_id"])
+    v = trigger.request_variables(req, mcfg)
+    ck("the bot added: a subscribed run, with who and where",
+       res["action"] == "run" and req["reason"] == "subscribed: joined_channel"
+       and v["trigger_kind"] == "joined_channel" and v["slack_channel_name"] == "ops"
+       and v["trigger_user"] == "Name UOWNER" and v["trigger_user_is_owner"] == "true")
+    ck("even when the owner did it, it opens nothing: the channel is not open to everyone",
+       not trigger.gate_enabled(con, "slack:C77"))
+    prompt = trigger.build_prompt(req, mcfg)
+    ck("the session is told it is not answering anyone",
+       "slack_event: joined_channel" in prompt and "none by default" in prompt
+       and "added me to #ops" in prompt)
+    ev = trigger.slack_member_event({"type": "member_left_channel", "user": "UBOT",
+                                     "channel": "C77", "event_ts": "1700000200.1"},
+                                    mcfg, bot_user_id="UBOT")
+    res = trigger.handle(ev, mcfg, dispatch)
+    out = trigger.run_request(res["request_id"], mcfg)
+    ck("removed, running its script", ev["meta"]["kind"] == "left_channel"
+       and out["status"] == "done", str(out))
+
+
+def test_jira_changes(cfg):
+    print("\n== jira: transitions, assignments and comments on watched issues ==")
+    fake = install_http()
+    jcfg = json.loads(json.dumps(cfg))
+    jcfg["jira"]["events"] = {k: {"on": True} for k in trigger.JIRA_CHANGE_KINDS}
+    jira = trigger.Jira(jcfg)
+    base = jcfg["jira"]["base_url"]
+    now = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)
+    con = trigger.db()
+    trigger.set_checkpoint(con, "jira", now.isoformat(), only_forward=False)
+
+    def ts(minutes):
+        return (now + timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%S.000+0000")
+
+    x = {"accountId": "acc-x", "displayName": "X"}
+    me = {"accountId": "acc-owner", "displayName": "Owner"}
+    issue = {"key": "OPS-3", "fields": {"summary": "Rotate keys"}, "changelog": {"histories": [
+        {"id": "70", "created": ts(4), "author": me, "items": [
+            {"field": "status", "fromString": "To Do", "toString": "In Progress"},
+            {"field": "assignee", "from": None, "fromString": None, "to": "acc-owner",
+             "toString": "Owner"}]},
+        {"id": "71", "created": ts(6), "author": x, "items": [
+            {"field": "assignee", "from": "acc-owner", "fromString": "Owner", "to": None,
+             "toString": None}]},
+        {"id": "60", "created": ts(-900), "author": x, "items": [
+            {"field": "status", "fromString": "A", "toString": "B"}]}]}}
+    searched = []
+
+    def search(body, **_):
+        searched.append(body)
+        if "currentUser()" in body["jql"]:
+            return {"issues": [issue], "isLast": True}
+        return {"issues": [], "isLast": True}
+    fake.on("POST", base + "/rest/api/3/search/jql", search)
+    fake.on("GET", base + "/rest/api/3/issue/OPS-3/comment", lambda **_: {"comments": [
+        {"id": "31", "created": ts(7), "author": x, "body": adf("can you rotate the staging one too?")},
+        {"id": "30", "created": ts(5), "author": me, "body": adf("on it")}]})
+    ran, dispatch = dispatcher()
+    res = trigger.jira_poll(jcfg, dispatch, now=now + timedelta(minutes=10), jira=jira)
+    watch = [b for b in searched if "currentUser()" in b["jql"]]
+    ck("changes are read on the watched issues, with the changelog",
+       watch and watch[-1].get("expand") == "changelog"
+       and "AND (assignee = currentUser()" in watch[-1]["jql"], str(searched))
+    reqs = [trigger.get_request(con, r) for r in ran]
+    kinds = [r["meta"]["kind"] for r in reqs]
+    ck("a transition, an assignment, an unassignment and a colleague's comment, oldest first",
+       kinds == ["transitioned", "assigned", "unassigned", "comment"], str(kinds))
+    v = {r["meta"]["kind"]: trigger.request_variables(r, jcfg) for r in reqs}
+    ck("the transition's from and to",
+       v["transitioned"]["jira_from"] == "To Do" and v["transitioned"]["jira_to"] == "In Progress"
+       and v["transitioned"]["trigger_user_is_owner"] == "true")
+    ck("whom it was assigned to, and who had it",
+       v["assigned"]["jira_assignee"] == "Owner" and v["assigned"]["jira_assignee_id"] == "acc-owner"
+       and v["unassigned"]["jira_previous_assignee"] == "Owner"
+       and v["unassigned"]["jira_assignee"] == "")
+    ck("the owner's own plain comment is conversation, not a trigger",
+       all(r["event_id"] != "OPS-3:comment:30" for r in reqs))
+    ck("a change the owner made counts, and none of it opens the issue",
+       reqs[0]["reason"] == "subscribed: transitioned" and not trigger.gate_enabled(con, "jira:OPS-3"))
+    ck("a change older than the window is not read", all(":h60:" not in r["event_id"] for r in reqs))
+    prompt = trigger.build_prompt(reqs[0], jcfg)
+    ck("the session gets the event and its run command, and posts nothing by default",
+       "jira_event: transitioned" in prompt and "moved from To Do to In Progress" in prompt
+       and "post on Jira only if it says to" in prompt)
+    again = []
+    trigger.jira_poll(jcfg, lambda rid: again.append(rid), now=now + timedelta(minutes=11), jira=jira)
+    ck("an overlapping poll runs nothing twice", not again)
+
+
+def test_slack_dms(cfg):
+    print("\n== slack: the brain tagged in a DM with the owner ==")
+    fake = install_http()
+    dcfg = json.loads(json.dumps(cfg))
+    dcfg.pop("refuse_without_model")
+    dcfg["slack"]["dms"] = True
+    ran, dispatch = dispatcher()
+    con = trigger.db()
+    ck("a tag with a label, as Slack writes it outside the bot's channels, is a tag",
+       trigger.mentions_bot("<@UBOT|brain> test", "UBOT")
+       and not trigger.mentions_bot("<@UBOTX> test", "UBOT"))
+
+    def dm(ts, user, text, thread=None):
+        m = {"type": "message", "channel_type": "im", "channel": "D1", "ts": ts, "user": user,
+             "text": text}
+        if thread:
+            m["thread_ts"] = thread
+        return m
+
+    ev = trigger.slack_event(dm("950.1", "UANA", "<@UBOT|brain> what is on my plate?"), "D1",
+                             dcfg, bot_user_id="UBOT")
+    ck("a DM is one conversation, the whole DM",
+       ev["scope"] == "slack:D1" and ev["parent_scope"] == "" and ev["meta"]["channel_type"] == "im")
+    res = trigger.handle(ev, dcfg, dispatch, trigger.slack_notify(dcfg))
+    post = calls_to(fake, "chat.postMessage")
+    ck("someone else's tag in a DM nobody opened is refused, the notice in the DM, not a thread",
+       res["action"] == "refused" and post and post[-1]["form"]["channel"] == "D1"
+       and "thread_ts" not in post[-1]["form"], str(post[-1:]))
+    ck("its link was asked for with the user token (the bot is not in the DM)",
+       calls_to(fake, "chat.getPermalink")[-1]["form"]["channel"] == "D1")
+
+    own = trigger.slack_event(dm("950.2", "UOWNER", "<@UBOT> help Ana with this"), "D1", dcfg,
+                              bot_user_id="UBOT")
+    res = trigger.handle(own, dcfg, dispatch)
+    ck("the owner's tag runs and opens that DM", res["action"] == "run"
+       and trigger.gate_enabled(con, "slack:D1"))
+    again = trigger.slack_event(dm("950.3", "UANA", "<@UBOT> and the rota?"), "D1", dcfg,
+                                bot_user_id="UBOT")
+    res = trigger.handle(again, dcfg, dispatch)
+    ck("then the other person's next tag, not in any thread, runs", res["action"] == "run")
+    prompt = trigger.build_prompt(trigger.get_request(con, res["request_id"]), dcfg)
+    ck("and the session replies in the DM as a new message, not a thread",
+       "reply in that direct message, as the owner, as a new message" in prompt)
+
+    open_cfg = json.loads(json.dumps(dcfg))
+    open_cfg["slack"]["dms_open"] = True
+    ev = trigger.slack_event(dm("950.4", "UBO", "<@UBOT> hi"), "D2", open_cfg, bot_user_id="UBOT")
+    res = trigger.handle(ev, open_cfg, dispatch)
+    ck("with dms_open, anyone in a DM with the owner gets in",
+       res["action"] == "run"
+       and trigger.get_request(con, res["request_id"])["reason"] == "direct message"
+       and not trigger.gate_enabled(con, "slack:D2"))
+    blocked = json.loads(json.dumps(open_cfg))
+    blocked["slack"]["blocked_users"] = ["UBO"]
+    ev = trigger.slack_event(dm("950.5", "UBO", "<@UBOT> hi"), "D2", blocked, bot_user_id="UBOT")
+    ck("but not someone blocked", trigger.handle(ev, blocked, dispatch)["action"] == "refused")
+    ck("a message without the tag is nothing",
+       trigger.slack_event(dm("950.6", "UBO", "hello"), "D2", open_cfg, bot_user_id="UBOT") is None)
+    no_user = json.loads(json.dumps(dcfg))
+    no_user["slack"].pop("user_token")
+    chk = trigger.check(trigger._merge(trigger.DEFAULTS, no_user), offline=True, only="slack")
+    ck("dms without a user token is a problem the check names",
+       any("slack.dms is on but there is no user_token" in x for x in chk["problems"]), str(chk))
 
 
 def main():
@@ -755,13 +1464,21 @@ def main():
         test_loops(cfg)
         test_audit(cfg)
         test_dispatch(cfg)
+        test_logging(cfg)
+        test_run_commands(cfg)
         test_slack_catch_up(cfg)
         test_jira(cfg)
+        test_github(cfg)
         test_check(cfg)
         test_channels(cfg)
         test_notices(cfg)
         test_decline(cfg)
         test_session_hygiene(cfg)
+        test_access(cfg)
+        test_commands(cfg)
+        test_slack_member(cfg)
+        test_jira_changes(cfg)
+        test_slack_dms(cfg)
         test_save()
     finally:
         import shutil

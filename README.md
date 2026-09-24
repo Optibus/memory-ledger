@@ -159,7 +159,7 @@ off switch, since the bootstrap hook recreates it on the next session; see
 | `delegate` | Hand a task to a person/agent and track the follow-up. |
 | `writing-style` | Learn your voice and write as you, in your language, at the register the reader can act on. |
 | `export-memory` | Dump the whole graph to Markdown / JSON. |
-| `respond` | Answer a Slack or Jira mention as you, from a headless session the trigger engine starts ([triggers](docs/trigger.md)). |
+| `respond` | Answer a Slack, Jira or GitHub mention as you (or act on a GitHub PR change you subscribed to), from a headless session the trigger engine starts ([triggers](docs/trigger.md)). |
 
 **Every skill is a contract, not a script** (CONVENTIONS §5). Each one declares
 what must be TRUE when it finishes, what it reads and writes in the graph, and
@@ -194,9 +194,14 @@ them into your calendar's free windows — batching by context and protecting on
 deep block, because the cheapest day is the one with the fewest re-entries, not
 the fullest one. Ends with one clear first action.
 **Mention it instead of opening it.** With `<home>/trigger.json` set up, a
-mention in a Slack thread or a marked Jira comment starts a headless session that
-answers there as you, signed as your second brain, and logs who asked for what
-under a request id. Closed conversations stay closed until you open them. See
+mention in a Slack thread, a marked Jira comment, a GitHub mention or a PR change
+you picked (reviews, review requests, failing checks, merges; a Jira issue moving
+status or changing hands; the bot added to a Slack channel) starts a headless
+session that answers there as you, signed as your second brain, and logs who asked for what
+under a request id. A Slack command (`@brain deploy {staging, v1.2}`) can do the
+same, or call an API or run one of your scripts with no model call at all.
+Closed conversations stay closed until you open them, and turning someone away
+costs nothing. See
 [docs/trigger.md](docs/trigger.md).
 **`/neo4j-up`** stands up the optional local graph database (Docker, one command,
 data under `~/.second_brain/neo4j`) and points the brain at it.
@@ -490,8 +495,10 @@ hamburger menu on the left (`m` toggles it):
   replacement, so a capture that said "Isa" still resolves to Isadora. The engine
   proposes the most connected node as canonical — a radio overrules it, because
   only a human can say which spelling is the real person.
-- **Skills** — the two contract trees (built-in and learned), nested by the
-  `requires` edge, beside the rule catalogue, with one filter over both. Open a
+- **Capabilities** — skills, rules, processes and scripts, in that order. The
+  two contract trees (built-in and learned), nested by the
+  `requires` edge, beside the rule catalogue, the processes, and your local
+  scripts in `<home>/scripts`, with one filter over all of them. Open a
   skill to see what it reads and writes in the graph, the rules it answers to,
   and **its relations one level deep**; open a rule to read it in full. The `+`
   button authors a new skill or rule — see
@@ -532,7 +539,7 @@ uses (`graph.py suggest-links "…"`).
 
 ### Grow the brain from the page
 
-The `+` on the Skills section writes new **contracts** — a rule, or a skill —
+The `+` on the Capabilities section writes new **contracts** — a rule, or a skill —
 without a model call. Both forms are generated from the shapes the server sends,
 so the page can never disagree with the engine about what a contract is, and both
 are **refused when a required section is empty**: a rule with no `JUDGED AGAINST`
@@ -563,7 +570,7 @@ python3 scripts/graph.py export-skills --dir ~/brain-out   # SKILL.md + rules/
 python3 scripts/graph.py ingest-skills --dir ~/brain-out   # on the other machine
 ```
 
-Or the two buttons on the Skills section. The export writes one folder per skill
+Or the two buttons on the Capabilities section. The export writes one folder per skill
 plus every rule they honor; the ingest reads the rules first so the skills can
 link to them. A round trip is lossless — contract, declarations and `honors`
 edges all survive — and it never overwrites a rule the receiving brain already
@@ -586,14 +593,30 @@ requires — so the dependency tree survives the trip. Rules a selected skill
 honors travel with it; a skill it *requires* that you did not pick is named in
 the report rather than added behind your back.
 
-In the browser this is the **Options** menu on the Skills section: *Select
-processes, skills and rules* puts a checkbox on every card, and the bar that
+In the browser this is the **Options** menu on the Capabilities section: *Select
+skills, rules, processes and scripts* puts a checkbox on every card, and the bar that
 appears exports or deletes what you ticked. *Import from a bundle* opens a zip,
 lists what is in it, and for anything this brain already holds asks whether to
 **update**, **replace** or **ignore** it — nothing is written until you confirm.
 Processes in a bundle land in your current realm unless you pick another.
 
-New things are written from the floating **+** button (or `n`) on the Skills
+### Carry your own scripts
+
+The automation in `<home>/scripts` (too tied to one person's setup to ship in the
+plugin) is listed under **Scripts** on the Capabilities section. Open one to read
+it; the brain never runs one on its own, only a script you linked to a trigger
+([docs/trigger.md](docs/trigger.md#actions)). *Options › Export all scripts* zips them with their
+executable bits; *Import scripts…* takes that zip, or one loose file, shows which
+are new, identical or different from yours, and keeps yours unless you say
+**Replace** — the replaced file is copied to `<home>/backups/` first.
+
+```bash
+python3 scripts/graph.py scripts
+python3 scripts/graph.py export-scripts                       # all of them
+python3 scripts/graph.py import-scripts --zip scripts-*.zip --all --mode keep
+```
+
+New things are written from the floating **+** button (or `n`) on the Capabilities
 section: *a process* (title, when it applies, steps, and a realm dropdown of the
 brain's realms, starting on the current one), *a skill* or *a rule*. What it writes appears on the page at once,
 and a process saved in a realm the filter is not showing adds that realm to it.

@@ -493,8 +493,8 @@ def trigger_config(data: m.TriggerConfig = body(m.TriggerConfig)):
 
 
 @router.post("/trigger-check", tags=["trigger"], summary="Check that a service is ready",
-             description="Validates the configuration, and unless `offline`, calls Slack and "
-                         "Jira with the stored tokens to prove they work. Starts nothing and "
+             description="Validates the configuration, and unless `offline`, calls Slack, "
+                         "Jira and GitHub with the stored tokens to prove they work. Starts nothing and "
                          "writes nothing. `ready` is the verdict; `ok` means the check ran.")
 def trigger_check(data: m.TriggerCheck = body(m.TriggerCheck)):
     return reply(trigger.check(trigger.load_config(), offline=data.offline is True,
@@ -727,6 +727,80 @@ def import_bundle(data: m.ImportBundle = body(m.ImportBundle)):
         # accumulate every bundle anyone ever previewed
         path.unlink(missing_ok=True)
     return reply(res)
+
+
+# --------------------------------------------- local scripts (§5c)
+@router.post("/export-scripts", tags=["scripts"], summary="Zip local scripts",
+             description="All of them when `names` is empty. The zip lands in "
+                         "`<home>/bundles` and downloads from `/api/bundle`.")
+def export_scripts(data: m.ExportScripts = body(m.ExportScripts)):
+    res = graph.export_scripts([n[:200] for n in data.names[:500] if n])
+    if res.get("ok"):
+        res["download"] = "/api/bundle?name=" + quote(res["name"])
+    return reply(res)
+
+
+@router.post("/upload-scripts", tags=["scripts"],
+             summary="Stage a scripts zip (or one file) and read what is in it",
+             description="READS ONLY — nothing is written to `<home>/scripts`. Returns "
+                         "a one-shot token and every script with whether a local file "
+                         "by that name exists and is identical.")
+def upload_scripts(data: m.UploadScripts = body(m.UploadScripts)):
+    if not data.data:
+        return reply({"ok": False, "error": "no file was sent"})
+    try:
+        blob = base64.b64decode(data.data.split(",")[-1], validate=True)
+    except (binascii.Error, ValueError):
+        return reply({"ok": False, "error": "the upload was not valid base64"})
+    if len(blob) > commands.MAX_BUNDLE_BYTES:
+        return reply({"ok": False, "error": "that file is larger than "
+                      f"{commands.MAX_BUNDLE_BYTES // (1024 * 1024)}MB"})
+    filename = clip(data.filename, 200)
+    token = secrets.token_hex(16)
+    path = commands.incoming_dir() / f"{token}.zip"
+    if blob[:2] == b"PK" or filename.lower().endswith(".zip"):
+        path.write_bytes(blob)
+    else:
+        wrapped = graph.wrap_script(blob, filename, path)
+        if not wrapped.get("ok"):
+            return reply(wrapped)
+    res = graph.inspect_scripts(path)
+    if not res.get("ok"):
+        path.unlink(missing_ok=True)
+        return reply(res)
+    res.pop("path", None)
+    res["token"] = token
+    res["filename"] = filename
+    return reply(res)
+
+
+@router.post("/create-script", tags=["scripts"], summary="Write one local script",
+             description="What a trigger's *new script* does. An existing name is refused "
+                         "unless `replace`, and then its old bytes go to "
+                         "`<home>/backups/scripts-<stamp>/` first.")
+def create_script(data: m.CreateScript = body(m.CreateScript)):
+    return reply(graph.write_script(clip(data.name, 200), data.text or "",
+                                    executable=data.executable is not False,
+                                    replace=data.replace is True))
+
+
+@router.post("/import-scripts", tags=["scripts"], summary="Apply a staged scripts upload",
+             description="Consumes the token. A new script is written for either mode; "
+                         "an existing one is overwritten only for `replace`, after its "
+                         "old bytes are copied to `<home>/backups/scripts-<stamp>/`.")
+def import_scripts(data: m.ImportScripts = body(m.ImportScripts)):
+    path = commands.staged(clip(data.token, 64))
+    if not path:
+        return reply({"ok": False,
+                      "error": "that upload is no longer staged — choose the file again"})
+    select = {k[:200]: v for k, v in list((data.select or {}).items())[:500]
+              if v in graph.SCRIPT_MODES}
+    if not select:
+        return reply({"ok": False, "error": "nothing was selected to import"})
+    try:
+        return reply(graph.import_scripts(path, select))
+    finally:
+        path.unlink(missing_ok=True)
 
 
 @router.post("/delete-contracts", tags=["contracts"],

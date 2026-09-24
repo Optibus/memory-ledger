@@ -5,21 +5,30 @@ import { useAsync } from "@/hooks/useAsync";
 import { Badge, Button, Card, Checkbox, Field, Spinner, StatusMessage, TextInput } from "@/components";
 import type { BadgeTone } from "@/components";
 import type {
+  GitHubEventKind,
+  JiraEventKind,
+  ScriptsPayload,
+  SlackCommand,
+  SlackEventKind,
   TriggerChannelRow,
   TriggerChannels,
   TriggerCheck,
   TriggerConfig,
+  TriggerEventSetting,
   TriggerSecret,
   TriggerService,
   TriggerStatus,
+  TriggerVariable,
   TriggerWatcher,
 } from "@/api/types";
+import { CommandsEditor, EventsEditor, FoldButton, useFold } from "./TriggerActions";
+import type { EventKindInfo, ScriptsState } from "./TriggerActions";
 import "./SettingsSection.css";
 
 type Out = { text: string; tone: "info" | "error" | "success" } | null;
 
 /**
- * Summoning the brain from Slack and Jira (docs/trigger.md).
+ * Summoning the brain from Slack, Jira and GitHub (docs/trigger.md).
  *
  * Everything here writes `<home>/trigger.json` through the server, which
  * restarts its watchers on the new file — so a switch flipped here is a watcher
@@ -33,6 +42,12 @@ type Out = { text: string; tone: "info" | "error" | "success" } | null;
  */
 export function TriggerCard({ writable }: { writable: boolean }) {
   const status = useAsync<TriggerStatus>((signal) => api.trigger(signal), []);
+  const scriptsReq = useAsync<ScriptsPayload>((signal) => api.scripts(signal), []);
+  const scripts: ScriptsState = {
+    list: scriptsReq.data?.scripts ?? [],
+    dir: scriptsReq.data?.dir ?? "",
+    reload: () => scriptsReq.reload(),
+  };
 
   if (status.loading && !status.data) return <Spinner label="reading triggers" />;
   if (status.error) return <StatusMessage tone="error">{status.error}</StatusMessage>;
@@ -50,8 +65,9 @@ export function TriggerCard({ writable }: { writable: boolean }) {
       </h2>
       <p className="ml-settings__hint">
         Mention the brain in a Slack thread, or in a Jira comment that mentions you with the marker,
-        and a headless Claude Code session answers there as you, signed as your second brain. Only
-        conversations you opened with your own mention accept anyone else&rsquo;s. Saved to{" "}
+        and a headless Claude Code session answers there as you, signed as your second brain. On
+        GitHub, the pull request changes you pick below start one too. Only conversations you opened
+        with your own mention accept anyone else&rsquo;s. Saved to{" "}
         <code>{config.path}</code>, mode 600.
       </p>
 
@@ -63,6 +79,7 @@ export function TriggerCard({ writable }: { writable: boolean }) {
       ) : null}
       {config.problem ? <StatusMessage tone="error">{config.problem}</StatusMessage> : null}
 
+      <VariablesGuide variables={config.variables} />
       <MasterSwitch config={config} writable={writable} onSaved={reload} />
 
       <SlackPanel
@@ -71,13 +88,67 @@ export function TriggerCard({ writable }: { writable: boolean }) {
         watcher={runtime.slack}
         writable={writable}
         onSaved={reload}
+        scripts={scripts}
       />
-      <JiraPanel config={config} watcher={runtime.jira} writable={writable} onSaved={reload} />
+      <JiraPanel config={config} watcher={runtime.jira} writable={writable} onSaved={reload} scripts={scripts} />
+      <GitHubPanel config={config} watcher={runtime.github} writable={writable} onSaved={reload} scripts={scripts} />
       <ClaudePanel config={config} writable={writable} onSaved={reload} />
       <Recent status={status.data} />
 
       {!writable ? <span className="ml-settings__note">read-only server</span> : null}
     </Card>
+  );
+}
+
+// ---------------------------------------------------------------- run commands
+const SOURCE_NAME: Record<string, string> = { slack: "Slack", jira: "Jira", github: "GitHub" };
+
+/**
+ * What a run command can say, at the top of the card: every trigger's command
+ * uses the same names, so they are documented once, here.
+ */
+function VariablesGuide({ variables }: { variables: TriggerVariable[] }) {
+  return (
+    <details className="ml-trigger__vars">
+      <summary>
+        Run commands and their variables <Badge tone="neutral">{variables.length}</Badge>
+      </summary>
+      <p className="ml-settings__hint">
+        Each trigger has a run command: what the session is told to do when it fires. Write it in
+        your own words and put a variable in braces where a value belongs, for example{" "}
+        <code>{"{trigger_source} sent this task. Pick it up and reply to {trigger_user} at {trigger_link}."}</code>{" "}
+        Left empty, a trigger gets the built-in handling. Whatever the command says, the brain&rsquo;s
+        rules still hold, and the message is still quoted to the session as the request, not as your
+        instruction. <code>{"{trigger_content}"}</code> is written by whoever triggered it, so use
+        it as their words.
+      </p>
+      <div className="ml-trigger__vars-table">
+        <table>
+          <thead>
+            <tr>
+              <th>Variable</th>
+              <th>On</th>
+              <th>What it is</th>
+              <th>Example</th>
+            </tr>
+          </thead>
+          <tbody>
+            {variables.map((v) => (
+              <tr key={v.name}>
+                <td>
+                  <code>{`{${v.name}}`}</code>
+                </td>
+                <td>{v.global ? "every trigger" : v.sources.map((x) => SOURCE_NAME[x] ?? x).join(", ")}</td>
+                <td>{v.description}</td>
+                <td>
+                  <code>{v.example}</code>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </details>
   );
 }
 
@@ -116,11 +187,14 @@ function MasterSwitch({
   const [signature, setSignature] = useState(config.signature_template);
   const [notEnabled, setNotEnabled] = useState(config.refusals.not_enabled);
   const [policy, setPolicy] = useState(config.refusals.policy);
+  const [notAllowed, setNotAllowed] = useState(config.refusals.not_allowed ?? "");
   useEffect(() => {
     setSignature(config.signature_template);
     setNotEnabled(config.refusals.not_enabled);
     setPolicy(config.refusals.policy);
-  }, [config.signature_template, config.refusals.not_enabled, config.refusals.policy]);
+    setNotAllowed(config.refusals.not_allowed ?? "");
+  }, [config.signature_template, config.refusals.not_enabled, config.refusals.policy, config.refusals.not_allowed]);
+  const noModel = config.refuse_without_model !== false;
 
   return (
     <>
@@ -167,12 +241,33 @@ function MasterSwitch({
         >
           {(id) => <TextInput id={id} value={policy} onChange={(e) => setPolicy(e.target.value)} />}
         </Field>
+        <Field
+          label="Refusal: not allowed"
+          hint="For someone on the blocked list, and for a command only you may run. Sent by the brain itself."
+        >
+          {(id) => <TextInput id={id} value={notAllowed} onChange={(e) => setNotAllowed(e.target.value)} />}
+        </Field>
+      </div>
+      <div className="ml-settings__switch">
+        <Checkbox
+          label="Refuse without a model call"
+          checked={noModel}
+          disabled={!writable || busy}
+          onChange={(v) =>
+            save({ refuse_without_model: v }, v ? "Refusals make no model call." : "Refusals may use a model.")
+          }
+        />
+        <p className="ml-settings__hint ml-settings__hint--switch">
+          On, someone the brain turns away costs nothing: the notice goes out exactly as written, through
+          the Slack user token or the Jira and GitHub tokens, and without a Slack user token it is only
+          logged. Off, it is translated, and without a user token posted through your Slack MCP.
+        </p>
       </div>
       <div className="ml-settings__switch">
         <Checkbox
           label="Reply in the sender's language"
-          checked={config.translate_notices}
-          disabled={!writable || busy}
+          checked={config.translate_notices && !noModel}
+          disabled={!writable || busy || noModel}
           onChange={(v) => save({ translate_notices: v }, v ? "Notices will be translated." : "Notices go out as written.")}
         />
         <p className="ml-settings__hint ml-settings__hint--switch">
@@ -186,7 +281,7 @@ function MasterSwitch({
       <div className="ml-settings__foot">
         <Button
           disabled={!writable || busy}
-          onClick={() => save({ signature, refusals: { not_enabled: notEnabled, policy } })}
+          onClick={() => save({ signature, refusals: { not_enabled: notEnabled, policy, not_allowed: notAllowed } })}
         >
           Save replies
         </Button>
@@ -241,6 +336,7 @@ function Panel({
   const [check, setCheck] = useState<TriggerCheck | null>(null);
   const [checking, setChecking] = useState(false);
   const [checkErr, setCheckErr] = useState<string | null>(null);
+  const fold = useFold(`panel.${service}`);
 
   const runCheck = async () => {
     setChecking(true);
@@ -258,7 +354,10 @@ function Panel({
   return (
     <section className="ml-settings__preview" aria-label={title}>
       <h3 className="ml-settings__h3">
-        {title}
+        <FoldButton open={fold.open} onToggle={fold.toggle}>
+          {title}
+        </FoldButton>
+        {switchLabel && !enabled ? <Badge tone="neutral">switched off</Badge> : null}
         {watcher ? (
           <Badge tone={WATCH_TONE[watcher.state] ?? "neutral"} title={watcher.at}>
             {watcher.state}
@@ -266,7 +365,8 @@ function Panel({
         ) : null}
       </h3>
       {watcher?.last_error ? <StatusMessage tone="error">{watcher.last_error}</StatusMessage> : null}
-
+      {fold.open ? (
+        <>
       {switchLabel && onToggle ? (
         <div className="ml-settings__switch">
           <Checkbox
@@ -295,6 +395,8 @@ function Panel({
       {out ? <StatusMessage tone={out.tone}>{out.text}</StatusMessage> : null}
       {checkErr ? <StatusMessage tone="error">{checkErr}</StatusMessage> : null}
       {check ? <CheckResult check={check} title={title} /> : null}
+        </>
+      ) : null}
     </section>
   );
 }
@@ -406,35 +508,80 @@ function num(label: string, value: string, set: (v: string) => void, hint: strin
   );
 }
 
+const list = (v: string) =>
+  v
+    .split(/[\s,]+/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+
+/** Local edits to a source's events: one kind, one patch at a time. */
+function useEvents<K extends string>(stored: Record<K, TriggerEventSetting>) {
+  const [events, setEvents] = useState(stored);
+  useEffect(() => setEvents(stored), [stored]);
+  const setEvent = (kind: K, patch: Partial<TriggerEventSetting>) =>
+    setEvents((cur) => ({ ...cur, [kind]: { ...cur[kind], ...patch } }));
+  return { events, setEvent };
+}
+
+const SLACK_EVENTS: EventKindInfo<SlackEventKind>[] = [
+  {
+    kind: "mention", label: "Someone @mentions the brain", always: true,
+    hint: "Always on: the gate decides who gets through. A command below runs instead when one matches.",
+    runHint: "What the session does with a Slack mention. Empty: read the thread, do what it asks, reply there.",
+    placeholder: "{trigger_user} mentioned me in Slack. Read {trigger_link}, do what they ask, and reply in the thread.",
+  },
+  { kind: "joined_channel", label: "The brain is added to a channel", hint: "{trigger_user} is who added it, {slack_channel_name} where. The app must subscribe to member_joined_channel. Opens nothing to anyone." },
+  { kind: "left_channel", label: "The brain is removed from a channel", hint: "The app must subscribe to member_left_channel. Live only: nothing to catch up from after a restart." },
+];
+
 function SlackPanel({
   config,
   channels,
   watcher,
   writable,
   onSaved,
+  scripts,
 }: {
   config: TriggerConfig;
   channels: TriggerChannels;
   watcher: TriggerWatcher;
   writable: boolean;
   onSaved: () => void;
+  scripts: ScriptsState;
 }) {
   const s = config.slack;
   const { busy, out, save } = useSave(onSaved);
   const [owner, setOwner] = useState(s.owner_user_id ?? "");
   const [lookback, setLookback] = useState(String(s.thread_lookback_days ?? 7));
+  const [allowed, setAllowed] = useState((s.allowed_users ?? []).join(", "));
+  const [blocked, setBlocked] = useState((s.blocked_users ?? []).join(", "));
+  const [dms, setDms] = useState(!!s.dms);
+  const [dmsOpen, setDmsOpen] = useState(!!s.dms_open);
+  const { events, setEvent } = useEvents(s.events);
+  const [commands, setCommands] = useState<SlackCommand[]>(s.commands ?? []);
   const [appToken, setAppToken] = useState("");
   const [botToken, setBotToken] = useState("");
   const [userToken, setUserToken] = useState("");
   useEffect(() => {
     setOwner(s.owner_user_id ?? "");
     setLookback(String(s.thread_lookback_days ?? 7));
-  }, [s.owner_user_id, s.thread_lookback_days]);
+    setAllowed((s.allowed_users ?? []).join(", "));
+    setBlocked((s.blocked_users ?? []).join(", "));
+    setCommands(s.commands ?? []);
+    setDms(!!s.dms);
+    setDmsOpen(!!s.dms_open);
+  }, [s.owner_user_id, s.thread_lookback_days, s.allowed_users, s.blocked_users, s.commands, s.dms, s.dms_open]);
 
   const submit = async () => {
     const slack: Record<string, unknown> = {
       owner_user_id: owner,
       thread_lookback_days: Number(lookback),
+      allowed_users: list(allowed).map((x) => x.toUpperCase()),
+      blocked_users: list(blocked).map((x) => x.toUpperCase()),
+      dms,
+      dms_open: dmsOpen,
+      events,
+      commands,
     };
     // Only a typed token travels. Blank means keep, never "set to empty".
     if (appToken) slack.app_token = appToken;
@@ -447,6 +594,7 @@ function SlackPanel({
     }
   };
   const remove = (name: string) => save({ clear: [name] }, `Removed ${name}.`);
+  const noModel = config.refuse_without_model !== false;
 
   return (
     <Panel
@@ -461,10 +609,63 @@ function SlackPanel({
       onToggle={(v) => save({ slack: { enabled: v } }, v ? "Slack on." : "Slack off.")}
       onSave={submit}
       out={out}
-      after={<ChannelsCard channels={channels} writable={writable} onChanged={onSaved} />}
+      after={
+        <>
+          <div className="ml-settings__switch">
+            <Checkbox
+              label="Listen in your direct messages"
+              checked={dms}
+              disabled={!writable || busy}
+              onChange={setDms}
+            />
+            <p className="ml-settings__hint ml-settings__hint--switch">
+              Someone tags the brain in a DM or group DM with you, and it answers there as you. The bot can
+              never be in those chats, so they are heard through your user token: it needs the user scopes
+              im:history and mpim:history, and the app subscribed to message.im and message.mpim under
+              &ldquo;Subscribe to events on behalf of users&rdquo;. Your own tag in a DM opens that DM to
+              the other person.
+            </p>
+          </div>
+          <div className="ml-settings__switch">
+            <Checkbox
+              label="Anyone who messages you directly may summon it"
+              checked={dmsOpen}
+              disabled={!writable || busy || !dms}
+              onChange={setDmsOpen}
+            />
+            <p className="ml-settings__hint ml-settings__hint--switch">
+              Every DM open at once, without your tag first. <strong>Anyone in the workspace</strong> can then
+              run a session as you by messaging you. Blocked people still cannot.
+            </p>
+          </div>
+          <ChannelsCard channels={channels} writable={writable} onChanged={onSaved} />
+          <EventsEditor
+            source="slack"
+            title="Slack events"
+            intro="Each is its own switch, with what happens when it does: a Claude session told the run command, a call to an API, or one of your scripts. The last two cost no model call."
+            kinds={SLACK_EVENTS}
+            events={events}
+            onChange={setEvent}
+            variables={config.variables}
+            writable={writable}
+            busy={busy}
+            scripts={scripts}
+          />
+          <CommandsEditor
+            commands={commands}
+            onChange={setCommands}
+            variables={config.variables}
+            writable={writable}
+            busy={busy}
+            scripts={scripts}
+          />
+        </>
+      }
     >
       {txt("Your Slack user id", owner, setOwner, "Your own U… id. Your mention opens a thread; nobody else's can.", "U0123ABCD")}
       {num("Thread look-back (days)", lookback, setLookback, "How far back catch-up looks for threads with new replies.", 0, 90)}
+      {txt("Allowed people", allowed, setAllowed, "Slack user ids, comma-separated. They may summon the brain in any conversation, as if it were open.", "U0123ABCD, U0456EFGH")}
+      {txt("Blocked people", blocked, setBlocked, "They get the not-allowed notice, even in an open channel, and nothing else happens. Never you.", "U0789IJKL")}
       <SecretField
         label="App token"
         secret={config.secrets["slack.app_token"]}
@@ -493,22 +694,41 @@ function SlackPanel({
         onRemove={() => remove("slack.user_token")}
         writable={writable}
         placeholder="xoxp-…"
-        hint="Optional. Posts refusal notices as you, directly. Without it they go out through your Slack MCP instead, as you all the same, in a short headless session."
+        hint={
+          noModel
+            ? "Posts refusal notices as you, directly, with no model call. Without it a refusal is only logged."
+            : "Optional. Posts refusal notices as you, directly. Without it they go out through your Slack MCP instead, as you all the same, in a short headless session."
+        }
       />
     </Panel>
   );
 }
+
+const JIRA_EVENTS: EventKindInfo<JiraEventKind>[] = [
+  {
+    kind: "mention", label: "A comment mentions you with the marker", always: true,
+    hint: "Always on: the gate decides who gets through.",
+    runHint: "What the session does with a marked Jira comment. Empty: read the issue, do what it asks, reply with a comment.",
+    placeholder: "{trigger_user} asked for this on {jira_issue} ({trigger_title}). Do it and comment on the issue.",
+  },
+  { kind: "transitioned", label: "A watched issue changes status", hint: "{jira_from} and {jira_to} are the statuses; {trigger_user} who moved it, you included." },
+  { kind: "assigned", label: "A watched issue is assigned", hint: "{jira_assignee} is whom to, {jira_previous_assignee} who had it, {trigger_user} who did it." },
+  { kind: "unassigned", label: "A watched issue is unassigned", hint: "{jira_previous_assignee} is who had it." },
+  { kind: "comment", label: "A new comment on a watched issue", hint: "Anyone's but yours, and not one that is already a mention." },
+];
 
 function JiraPanel({
   config,
   watcher,
   writable,
   onSaved,
+  scripts,
 }: {
   config: TriggerConfig;
   watcher: TriggerWatcher;
   writable: boolean;
   onSaved: () => void;
+  scripts: ScriptsState;
 }) {
   const j = config.jira;
   const { busy, out, save } = useSave(onSaved);
@@ -518,7 +738,9 @@ function JiraPanel({
   const [marker, setMarker] = useState(j.marker ?? "");
   const [poll, setPoll] = useState(String(j.poll_seconds ?? 60));
   const [jql, setJql] = useState(j.jql ?? "");
+  const [watch, setWatch] = useState(j.watch_jql ?? "");
   const [catchUp, setCatchUp] = useState(String(j.max_catchup_hours ?? 72));
+  const { events, setEvent } = useEvents(j.events);
   const [token, setToken] = useState("");
   useEffect(() => {
     setBaseUrl(j.base_url ?? "");
@@ -527,8 +749,9 @@ function JiraPanel({
     setMarker(j.marker ?? "");
     setPoll(String(j.poll_seconds ?? 60));
     setJql(j.jql ?? "");
+    setWatch(j.watch_jql ?? "");
     setCatchUp(String(j.max_catchup_hours ?? 72));
-  }, [j.base_url, j.email, j.owner_account_id, j.marker, j.poll_seconds, j.jql, j.max_catchup_hours]);
+  }, [j.base_url, j.email, j.owner_account_id, j.marker, j.poll_seconds, j.jql, j.watch_jql, j.max_catchup_hours]);
 
   const submit = async () => {
     const jira: Record<string, unknown> = {
@@ -538,7 +761,9 @@ function JiraPanel({
       marker,
       poll_seconds: Number(poll),
       jql,
+      watch_jql: watch,
       max_catchup_hours: Number(catchUp),
+      events,
     };
     if (token) jira.token = token;
     if (await save({ jira }, "Jira saved.")) setToken("");
@@ -550,13 +775,27 @@ function JiraPanel({
       service="jira"
       watcher={watcher}
       switchLabel="Poll Jira"
-      switchHint="Reads new comments on a timer with your API token. A comment counts when it mentions you AND carries the marker."
+      switchHint="Reads new comments and changes on a timer with your API token. A comment is a mention when it mentions you AND carries the marker."
       enabled={j.enabled}
       writable={writable}
       busy={busy}
       onToggle={(v) => save({ jira: { enabled: v } }, v ? "Jira polling on." : "Jira polling off.")}
       onSave={submit}
       out={out}
+      after={
+        <EventsEditor
+          source="jira"
+          title="Jira events"
+          intro="A change counts on the issues the watch JQL above picks. Each is its own switch, with what happens when it does."
+          kinds={JIRA_EVENTS}
+          events={events}
+          onChange={setEvent}
+          variables={config.variables}
+          writable={writable}
+          busy={busy}
+          scripts={scripts}
+        />
+      }
     >
       {txt("Site URL", baseUrl, setBaseUrl, "Your Atlassian site.", "https://your-site.atlassian.net")}
       {txt("Email", email, setEmail, "The account the API token belongs to.", "you@example.com")}
@@ -564,7 +803,8 @@ function JiraPanel({
       {txt("Marker", marker, setMarker, "The text that says a comment is for the brain. Case and accents do not matter.", "@brain")}
       {num("Poll every (seconds)", poll, setPoll, "15 to 3600.", 15, 3600)}
       {num("Catch-up limit (hours)", catchUp, setCatchUp, "After a long gap, look back no further than this.", 1, 720)}
-      {txt("Extra JQL", jql, setJql, "ANDed onto the search, to narrow which issues are read.", "project in (PROJ, OPS)")}
+      {txt("Extra JQL", jql, setJql, "ANDed onto every search, to narrow which issues are read.", "project in (PROJ, OPS)")}
+      {txt("Watch JQL", watch, setWatch, "Which issues a transition, an assignment or a comment counts on.", "assignee = currentUser() OR watcher = currentUser()")}
       <SecretField
         label="API token"
         secret={config.secrets["jira.token"]}
@@ -575,6 +815,137 @@ function JiraPanel({
         placeholder="Atlassian API token"
         hint="From id.atlassian.com, for the email above."
       />
+    </Panel>
+  );
+}
+
+/** The GitHub events, in the order the panel lists them, and how each reads. */
+const GITHUB_EVENTS: EventKindInfo<GitHubEventKind>[] = [
+  { kind: "mention", label: "You are @mentioned", hint: "In a comment, a review or a description, on a pull request or an issue. The comment is the request; the instruction below is optional.", runHint: "Optional: how to handle a mention, and your own comment with the marker, on top of what it asks. Variables work here." },
+  { kind: "review_requested", label: "Your review is requested", hint: "Someone asks you to review a pull request, or you add yourself as a reviewer." },
+  { kind: "review", label: "Your pull request is reviewed", hint: "Approved, changes requested, or commented." },
+  { kind: "comment", label: "A comment on your pull request", hint: "Any new comment or line comment, mention or not." },
+  { kind: "pushed", label: "New commits on a pull request you review", hint: "One event per push, not per commit." },
+  { kind: "ci_failed", label: "Checks fail on your pull request", hint: "One event per commit, however many checks fail. Cancelled and skipped do not count." },
+  { kind: "merged", label: "Your pull request is merged", hint: "" },
+  { kind: "closed", label: "Your pull request is closed unmerged", hint: "By anyone, you included." },
+  { kind: "assigned", label: "You are assigned", hint: "A pull request or an issue, by someone else or by yourself." },
+];
+
+function GitHubPanel({
+  config,
+  watcher,
+  writable,
+  onSaved,
+  scripts,
+}: {
+  config: TriggerConfig;
+  watcher: TriggerWatcher;
+  writable: boolean;
+  onSaved: () => void;
+  scripts: ScriptsState;
+}) {
+  const g = config.github;
+  const { busy, out, save } = useSave(onSaved);
+  const [apiUrl, setApiUrl] = useState(g.api_url ?? "");
+  const [login, setLogin] = useState(g.login ?? "");
+  const [marker, setMarker] = useState(g.marker ?? "");
+  const [poll, setPoll] = useState(String(g.poll_seconds ?? 120));
+  const [catchUp, setCatchUp] = useState(String(g.max_catchup_hours ?? 72));
+  const [repos, setRepos] = useState((g.repos ?? []).join(", "));
+  const [trusted, setTrusted] = useState((g.trusted_associations ?? []).join(", "));
+  const [notice, setNotice] = useState(!!g.refusal_notice);
+  const { events, setEvent } = useEvents(g.events);
+  const [token, setToken] = useState("");
+  useEffect(() => {
+    setApiUrl(g.api_url ?? "");
+    setLogin(g.login ?? "");
+    setMarker(g.marker ?? "");
+    setPoll(String(g.poll_seconds ?? 120));
+    setCatchUp(String(g.max_catchup_hours ?? 72));
+    setRepos((g.repos ?? []).join(", "));
+    setTrusted((g.trusted_associations ?? []).join(", "));
+    setNotice(!!g.refusal_notice);
+  }, [g.api_url, g.login, g.marker, g.poll_seconds, g.max_catchup_hours, g.repos, g.trusted_associations, g.refusal_notice]);
+
+  const submit = async () => {
+    const github: Record<string, unknown> = {
+      api_url: apiUrl,
+      login,
+      marker,
+      poll_seconds: Number(poll),
+      max_catchup_hours: Number(catchUp),
+      repos: list(repos),
+      trusted_associations: list(trusted).map((x) => x.toUpperCase()),
+      refusal_notice: notice,
+      events,
+    };
+    if (token) github.token = token;
+    if (await save({ github }, "GitHub saved.")) setToken("");
+  };
+
+  return (
+    <Panel
+      title="GitHub"
+      service="github"
+      watcher={watcher}
+      switchLabel="Poll GitHub"
+      switchHint="Reads the pull requests and issues you are involved in on a timer, with your token. Nothing is exposed; nothing is posted unless an instruction asks for it."
+      enabled={g.enabled}
+      writable={writable}
+      busy={busy}
+      onToggle={(v) => save({ github: { enabled: v } }, v ? "GitHub polling on." : "GitHub polling off.")}
+      onSave={submit}
+      out={out}
+      after={
+        <EventsEditor
+          source="github"
+          title="GitHub events"
+          intro={
+            <>
+              Your own comment with the marker always runs, and opens that pull request to everyone&rsquo;s
+              mentions. Each change below is its own switch, with what the brain does when it happens.
+            </>
+          }
+          kinds={GITHUB_EVENTS}
+          events={events}
+          onChange={setEvent}
+          variables={config.variables}
+          writable={writable}
+          busy={busy}
+          scripts={scripts}
+        />
+      }
+    >
+      <SecretField
+        label="Token"
+        secret={config.secrets["github.token"]}
+        value={token}
+        onChange={setToken}
+        onRemove={() => save({ clear: ["github.token"] }, "Removed github.token.")}
+        writable={writable}
+        placeholder="github_pat_… or ghp_…"
+        hint="A fine-grained token with read access to Pull requests, Issues, Checks and Metadata, or a classic one with repo. Write access only if refusal comments are on."
+      />
+      {txt("Your login", login, setLogin, "Left empty, it is looked up from the token.", "optional")}
+      {txt("Marker", marker, setMarker, "Put it in your own comment to hand that pull request to the brain. Not an @word: that would ping someone.", "/brain")}
+      {txt("Repositories", repos, setRepos, "owner/name for one repo, a bare name for a whole org, comma-separated. Empty is everything the token sees.", "acme/api, acme")}
+      {txt("Trusted", trusted, setTrusted, "Whose comments a switch below runs for. Anyone else only in a pull request you opened.", "OWNER, MEMBER, COLLABORATOR")}
+      {num("Poll every (seconds)", poll, setPoll, "30 to 3600. GitHub's search allows about 30 a minute.", 30, 3600)}
+      {num("Catch-up limit (hours)", catchUp, setCatchUp, "After a long gap, look back no further than this.", 1, 720)}
+      {txt("API URL", apiUrl, setApiUrl, "Change only for GitHub Enterprise: https://your-host/api/v3.", "https://api.github.com")}
+      <div className="ml-settings__switch">
+        <Checkbox
+          label="Comment when refusing"
+          checked={notice}
+          disabled={!writable || busy}
+          onChange={setNotice}
+        />
+        <p className="ml-settings__hint ml-settings__hint--switch">
+          Off, a mention the brain may not run is only logged. On, it gets the not-enabled notice as a
+          public comment, once per pull request.
+        </p>
+      </div>
     </Panel>
   );
 }
@@ -629,7 +1000,7 @@ function ClaudePanel({
       out={out}
     >
       {txt("Command", bin, setBin, "The claude binary each mention runs as `claude -p`.", "claude")}
-      {txt("MCP config", mcp, setMcp, "The MCP servers the session may use: your Slack, Jira, Gmail, Drive. Empty uses what Claude Code loads anyway.", "~/.second_brain/trigger-mcp.json")}
+      {txt("MCP config", mcp, setMcp, "The MCP servers the session may use: your Slack, Jira, GitHub, Gmail, Drive. Empty uses what Claude Code loads anyway.", "~/.second_brain/trigger-mcp.json")}
       {txt("Notice model", noticeModel, setNoticeModel, "The small model that translates a refusal notice. Only used with a Slack user token or on Jira; without a token the notice session does it.", "haiku")}
       {num("Timeout (seconds)", timeout, setTimeoutS, "A session running longer is killed and marked timeout.", 30, 7200)}
       {num("At once", concurrent, setConcurrent, "How many mentions may run at the same time.", 1, 16)}

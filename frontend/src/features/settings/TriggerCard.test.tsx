@@ -144,17 +144,38 @@ describe("Triggers", () => {
         refusals: {
           not_enabled: "I'm not enabled in this conversation, so I did nothing.",
           policy: "No: {reason}",
+          not_allowed: "You can't ask me that here, so I did nothing.",
         },
       }),
     );
-    await user.click(screen.getByRole("checkbox", { name: "Reply in the sender's language" }));
-    await waitFor(() => expect(sent()).toContainEqual({ translate_notices: false }));
   });
 
-  it("says a missing user token is fine: notices go through the MCP", async () => {
-    renderApp(<TriggerCard writable />, { route: "/settings" });
+  it("refuses without a model call by default, and only then may translation be switched on", async () => {
+    const { user } = renderApp(<TriggerCard writable />, { route: "/settings" });
+    const noModel = await screen.findByRole("checkbox", { name: "Refuse without a model call" });
+    expect(noModel).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Reply in the sender's language" })).toBeDisabled();
+    await user.click(noModel);
+    await waitFor(() => expect(sent()).toContainEqual({ refuse_without_model: false }));
+  });
+
+  it("switches translation on its own once refusals may use a model", async () => {
+    server.use(
+      http.get("/api/trigger", () =>
+        HttpResponse.json({ ...triggerFixture, config: { ...triggerFixture.config, refuse_without_model: false } }),
+      ),
+    );
+    const { user } = renderApp(<TriggerCard writable />, { route: "/settings" });
+    await user.click(await screen.findByRole("checkbox", { name: "Reply in the sender's language" }));
+    await waitFor(() => expect(sent()).toContainEqual({ translate_notices: false }));
     const slack = await panel("Slack");
     expect(slack.getByText(/through your Slack MCP instead/)).toBeInTheDocument();
+  });
+
+  it("says a refusal with no user token is only logged, when refusals make no model call", async () => {
+    renderApp(<TriggerCard writable />, { route: "/settings" });
+    const slack = await panel("Slack");
+    expect(slack.getByText(/Without it a refusal is only logged/)).toBeInTheDocument();
   });
 
   it("keeps the channel list folded until it is clicked open", async () => {
@@ -213,5 +234,172 @@ describe("Triggers", () => {
     renderApp(<TriggerCard writable />, { route: "/settings" });
     const list = await screen.findByRole("list", { name: "recent requests" });
     expect(within(list).getByText(/Isadora: can you summarise this thread/)).toBeInTheDocument();
+  });
+
+  it("has a GitHub panel with its own switch and a write-only token", async () => {
+    const { user } = renderApp(<TriggerCard writable />, { route: "/settings" });
+    const gh = await panel("GitHub");
+    await user.click(gh.getByRole("checkbox", { name: "Poll GitHub" }));
+    await waitFor(() => expect(sent()).toContainEqual({ github: { enabled: true } }));
+    await user.type(gh.getByLabelText(/^Token/), "github_pat_new");
+    await user.click(gh.getByRole("button", { name: "Save GitHub" }));
+    await waitFor(() => expect(sent()).toHaveLength(2));
+    const body = sent()[1].github as Record<string, unknown>;
+    expect(body.token).toBe("github_pat_new");
+    expect(body.repos).toEqual(["acme/api"]);
+  });
+
+  it("picks which GitHub changes start the flow, each with its instruction", async () => {
+    const { user } = renderApp(<TriggerCard writable />, { route: "/settings" });
+    const events = within(await screen.findByRole("group", { name: "GitHub events" }));
+    expect(events.queryAllByLabelText("Run command")).toHaveLength(3);
+    await user.click(events.getByRole("checkbox", { name: "Checks fail on your pull request" }));
+    await user.click(events.getByRole("checkbox", { name: "Your pull request is reviewed" }));
+    const boxes = events.getAllByLabelText("Run command");
+    expect(boxes).toHaveLength(3);
+    const ci = boxes[boxes.length - 1];
+    expect(ci).toHaveValue("Find the likely cause.");
+    await user.clear(ci);
+    await user.type(ci, "Fix it and push.");
+    await user.click((await panel("GitHub")).getByRole("button", { name: "Save GitHub" }));
+    await waitFor(() => expect(sent()).toHaveLength(1));
+    const ev = (sent()[0].github as { events: Record<string, { on: boolean; do: string }> }).events;
+    expect(ev.ci_failed).toMatchObject({ on: true, do: "Fix it and push.", action: "claude" });
+    expect(ev.review.on).toBe(false);
+    expect(ev.mention.on).toBe(true);
+  });
+
+  it("documents the run command variables once, at the top", async () => {
+    const { user } = renderApp(<TriggerCard writable />, { route: "/settings" });
+    await user.click(await screen.findByText("Run commands and their variables"));
+    const table = screen.getByRole("table");
+    expect(within(table).getByText("{trigger_user}")).toBeInTheDocument();
+    const repo = within(table).getByText("{github_repo}").closest("tr") as HTMLElement;
+    expect(within(repo).getByText("GitHub")).toBeInTheDocument();
+    const src = within(table).getByText("{trigger_source}").closest("tr") as HTMLElement;
+    expect(within(src).getByText("every trigger")).toBeInTheDocument();
+  });
+
+  it("saves Slack's run command, previewing it with example values", async () => {
+    const { user } = renderApp(<TriggerCard writable />, { route: "/settings" });
+    const slack = await panel("Slack");
+    const box = slack.getByLabelText("Run command");
+    await user.click(box);
+    await user.paste("{trigger_source} sent this task. Reply to {trigger_user}.");
+    expect(slack.getByText(/github sent this task\. Reply to octocat\./)).toBeInTheDocument();
+    await user.click(slack.getByRole("button", { name: "Save Slack" }));
+    await waitFor(() =>
+      expect(sent()[0].slack).toMatchObject({
+        events: { mention: { do: "{trigger_source} sent this task. Reply to {trigger_user}." } },
+      }),
+    );
+  });
+
+  it("folds a panel away, and remembers it", async () => {
+    const { user, unmount } = renderApp(<TriggerCard writable />, { route: "/settings" });
+    const jira = await panel("Jira");
+    const toggle = jira.getByRole("button", { name: "Jira" });
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await user.click(toggle);
+    expect(jira.queryByLabelText("Poll every (seconds)")).not.toBeInTheDocument();
+    expect(jira.getByText("switched off")).toBeInTheDocument();
+    unmount();
+    renderApp(<TriggerCard writable />, { route: "/settings" });
+    const again = await panel("Jira");
+    expect(again.getByRole("button", { name: "Jira" })).toHaveAttribute("aria-expanded", "false");
+    await user.click(again.getByRole("button", { name: "Jira" }));
+    expect(again.getByLabelText("Poll every (seconds)")).toBeInTheDocument();
+  });
+
+  it("saves who may and may not summon the brain on Slack", async () => {
+    const { user } = renderApp(<TriggerCard writable />, { route: "/settings" });
+    const slack = await panel("Slack");
+    await user.type(slack.getByLabelText("Blocked people"), "u0pest, U0NOISE");
+    await user.click(slack.getByRole("button", { name: "Save Slack" }));
+    await waitFor(() =>
+      expect(sent()[0].slack).toMatchObject({ allowed_users: ["U0FRIEND"], blocked_users: ["U0PEST", "U0NOISE"] }),
+    );
+  });
+
+  it("listens in your DMs only when asked, and opens them all only after that", async () => {
+    const { user } = renderApp(<TriggerCard writable />, { route: "/settings" });
+    const slack = await panel("Slack");
+    const open = slack.getByRole("checkbox", { name: "Anyone who messages you directly may summon it" });
+    expect(open).toBeDisabled();
+    await user.click(slack.getByRole("checkbox", { name: "Listen in your direct messages" }));
+    expect(open).toBeEnabled();
+    await user.click(slack.getByRole("button", { name: "Save Slack" }));
+    await waitFor(() => expect(sent()[0].slack).toMatchObject({ dms: true, dms_open: false }));
+  });
+
+  it("switches on a Slack event and has it call an API instead of a session", async () => {
+    const { user } = renderApp(<TriggerCard writable />, { route: "/settings" });
+    const events = within(await screen.findByRole("group", { name: "Slack events" }));
+    await user.click(events.getByRole("checkbox", { name: "The brain is added to a channel" }));
+    const actions = events.getByRole("group", { name: "Action for The brain is added to a channel" });
+    await user.click(within(actions).getByRole("button", { name: "Call an API" }));
+    await user.type(events.getByLabelText("URL"), "https://hooks.example/joined");
+    await user.click((await panel("Slack")).getByRole("button", { name: "Save Slack" }));
+    await waitFor(() => expect(sent()).toHaveLength(1));
+    const ev = (sent()[0].slack as { events: Record<string, Record<string, unknown>> }).events;
+    expect(ev.joined_channel).toMatchObject({
+      on: true, action: "http", http: { method: "POST", url: "https://hooks.example/joined" },
+    });
+  });
+
+  it("lists the Slack commands folded, and saves a new one that runs a new script", async () => {
+    const { user } = renderApp(<TriggerCard writable />, { route: "/settings" });
+    const cmds = within(await screen.findByRole("group", { name: "Slack commands" }));
+    expect(cmds.getByText("deploy")).toBeInTheDocument();
+    expect(cmds.getByText("runs dev_env.py, only you")).toBeInTheDocument();
+    await user.click(cmds.getByRole("button", { name: "Add a command" }));
+    const row = within(cmds.getByRole("group", { name: "Command new command" }));
+    await user.type(row.getByLabelText("Name"), "rota");
+    await user.type(row.getByLabelText("Pattern"), "^rota (?P<team>\\w+)");
+    expect(cmds.getByText("{team}")).toBeInTheDocument();
+    const again = within(cmds.getByRole("group", { name: "Command rota" }));
+    await user.click(within(again.getByRole("group", { name: "Action for command rota" })).getByRole("button", { name: "Run a script" }));
+    await user.click(again.getByRole("button", { name: "New script…" }));
+    const form = within(again.getByRole("group", { name: "New script" }));
+    await user.type(form.getByLabelText("File name"), "new.sh");
+    expect((form.getByLabelText("Script text") as HTMLTextAreaElement).value).toContain("BRAIN_TRIGGER_USER");
+    await user.click(form.getByRole("button", { name: "Create and link" }));
+    await waitFor(() =>
+      expect(sent("/api/create-script")).toContainEqual(expect.objectContaining({ name: "new.sh", executable: true })),
+    );
+    await user.click((await panel("Slack")).getByRole("button", { name: "Save Slack" }));
+    await waitFor(() => expect(sent()).toHaveLength(1));
+    const commands = (sent()[0].slack as { commands: Record<string, unknown>[] }).commands;
+    expect(commands).toHaveLength(2);
+    expect(commands[1]).toMatchObject({
+      name: "rota", pattern: "^rota (?P<team>\\w+)", action: "script", script: { name: "new.sh" }, anyone: false,
+    });
+  });
+
+  it("switches on Jira transitions with their statuses, and saves the watch JQL", async () => {
+    const { user } = renderApp(<TriggerCard writable />, { route: "/settings" });
+    const events = within(await screen.findByRole("group", { name: "Jira events" }));
+    await user.click(events.getByRole("checkbox", { name: "A watched issue changes status" }));
+    expect(events.getByText(/Note In Progress to In Review\./)).toBeInTheDocument();
+    const jira = await panel("Jira");
+    const watch = jira.getByLabelText("Watch JQL");
+    await user.clear(watch);
+    await user.type(watch, "project = OPS");
+    await user.click(jira.getByRole("button", { name: "Save Jira" }));
+    await waitFor(() =>
+      expect(sent()[0].jira).toMatchObject({
+        watch_jql: "project = OPS", events: { transitioned: { on: true, action: "claude" } },
+      }),
+    );
+  });
+
+  it("flags a variable that does not exist", async () => {
+    const { user } = renderApp(<TriggerCard writable />, { route: "/settings" });
+    const events = within(await screen.findByRole("group", { name: "GitHub events" }));
+    const box = events.getAllByLabelText("Run command")[1];
+    await user.clear(box);
+    await user.click(box);
+    await user.paste("Review {github_repo} for {trigger_usr}");
+    expect(events.getByText(/Not a variable: \{trigger_usr\}/)).toBeInTheDocument();
   });
 });

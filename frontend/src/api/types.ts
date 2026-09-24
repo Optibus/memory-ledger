@@ -325,6 +325,64 @@ export interface UploadBundleResult extends Envelope {
 
 export type ImportChoice = "update" | "replace" | "ignore";
 
+/** One file in `<home>/scripts`. The brain runs one only when a trigger links it. */
+export interface ScriptEntry {
+  name: string;
+  bytes: number;
+  executable: boolean;
+  sha256: string;
+  language: string;
+  /** The first docstring or comment line, past the shebang. */
+  summary: string;
+  modified?: string;
+}
+
+export interface ScriptsPayload extends Envelope {
+  dir: string;
+  exists: boolean;
+  count: number;
+  scripts: ScriptEntry[];
+  skipped: { name: string; why: string }[];
+}
+
+export interface ScriptDetail extends Envelope {
+  script?: ScriptEntry & { text: string };
+}
+
+export interface ExportScriptsResult extends Envelope {
+  path: string;
+  name: string;
+  download: string;
+  count: number;
+  scripts: string[];
+}
+
+export interface StagedScript extends ScriptEntry {
+  /** A local file by this name is already in `<home>/scripts`. */
+  exists: boolean;
+  /** Only when it exists: are the bytes the same? Then there is nothing to decide. */
+  identical?: boolean;
+  existing_bytes?: number;
+}
+
+export interface UploadScriptsResult extends Envelope {
+  token: string;
+  dir: string;
+  count: number;
+  items: StagedScript[];
+}
+
+/** An existing script is overwritten only for `replace`; a new one is written either way. */
+export type ScriptChoice = "replace" | "keep";
+
+export interface ImportScriptsResult extends Envelope {
+  dir: string;
+  applied: { name: string; action: string; why?: string }[];
+  not_in_zip: string[];
+  /** Where the bytes of every replaced script were copied first. */
+  backup?: string;
+}
+
 export interface ImportBundleResult extends Envelope {
   applied: { id: string; action: string; rules_not_found?: string[] }[];
   tree?: { added: number; pruned: number };
@@ -570,7 +628,68 @@ export interface UiPrefsPayload extends Envelope {
 // secrets: for those the server only ever says whether one is set, and where
 // from, so a page that shows "one is stored" never holds the token itself.
 
-export type TriggerService = "claude" | "slack" | "jira";
+export type TriggerService = "claude" | "slack" | "jira" | "github";
+
+/** What a GitHub poll can notice. Each has its own switch and instruction. */
+export type GitHubEventKind =
+  | "mention"
+  | "review_requested"
+  | "review"
+  | "comment"
+  | "pushed"
+  | "ci_failed"
+  | "merged"
+  | "closed"
+  | "assigned";
+
+/** What Slack notices besides a mention: the bot added to or removed from a channel. */
+export type SlackEventKind = "mention" | "joined_channel" | "left_channel";
+
+/** What a Jira poll notices on a watched issue, besides a marked mention. */
+export type JiraEventKind = "mention" | "transitioned" | "assigned" | "unassigned" | "comment";
+
+/**
+ * What a trigger does when it fires: a headless Claude session told the run
+ * command, a call to an API, or a script in `<home>/scripts`. The last two cost
+ * no model call.
+ */
+export type TriggerAction = "claude" | "http" | "script";
+
+export interface TriggerHttp {
+  method: string;
+  /** Values are percent-encoded where they land. Must start with http(s)://. */
+  url: string;
+  headers: Record<string, string>;
+  /** A JSON body gets its values JSON-escaped. */
+  body: string;
+}
+
+export interface TriggerScriptRef {
+  /** A bare filename in `<home>/scripts`. */
+  name: string;
+  /** One argv item each, variables filled in. Empty: a command's own arguments. */
+  args: string[];
+}
+
+export interface TriggerEventSetting {
+  on: boolean;
+  /** The run command for a Claude action. Empty for a mention: the message is the request. */
+  do: string;
+  action: TriggerAction;
+  http: TriggerHttp;
+  script: TriggerScriptRef;
+}
+
+export type GitHubEventSetting = TriggerEventSetting;
+
+/** `@brain <name> {a, b}`, matched by `pattern` (a regex), or the name as the first word. */
+export interface SlackCommand extends TriggerEventSetting {
+  name: string;
+  /** Anyone the gate lets in may run it. Off: only you. */
+  anyone: boolean;
+  pattern: string;
+  description: string;
+}
 
 export interface TriggerSecret {
   set: boolean;
@@ -589,7 +708,9 @@ export interface TriggerConfig {
   stored_enabled: boolean;
   signature: string;
   signature_template: string;
-  refusals: { not_enabled: string; policy: string };
+  refusals: { not_enabled: string; policy: string; not_allowed: string };
+  /** A refusal goes out as written through the source's API, or not at all: never a model call. */
+  refuse_without_model: boolean;
   translate_notices: boolean;
   claude: {
     bin: string;
@@ -604,21 +725,74 @@ export interface TriggerConfig {
   slack: {
     enabled: boolean;
     active: boolean;
+    /** The run command, with {variables}. Empty is the built-in handling. */
+    prompt: string;
     owner_user_id: string;
     thread_lookback_days: number;
+    /** Your DMs and group DMs, heard through the user token. */
+    dms: boolean;
+    /** Every DM with you open to the other person's tag. */
+    dms_open: boolean;
+    /** Slack user ids that may summon the brain anywhere. */
+    allowed_users: string[];
+    /** Slack user ids that may not, even in an open channel. */
+    blocked_users: string[];
+    events: Record<SlackEventKind, TriggerEventSetting>;
+    commands: SlackCommand[];
   };
   jira: {
     enabled: boolean;
     active: boolean;
+    prompt: string;
     base_url: string;
     email: string;
     owner_account_id: string;
     marker: string;
     poll_seconds: number;
     jql: string;
+    /** Which issues a transition, an assignment or a comment counts on. */
+    watch_jql: string;
     max_catchup_hours: number;
+    events: Record<JiraEventKind, TriggerEventSetting>;
+  };
+  github: {
+    enabled: boolean;
+    active: boolean;
+    api_url: string;
+    /** Empty: looked up from the token. */
+    login: string;
+    marker: string;
+    poll_seconds: number;
+    /** owner/name for a repo, a bare name for a whole org. Empty is everything. */
+    repos: string[];
+    trusted_associations: string[];
+    /** A refusal on GitHub is a public comment, so it is off unless asked for. */
+    refusal_notice: boolean;
+    max_catchup_hours: number;
+    events: Record<GitHubEventKind, GitHubEventSetting>;
   };
   secrets: Record<string, TriggerSecret>;
+  /** What a run command can say in braces. */
+  variables: TriggerVariable[];
+  actions: TriggerAction[];
+  http_methods: string[];
+  scripts_dir: string;
+}
+
+export interface CreateScriptResult extends Envelope {
+  name?: string;
+  action?: "created" | "replaced";
+  exists?: boolean;
+  script?: ScriptEntry;
+}
+
+export interface TriggerVariable {
+  name: string;
+  /** The sources it has a value on; `global` when that is all of them. */
+  sources: TriggerService[];
+  global: boolean;
+  description: string;
+  example: string;
 }
 
 export interface TriggerWatcher {
@@ -634,11 +808,12 @@ export interface TriggerRuntime {
   started_at: string;
   slack: TriggerWatcher;
   jira: TriggerWatcher;
+  github: TriggerWatcher;
 }
 
 export interface TriggerRequestRow {
   id: string;
-  source: "slack" | "jira";
+  source: "slack" | "jira" | "github";
   scope: string;
   requester_name: string;
   requester_id: string;

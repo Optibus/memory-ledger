@@ -23,6 +23,12 @@ import type {
   SyncResult,
   Timezones,
   UploadBundleResult,
+  ScriptsPayload,
+  ScriptDetail,
+  ExportScriptsResult,
+  UploadScriptsResult,
+  ScriptChoice,
+  ImportScriptsResult,
   ViewPayload,
 } from "./types";
 
@@ -222,6 +228,15 @@ export const api = {
       "/api/import-bundle",
       processRealm ? { token, select, process_realm: processRealm } : { token, select },
     ),
+  scripts: (signal?: AbortSignal) => get<ScriptsPayload>("/api/scripts", undefined, signal),
+  script: (name: string) => get<ScriptDetail>("/api/script", { name }),
+  exportScripts: (names: string[] = []) => post<ExportScriptsResult>("/api/export-scripts", { names }),
+  uploadScripts: (filename: string, data: string) =>
+    post<UploadScriptsResult>("/api/upload-scripts", { filename, data }),
+  createScript: (name: string, text: string, executable = true, replace = false) =>
+    post<import("./types").CreateScriptResult>("/api/create-script", { name, text, executable, replace }),
+  importScripts: (token: string, select: Record<string, ScriptChoice>) =>
+    post<ImportScriptsResult>("/api/import-scripts", { token, select }),
   deleteContracts: (ids: string[], force = false) =>
     post<import("./types").DeleteContractsResult>("/api/delete-contracts", { ids, force }),
 };

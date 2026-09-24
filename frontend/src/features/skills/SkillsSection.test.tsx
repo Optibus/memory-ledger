@@ -8,12 +8,12 @@ import { skillsFixture } from "@/test/fixtures";
 
 beforeEach(resetWrites);
 
-describe("Skills", () => {
+describe("Capabilities", () => {
   it("shows both trees with their counts", async () => {
     renderApp(<SkillsSection />, { route: "/skills" });
     expect(await screen.findByRole("heading", { name: /Built-in skills/ })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /Learned skills/ })).toBeInTheDocument();
-    expect(screen.getByText("1 process · 2 skills · 2 rules")).toBeInTheDocument();
+    expect(screen.getByText("2 skills · 2 rules · 1 process · 2 scripts")).toBeInTheDocument();
   });
 
   it("nests a skill under the one it requires, and nothing else", async () => {
@@ -58,14 +58,14 @@ describe("Skills", () => {
 
   it("filters both corpora from one text box", async () => {
     const { user } = renderApp(<SkillsSection />, { route: "/skills" });
-    await screen.findByText("1 process · 2 skills · 2 rules");
+    await screen.findByText("2 skills · 2 rules · 1 process · 2 scripts");
     await user.type(screen.getByRole("searchbox"), "emoji");
-    await waitFor(() => expect(screen.getByText("0 processes · 0 skills · 1 rule")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("0 skills · 1 rule · 0 processes · 0 scripts")).toBeInTheDocument());
   });
 
   it("keeps a parent whose descendant matched, so filtering never orphans a child", async () => {
     const { user } = renderApp(<SkillsSection />, { route: "/skills" });
-    await screen.findByText("1 process · 2 skills · 2 rules");
+    await screen.findByText("2 skills · 2 rules · 1 process · 2 scripts");
     await user.type(screen.getByRole("searchbox"), "visualize");
     // `recall` does not match, but it has to stay or its child would hang from nothing.
     expect(await screen.findByRole("button", { name: /recall/ })).toBeInTheDocument();
@@ -74,35 +74,35 @@ describe("Skills", () => {
 
   it("narrows by type, and the types are multi-select", async () => {
     const { user } = renderApp(<SkillsSection />, { route: "/skills" });
-    await screen.findByText("1 process · 2 skills · 2 rules");
+    await screen.findByText("2 skills · 2 rules · 1 process · 2 scripts");
     await user.click(screen.getByRole("button", { name: /Types/ }));
     await user.click(screen.getByRole("checkbox", { name: /Skills/ }));
-    expect(await screen.findByText("1 process · 2 rules")).toBeInTheDocument();
+    expect(await screen.findByText("2 rules · 1 process · 2 scripts")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /Built-in skills/ })).not.toBeInTheDocument();
     await user.click(screen.getByRole("checkbox", { name: /Processes/ }));
-    expect(await screen.findByText("2 rules")).toBeInTheDocument();
+    expect(await screen.findByText("2 rules · 2 scripts")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /^Processes/ })).not.toBeInTheDocument();
   });
 
   it("filters rules by source", async () => {
     const { user } = renderApp(<SkillsSection />, { route: "/skills" });
-    await screen.findByText("1 process · 2 skills · 2 rules");
+    await screen.findByText("2 skills · 2 rules · 1 process · 2 scripts");
     await user.click(screen.getByRole("button", { name: /Sources/ }));
     await user.click(screen.getByRole("checkbox", { name: /Built-in/ }));
     await user.click(screen.getByRole("checkbox", { name: /Learned/ }));
-    await waitFor(() => expect(screen.getByText("1 process · 0 skills · 1 rule")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("0 skills · 1 rule · 1 process · 2 scripts")).toBeInTheDocument());
     expect(screen.queryByRole("button", { name: /The memory graph API/ })).not.toBeInTheDocument();
   });
 
   it("takes several sources at once", async () => {
     const { user } = renderApp(<SkillsSection />, { route: "/skills" });
-    await screen.findByText("1 process · 2 skills · 2 rules");
+    await screen.findByText("2 skills · 2 rules · 1 process · 2 scripts");
     await user.click(screen.getByRole("button", { name: /Sources/ }));
     await user.click(screen.getByRole("button", { name: "none" }));
-    await waitFor(() => expect(screen.getByText("0 processes · 0 skills · 0 rules")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("0 skills · 0 rules · 0 processes · 0 scripts")).toBeInTheDocument());
     await user.click(screen.getByRole("checkbox", { name: /Built-in/ }));
     await user.click(screen.getByRole("checkbox", { name: /User/ }));
-    await waitFor(() => expect(screen.getByText("1 process · 2 skills · 2 rules")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("2 skills · 2 rules · 1 process · 2 scripts")).toBeInTheDocument());
   });
 
   it("labels the domain filter with the area titles rather than hub ids", async () => {
@@ -122,9 +122,9 @@ describe("Skills", () => {
 describe("Skills selection mode", () => {
   const enterSelection = async () => {
     const { user } = renderApp(<SkillsSection />, { route: "/skills" });
-    await screen.findByText("1 process · 2 skills · 2 rules");
+    await screen.findByText("2 skills · 2 rules · 1 process · 2 scripts");
     await user.click(screen.getByRole("button", { name: /Options/ }));
-    await user.click(screen.getByRole("button", { name: /Select processes, skills and rules/ }));
+    await user.click(screen.getByRole("button", { name: /Select skills, rules, processes and scripts/ }));
     return user;
   };
 
@@ -137,7 +137,7 @@ describe("Skills selection mode", () => {
   it("selects everything currently shown, not everything that exists", async () => {
     const user = await enterSelection();
     await user.click(screen.getByRole("button", { name: "Select all shown" }));
-    expect(await screen.findByText("5 selected")).toBeInTheDocument();
+    expect(await screen.findByText("7 selected")).toBeInTheDocument();
   });
 
   it("exports the selection split into skills and rules", async () => {
@@ -180,16 +180,16 @@ describe("Skills selection mode", () => {
   it("drops the selection when selection mode is left", async () => {
     const user = await enterSelection();
     await user.click(screen.getByRole("button", { name: "Select all shown" }));
-    await screen.findByText("5 selected");
+    await screen.findByText("7 selected");
     await user.click(screen.getByRole("button", { name: "Done" }));
-    expect(screen.queryByText("5 selected")).not.toBeInTheDocument();
+    expect(screen.queryByText("7 selected")).not.toBeInTheDocument();
   });
 });
 
 describe("Skills bundles and markdown sync", () => {
   it("stages an upload, asks what to do, and writes nothing until confirmed", async () => {
     const { user } = renderApp(<SkillsSection />, { route: "/skills" });
-    await screen.findByText("1 process · 2 skills · 2 rules");
+    await screen.findByText("2 skills · 2 rules · 1 process · 2 scripts");
     const input = document.querySelector('input[type="file"]') as HTMLInputElement;
     await user.upload(input, new File(["zip"], "team.zip", { type: "application/zip" }));
 
@@ -207,7 +207,7 @@ describe("Skills bundles and markdown sync", () => {
 
   it("says nothing was written when the import is cancelled", async () => {
     const { user } = renderApp(<SkillsSection />, { route: "/skills" });
-    await screen.findByText("1 process · 2 skills · 2 rules");
+    await screen.findByText("2 skills · 2 rules · 1 process · 2 scripts");
     const input = document.querySelector('input[type="file"]') as HTMLInputElement;
     await user.upload(input, new File(["zip"], "team.zip", { type: "application/zip" }));
     await user.click(await screen.findByRole("button", { name: "Cancel" }));
@@ -216,7 +216,7 @@ describe("Skills bundles and markdown sync", () => {
 
   it("asks for a directory and reports where the export landed", async () => {
     const { user } = renderApp(<SkillsSection />, { route: "/skills" });
-    await screen.findByText("1 process · 2 skills · 2 rules");
+    await screen.findByText("2 skills · 2 rules · 1 process · 2 scripts");
     await user.click(screen.getByRole("button", { name: /Options/ }));
     await user.click(screen.getByRole("button", { name: /Export the learned tree/ }));
     expect(await screen.findByRole("dialog", { name: /Export the learned tree/ })).toBeInTheDocument();
@@ -231,7 +231,7 @@ describe("Skills bundles and markdown sync", () => {
       ),
     );
     const { user } = renderApp(<SkillsSection />, { route: "/skills" });
-    await screen.findByText("1 process · 2 skills · 2 rules");
+    await screen.findByText("2 skills · 2 rules · 1 process · 2 scripts");
     await user.click(screen.getByRole("button", { name: /Options/ }));
     await user.click(screen.getByRole("button", { name: /Ingest a .md folder/ }));
     await user.click(await screen.findByRole("button", { name: "Ingest" }));
@@ -260,7 +260,7 @@ describe("Skills processes", () => {
     await user.click(screen.getByRole("button", { name: /Realms/ }));
     await user.click(screen.getByRole("checkbox", { name: /personal/ }));
     expect(await screen.findByRole("button", { name: /Weekly personal review/ })).toBeInTheDocument();
-    expect(screen.getByText("2 processes · 2 skills · 2 rules")).toBeInTheDocument();
+    expect(screen.getByText("2 skills · 2 rules · 2 processes · 2 scripts")).toBeInTheDocument();
   });
 
   it("opens a process and reads its steps", async () => {
@@ -272,14 +272,14 @@ describe("Skills processes", () => {
 
   it("finds a process by the words in its steps", async () => {
     const { user } = renderApp(<SkillsSection />, { route: "/skills" });
-    await screen.findByText("1 process · 2 skills · 2 rules");
+    await screen.findByText("2 skills · 2 rules · 1 process · 2 scripts");
     await user.type(screen.getByRole("searchbox"), "catch up");
-    await waitFor(() => expect(screen.getByText("1 process · 0 skills · 0 rules")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("0 skills · 0 rules · 1 process · 0 scripts")).toBeInTheDocument());
   });
 
   it("offers the brain's realms as a dropdown, and stores in the one picked", async () => {
     const { user } = renderApp(<SkillsSection />, { route: "/skills" });
-    await screen.findByText("1 process · 2 skills · 2 rules");
+    await screen.findByText("2 skills · 2 rules · 1 process · 2 scripts");
     await user.click(screen.getByRole("button", { name: "New process…" }));
     await user.type(await screen.findByRole("textbox", { name: /Title/ }), "Sunday review");
     const realm = screen.getByRole("combobox", { name: /Realm/ });
@@ -293,7 +293,7 @@ describe("Skills processes", () => {
 
   it("stores a new process in the current realm by default", async () => {
     const { user } = renderApp(<SkillsSection />, { route: "/skills" });
-    await screen.findByText("1 process · 2 skills · 2 rules");
+    await screen.findByText("2 skills · 2 rules · 1 process · 2 scripts");
     await user.click(screen.getByRole("button", { name: "New process…" }));
     const dialog = await screen.findByRole("dialog", { name: /New process/ });
     expect(dialog).toBeInTheDocument();
@@ -322,7 +322,7 @@ describe("Skills processes", () => {
       ),
     );
     const { user } = renderApp(<SkillsSection />, { route: "/skills" });
-    await screen.findByText("1 process · 2 skills · 2 rules");
+    await screen.findByText("2 skills · 2 rules · 1 process · 2 scripts");
     const input = document.querySelector('input[type="file"]') as HTMLInputElement;
     await user.upload(input, new File(["zip"], "mate.zip", { type: "application/zip" }));
     const realm = await screen.findByRole("combobox", { name: "process realm" });
@@ -336,6 +336,91 @@ describe("Skills processes", () => {
         select: { process_theirs_01: "update" },
         process_realm: "personal",
       }),
+    );
+  });
+});
+
+describe("Capabilities scripts", () => {
+  it("lists the local scripts after the processes, and opens one to read it", async () => {
+    const { user } = renderApp(<SkillsSection />, { route: "/capabilities" });
+    const heading = await screen.findByRole("heading", { name: /^Scripts/ });
+    const processes = screen.getByRole("heading", { name: /^Processes/ });
+    // skills, rules, processes, scripts: the page reads in that order
+    expect(processes.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText("/home/brain/scripts")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /mithra_token\.sh/ }));
+    expect(await screen.findByText(/echo mithra_token\.sh/)).toBeInTheDocument();
+  });
+
+  it("finds a script by the words in its description line", async () => {
+    const { user } = renderApp(<SkillsSection />, { route: "/capabilities" });
+    await screen.findByText("2 skills · 2 rules · 1 process · 2 scripts");
+    await user.type(screen.getByRole("searchbox"), "mint a token");
+    await waitFor(() =>
+      expect(screen.getByText("0 skills · 0 rules · 0 processes · 1 script")).toBeInTheDocument(),
+    );
+  });
+
+  it("exports every script from the Options menu", async () => {
+    const { user } = renderApp(<SkillsSection />, { route: "/capabilities" });
+    await screen.findByText("2 skills · 2 rules · 1 process · 2 scripts");
+    await user.click(screen.getByRole("button", { name: /Options/ }));
+    await user.click(screen.getByRole("button", { name: /Export all scripts/ }));
+    await waitFor(() =>
+      expect(writes.find((w) => w.path === "/api/export-scripts")?.body).toEqual({ names: [] }),
+    );
+    expect(await screen.findByText(/Zipped 2 scripts into/)).toBeInTheDocument();
+  });
+
+  it("exports only the ticked scripts, and never offers to delete them", async () => {
+    const { user } = renderApp(<SkillsSection />, { route: "/capabilities" });
+    await screen.findByText("2 skills · 2 rules · 1 process · 2 scripts");
+    await user.click(screen.getByRole("button", { name: /Options/ }));
+    await user.click(screen.getByRole("button", { name: /Select skills, rules, processes and scripts/ }));
+    await user.click(screen.getByRole("checkbox", { name: /select dev_env\.py/ }));
+    expect(screen.getByRole("button", { name: /Delete selected/ })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: /Export selected/ }));
+    await waitFor(() =>
+      expect(writes.find((w) => w.path === "/api/export-scripts")?.body).toEqual({ names: ["dev_env.py"] }),
+    );
+    expect(writes.filter((w) => w.path === "/api/export-bundle")).toHaveLength(0);
+  });
+
+  it("stages an import, keeps a differing local file by default, and writes nothing until confirmed", async () => {
+    const { user } = renderApp(<SkillsSection />, { route: "/capabilities" });
+    await screen.findByText("2 skills · 2 rules · 1 process · 2 scripts");
+    const input = screen.getByLabelText("scripts file") as HTMLInputElement;
+    await user.upload(input, new File(["zip"], "scripts.zip", { type: "application/zip" }));
+
+    const dialog = await screen.findByRole("dialog", { name: /Import scripts from scripts\.zip/ });
+    expect(dialog).toHaveTextContent("differs from yours");
+    expect(writes.filter((w) => w.path === "/api/import-scripts")).toHaveLength(0);
+
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    await waitFor(() =>
+      expect(writes.find((w) => w.path === "/api/import-scripts")?.body).toEqual({
+        token: "tok-s",
+        select: { "dev_env.py": "keep", "new.sh": "keep" },
+      }),
+    );
+    expect(await screen.findByText(/left alone dev_env\.py/)).toBeInTheDocument();
+  });
+
+  it("replaces a differing script only when told to", async () => {
+    const { user } = renderApp(<SkillsSection />, { route: "/capabilities" });
+    await screen.findByText("2 skills · 2 rules · 1 process · 2 scripts");
+    await user.upload(
+      screen.getByLabelText("scripts file") as HTMLInputElement,
+      new File(["zip"], "scripts.zip", { type: "application/zip" }),
+    );
+    await screen.findByRole("dialog", { name: /Import scripts/ });
+    await user.click(screen.getByRole("button", { name: "Replace" }));
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    await waitFor(() =>
+      expect(
+        (writes.find((w) => w.path === "/api/import-scripts")?.body as { select: Record<string, string> })
+          .select["dev_env.py"],
+      ).toBe("replace"),
     );
   });
 });

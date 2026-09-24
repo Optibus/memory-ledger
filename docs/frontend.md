@@ -128,10 +128,13 @@ all-pairs repulsion turned a few thousand nodes into a hairball that never stopp
 moving. Reheats are keyed on what changed, never on identity: every poll hands down
 fresh arrays and Sets, and reheating on those kept the map twitching.
 
-**The section is in the URL.** `/map`, `/dashboard`, `/people`, `/skills`, `/settings` (and `/api-docs`), on a
+**The section is in the URL.** `/map`, `/dashboard`, `/people`, `/capabilities`, `/settings` (and `/api-docs`), on a
 hash router. A reload lands where you were and a link to the dashboard is a link
 to the dashboard — neither was true of the old page, which kept the section in a
 body class. The hash means `serve.py` never has to learn about the app's routes.
+`/skills` is kept as a redirect to `/capabilities`, the name the tab took when it
+grew rules, processes and scripts beside the skills (its code still lives in
+`features/skills/`).
 
 **API docs** (`/api-docs`) frames the server's Swagger UI (`/api/docs`) in an
 iframe, so reading the API never leaves the app: the drawer, the URL and your

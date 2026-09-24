@@ -12,6 +12,7 @@ import {
   personDetailFixture,
   personDuplicatesFixture,
   settingsFixture,
+  scriptsFixture,
   skillsFixture,
   statusFixture,
   triggerFixture,
@@ -60,6 +61,14 @@ export const handlers = [
     return HttpResponse.json(id.startsWith("person_") ? personDetailFixture : nodeDetailFixture);
   }),
   http.get("/api/skills", () => HttpResponse.json(skillsFixture)),
+  http.get("/api/scripts", () => HttpResponse.json(scriptsFixture)),
+  http.get("/api/script", ({ request }) => {
+    const name = new URL(request.url).searchParams.get("name") || "";
+    const entry = scriptsFixture.scripts.find((x) => x.name === name);
+    return entry
+      ? ok({ script: { ...entry, text: `#!/bin/sh\n# ${entry.summary}\necho ${name}\n` } })
+      : HttpResponse.json({ ok: false, error: "no such script" });
+  }),
   http.get("/api/rule", ({ request }) => {
     const id = new URL(request.url).searchParams.get("id");
     return ok({ rule: { id, title: "a rule", body: "THE RULE\n\nDo the thing." } });
@@ -151,6 +160,37 @@ export const handlers = [
     }),
   ),
   write("/api/import-bundle", () => ok({ applied: [{ id: "skill_new", action: "created" }] })),
+  write("/api/export-scripts", () =>
+    ok({
+      path: "/home/brain/bundles/scripts-1.zip",
+      name: "scripts-1.zip",
+      download: "/api/bundle?name=scripts-1.zip",
+      count: 2,
+      scripts: ["dev_env.py", "mithra_token.sh"],
+    }),
+  ),
+  write("/api/create-script", () => ok({ name: "new.sh", action: "created" })),
+  write("/api/upload-scripts", () =>
+    ok({
+      token: "tok-s",
+      dir: "/home/brain/scripts",
+      count: 2,
+      items: [
+        { ...scriptsFixture.scripts[0]!, exists: true, identical: false, existing_bytes: 100 },
+        { ...scriptsFixture.scripts[1]!, name: "new.sh", exists: false },
+      ],
+    }),
+  ),
+  write("/api/import-scripts", () =>
+    ok({
+      dir: "/home/brain/scripts",
+      applied: [
+        { name: "dev_env.py", action: "kept" },
+        { name: "new.sh", action: "created" },
+      ],
+      not_in_zip: [],
+    }),
+  ),
   write("/api/delete-contracts", () => ok({ count: 1, deleted: [{ id: "rule_x", type: "rule" }], refused: [], not_found: [] })),
 ];
 

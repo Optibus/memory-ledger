@@ -182,6 +182,11 @@ Commands:
 | `export-bundle [--skill ID]... [--rule ID]... [--process ID]... [--spec F] [--out Z]` | A **selection** as one zip (§5a): a directory per kind plus an `import-plan.json` naming the order it can be read back in. Rules a selected skill honors travel with it; a skill it *requires* that was not selected is **named in the report**, never pulled in silently. |
 | `inspect-bundle --zip Z` | What is inside a bundle and which of it this brain already holds. Read-only, so it is safe to run on a zip you were sent. |
 | `import-bundle --zip Z [--select ID:MODE]... [--spec F] [--mode M] [--process-realm R]` | Apply a bundle in its plan's order. Processes land in `--process-realm` (default: the configured realm), keeping the realm they left as `origin_realm`. An item already here is left alone unless you name it: `update` refreshes it, `replace` deletes it first, `ignore` skips it. An item you never mentioned is created when new and untouched when it exists. |
+| `scripts` | List the person's local scripts in `<home>/scripts` (§5c): name, size, executable bit, language, and the first docstring or comment line. Files only — the brain runs one only when a trigger links it. |
+| `create-script --name N [--file F] [--no-exec] [--replace]` | Write one script into `<home>/scripts`, from a file or stdin, executable unless `--no-exec`. An existing one is overwritten only with `--replace`, after its old bytes go to `<home>/backups/scripts-<stamp>/` (§5c). |
+| `export-scripts [--name N]... [--out Z]` | Zip the named scripts (all, when none are named) into `<home>/bundles/scripts-<stamp>.zip`, each keeping its executable bit (§5c). |
+| `inspect-scripts --zip Z` | What a scripts zip holds and which of it collides with a local file, and whether the bytes are identical. Read-only. |
+| `import-scripts --zip Z [--select NAME:MODE]... [--all] [--spec F] [--mode keep\|replace]` | Land scripts in `<home>/scripts`. A new file is written; an existing one is overwritten **only** for `replace`, after its old bytes are copied to `<home>/backups/scripts-<stamp>/`. A name not selected is not imported. |
 | `del-contracts [--id ID]... [--spec F] [--force]` | Delete skill and rule nodes, edges included. §2a's archive-never-delete is about **work**; a contract nobody should fire again has to actually stop firing. A built-in needs `--force`, since its file re-ingests it anyway. |
 | `match-skills "situation" [--limit N]` | Find skills matching the situation — ranked by **relevance first**, with reinforcement (usage) as a bounded booster. Read the procedure from the node body (`get-node`). |
 | `use-skill --id ID` | **Reinforce** a skill after it fires (usage_count↑, confidence↑, last_used stamped). |
@@ -496,14 +501,14 @@ expose the UI (`--host 0.0.0.0` for phone access), pass **`--no-write`**: every
 `POST` then returns 403 and the UI hides its editing controls (`/api/meta`
 reports `writable: false`).
 
-**Five sections, behind one hamburger: Map, Dashboard, People, Skills, Settings.** The UI
+**Five sections, behind one hamburger: Map, Dashboard, People, Capabilities, Settings.** The UI
 is a React single-page app (`frontend/`, built to a committed `frontend/dist`
 that `scripts/serve.py` serves, and rebuilds when your source is newer — see
 [the frontend](docs/frontend.md)). The
 sections live in a left drawer (`m` toggles it, Settings pinned at the bottom) so
 nothing sits on top of the search bar, each section owns the whole viewport, and
-**the section is in the URL** (`/map`, `/dashboard`, `/people`, `/skills`,
-`/settings`), so
+**the section is in the URL** (`/map`, `/dashboard`, `/people`, `/capabilities`,
+`/settings`; the old `/skills` redirects to `/capabilities`), so
 a reload lands where you were and a link to a section is a link to that section. The map's
 facet filters — node types, realms, kinds, and the display toggles — are one
 dropdown each, multi-select, with an **all** / **none** that applies to that scope
@@ -555,7 +560,9 @@ it moves the fewest edges. That is a default, not a verdict: the radio on any
 member re-points the merge, since only a human can say which spelling is the real
 person.
 
-**The Skills section** (`☰` › Skills) draws the two skill trees §5a put in the
+**The Capabilities section** (`☰` › Capabilities) holds four kinds of thing, in
+this order: **skills**, **rules**, **processes** and **scripts**. It was the Skills
+section until it held more than skills. It draws the two skill trees §5a put in the
 graph, built-in and user, nested by the `requires` edge. Opening a skill shows
 its graph surface (which node types it reads and writes), its `waits-for` and
 `enriched-by` links, and **the rules it answers to**, in three buckets:
@@ -607,6 +614,10 @@ pre-commit checker.
 | Download a bundle | `GET /api/bundle?name=` | The zip, as an attachment. `name` is reduced to a bare filename, so it cannot point out of that directory. |
 | Preview someone's bundle | `POST /api/upload-bundle` | `{filename, data}` (base64, ≤32MB). Stages it and reports every item and whether this brain already holds it. **Writes nothing.** |
 | Import what was ticked | `POST /api/import-bundle` | `{token, select{id: update\|replace\|ignore}, process_realm}`. The staged zip is consumed, so a token works once. |
+| List the local scripts | `GET /api/scripts` | `graph.py scripts` — every file in `<home>/scripts` (§5c). `GET /api/script?name=` reads one. |
+| Zip scripts | `POST /api/export-scripts` | `{names[]}` (empty: all) → one zip under `<home>/bundles`, plus a `download` URL through `/api/bundle`. |
+| Preview a scripts upload | `POST /api/upload-scripts` | `{filename, data}` — a scripts zip, or one loose script file staged as a zip of one. Reports each script with `exists` and `identical`. **Writes nothing.** |
+| Import the ticked scripts | `POST /api/import-scripts` | `{token, select{name: replace\|keep}}`. A replaced file is backed up first; the token works once. |
 | Delete what was ticked | `POST /api/delete-contracts` | `{ids[], force?}` → `graph.py del-contracts`. A built-in is refused unless `force`. |
 | Read the contract shapes | `GET /api/meta` | `skill_sections`, `rule_sections`, `decl_labels`, `node_types`. The form is generated from these, never from headings typed into the page. |
 
@@ -1298,9 +1309,9 @@ the plan rather than resolved arbitrarily and silently.
 and before the skills. Unlike a contract, a process is **realm-scoped**: it lands
 in the importer's configured realm, or the one they pick in the import dialog,
 and keeps the realm it came from as `props.origin_realm` — so a teammate's way
-of working arrives in *your* work realm and still says whose it was. The Skills
-page lists processes beside skills and rules, filters by type (multi-select:
-process, skill, rule), by source (multi-select: built-in, user, learned; every
+of working arrives in *your* work realm and still says whose it was. The Capabilities
+page lists processes beside skills, rules and scripts, filters by type (multi-select:
+skill, rule, process, script), by source (multi-select: built-in, user, learned; every
 process counts as user) and by realm, defaulting to the current realm. A new
 process is written from the page's floating **+** button, beside skills and rules.
 
@@ -1395,6 +1406,47 @@ realm rather than a folder or a file because the brain already has a word for
 graph stops being diffable against the thing it backs up. The snapshots are
 `rule-snapshot` nodes, never `rule`, so a backup can never start being read as a
 convention. Run it before any bulk edit of the genome, not only this one.
+
+## 5c. Local scripts — the person's own automation, as files
+
+`<home>/scripts` holds the automation that is **not agnostic enough to ship in
+the plugin**: it assumes one person's repos, ticket keys or tool set (the home
+README says why). The plugin stays company-neutral; these ride alongside it. They
+are **files, not nodes** — nothing about a script is written into the graph, and
+the brain **never executes one on its own**. The one exception is a script the
+person linked to a trigger's `script` action in Settings → Triggers
+([docs/trigger.md](docs/trigger.md#actions)): that link is the person's choice,
+and the engine runs that file, by name, with argv and no shell. Otherwise it does
+three things with them, from the CLI (`scripts`, `export-scripts`,
+`inspect-scripts`, `import-scripts`) and from the Capabilities page:
+
+- **List and read.** Each script shows its name, language, size, executable bit,
+  and the first line that says what it is (a module docstring or a leading
+  comment, past the shebang). Only plain files with a safe name are listed:
+  dotfiles, subdirectories (`__pycache__`), symlinks and anything over 2MB are not
+  scripts.
+- **Export** to `<home>/bundles/scripts-<stamp>.zip` with a `scripts-plan.json`,
+  each member under `scripts/` and **keeping its unix mode**, so an executable
+  arrives executable. All of them from *Options › Export all scripts*, or the
+  ticked ones through selection mode — a zip of their own, never mixed into a
+  skills bundle, since a bundle's plan is an import order for contracts.
+- **Import** a scripts zip, or a **single loose file** (staged as a zip of one).
+  The upload is inspected first and writes nothing; the dialog marks each script
+  *new*, *identical* or *differs from yours*. A differing one defaults to **keep
+  mine**: a script is code, and an import that silently overwrote a working copy
+  is the worst way to find out two machines drifted. **Replace** is an explicit
+  choice, and the old bytes go to `<home>/backups/scripts-<stamp>/` before the
+  new ones land.
+
+- **Create** one, from a trigger's *New script…* or `graph.py create-script`
+  (`POST /api/create-script`): written executable, refused over an existing name
+  unless replacing, and a replaced file's bytes are backed up first, as on import.
+
+A scripts zip is **untrusted**: only members named `scripts/<name>` are read, the
+name must match a strict bare-filename pattern (no separator, no leading dot, no
+`..`), and the file that reaches disk is joined from that checked name — never
+from the member path. Selection mode never **deletes** a script: removing one is
+done on disk, by the person.
 
 ---
 
