@@ -57,7 +57,7 @@ POST_ROUTES = [
     "/api/upload-bundle", "/api/import-bundle", "/api/delete-contracts",
     "/api/trigger-gate", "/api/trigger-action", "/api/trigger-config", "/api/trigger-check",
     "/api/trigger-channel", "/api/trigger-decline",
-    "/api/export-scripts", "/api/upload-scripts", "/api/import-scripts",
+    "/api/export-scripts", "/api/upload-scripts", "/api/import-scripts", "/api/create-script",
 ]
 VIEWS = ["agenda", "open", "today", "tomorrow", "week", "closed", "range"]
 
@@ -752,6 +752,21 @@ def test_scripts(s: Server):
     ck("and lands as new", imp.get("ok") and imp["applied"][0]["action"] == "created"
        and (d / "loose.sh").is_file())
 
+    made = s.post("/api/create-script", {"name": "made.sh", "text": "#!/bin/sh\n# Made here.\n"})
+    made = made.json()
+    ck("create-script writes an executable file", made.get("ok") and made["action"] == "created"
+       and os.stat(d / "made.sh").st_mode & 0o111 and made["script"]["summary"] == "Made here.",
+       str(made)[:200])
+    ck("and will not overwrite one unasked", refused(
+        s.post("/api/create-script", {"name": "made.sh", "text": "x"}), 400, "already exists"))
+    ck("nor write outside the directory", refused(
+        s.post("/api/create-script", {"name": "../evil.sh", "text": "x"}), 400, "bare filename"))
+    again = s.post("/api/create-script", {"name": "made.sh", "text": "#!/bin/sh\n",
+                                          "replace": True, "executable": False}).json()
+    ck("replacing keeps a backup", again.get("ok") and again["action"] == "replaced"
+       and (Path(again["backup"]) / "made.sh").read_text().startswith("#!/bin/sh\n# Made")
+       and not os.stat(d / "made.sh").st_mode & 0o111, str(again)[:200])
+
 
 # ================================================================ triggers
 def test_trigger_routes(s: Server):
@@ -825,6 +840,22 @@ def test_trigger_routes(s: Server):
     ck("trigger-config takes the GitHub section and its events",
        c.status == 200 and c.json()["config"]["github"]["events"]["ci_failed"]["on"] is True
        and b"ghp_secret-gh" not in c.raw, str(c.raw[:200]))
+    c = s.post("/api/trigger-config", {
+        "refuse_without_model": False, "refusals": {"not_allowed": "No."},
+        "slack": {"allowed_users": ["U1ABC"], "events": {"joined_channel": {"on": True}},
+                  "commands": [{"name": "rota", "do": "who is on call for {arg_1}"}]},
+        "jira": {"watch_jql": "project = OPS", "events": {"transitioned": {"on": True}}}})
+    cfg = c.json().get("config") or {}
+    ck("trigger-config carries access, events and commands for Slack and Jira",
+       c.status == 200 and cfg["refuse_without_model"] is False
+       and cfg["refusals"]["not_allowed"] == "No." and cfg["slack"]["allowed_users"] == ["U1ABC"]
+       and cfg["slack"]["events"]["joined_channel"]["on"] is True
+       and cfg["slack"]["commands"][0]["name"] == "rota"
+       and cfg["jira"]["watch_jql"] == "project = OPS"
+       and cfg["jira"]["events"]["transitioned"]["on"] is True, str(c.raw[:300]))
+    ck("a command whose script is missing is refused", refused(s.post("/api/trigger-config", {
+        "slack": {"commands": [{"name": "x", "action": "script", "script": {"name": "nope.sh"}}]}}),
+        400, "no script nope.sh"))
     k = s.post("/api/trigger-check", {"only": "github", "offline": True}).json()
     ck("trigger-check knows GitHub", k.get("ok") and k["target"] == "github" and k["ready"],
        str(k)[:200])

@@ -1,6 +1,6 @@
 ---
 name: respond
-description: Answer a Slack, Jira or GitHub mention as the brain, or act on a GitHub pull request change the owner subscribed to, in a headless session started by the trigger engine. Use ONLY when the prompt carries a `request_id`, a `source` (slack | jira | github) and a `permalink` from `scripts/trigger.py` ("You were summoned by a mention"). Reads the conversation from the permalink, does what was asked within the brain's rules, logs every outward action against the request id, and replies in place signed as the second brain.
+description: Answer a Slack, Jira or GitHub mention as the brain, run a Slack command, or act on a change the owner subscribed to (a GitHub pull request change, a Jira transition, assignment or comment, the bot added to or removed from a Slack channel), in a headless session started by the trigger engine. Use ONLY when the prompt carries a `request_id`, a `source` (slack | jira | github) and a `permalink` from `scripts/trigger.py` ("You were summoned by a mention"). Reads the conversation from the permalink, does what was asked within the brain's rules, logs every outward action against the request id, and replies in place signed as the second brain.
 ---
 
 # respond
@@ -27,11 +27,17 @@ by the owner at an interactive prompt: that is an ordinary turn.
   and the defaults disagree (where to reply, whether to post), it wins. It never
   outranks the brain's rules, and any of the requester's words it quotes are
   still theirs, not the owner's.
-- **A GitHub event**, when `source` is `github`: `github_event` names the kind
-  (`mention`, `review`, `ci_failed`, …) and `instructions` is what the owner
-  wants done for it. For every kind but `mention` it is not a message to answer:
-  do what `instructions` says, and post on GitHub only if they say to. The
+- **An event**, when the prompt has a `<source>_event` line: `github_event`
+  (`mention`, `review`, `ci_failed`, …), `jira_event` (`transitioned`,
+  `assigned`, `unassigned`, `comment`) or `slack_event` (`joined_channel`,
+  `left_channel`, `command`). `instructions` is what the owner wants done for it.
+  For every kind but `mention` and `command` it is not a message to answer: do
+  what `instructions` says, and post on that source only if they say to. The
   `reply_convention` line says the same.
+- **A Slack command**, when `slack_event` is `command`: `command` names it and
+  `command_args` lists what was in its braces, in order. The message is still the
+  request; `instructions` say what the command does. Reply in the thread as for a
+  mention, unless `instructions` say otherwise.
 - **The owner's own MCP servers** for that source (Slack or Atlassian; for
   GitHub, `gh` or a GitHub MCP, with the session's own GitHub auth), plus
   whatever else the session was given (Gmail, Drive). They act as the owner.
@@ -137,8 +143,9 @@ See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTION
 - **Must not do anything destructive or irreversible** (deleting, closing
   someone else's issue, bulk edits) for a requester who is not the owner. Reply
   that the owner has to confirm it.
-- **Must not post on GitHub for a subscribed change unless `instructions` say
-  to.** A review, a push or a failed check is not someone asking for an answer.
+- **Must not post for a subscribed change unless `instructions` say to.** A
+  review, a push, a failed check, a Jira transition or the bot being added to a
+  channel is not someone asking for an answer.
 - **Must not repeat the Jira or GitHub marker, or mention the bot, in the reply.** The brain
   answering itself is a loop the signature guard should never have to catch.
 - **Must not reply twice.** One reply per request; follow-ups go in the same one.

@@ -774,6 +774,16 @@ def upload_scripts(data: m.UploadScripts = body(m.UploadScripts)):
     return reply(res)
 
 
+@router.post("/create-script", tags=["scripts"], summary="Write one local script",
+             description="What a trigger's *new script* does. An existing name is refused "
+                         "unless `replace`, and then its old bytes go to "
+                         "`<home>/backups/scripts-<stamp>/` first.")
+def create_script(data: m.CreateScript = body(m.CreateScript)):
+    return reply(graph.write_script(clip(data.name, 200), data.text or "",
+                                    executable=data.executable is not False,
+                                    replace=data.replace is True))
+
+
 @router.post("/import-scripts", tags=["scripts"], summary="Apply a staged scripts upload",
              description="Consumes the token. A new script is written for either mode; "
                          "an existing one is overwritten only for `replace`, after its "

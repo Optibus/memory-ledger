@@ -195,18 +195,25 @@ class TriggerConfig(Body):
     refusals: _obj = Field(None, description="`not_enabled`: the notice for a mention in a "
                                              "conversation nobody opened. `policy`: the one "
                                              "for a request that breaks a rule; `{reason}` "
-                                             "is the one-line why.")
+                                             "is the one-line why. `not_allowed`: the one for "
+                                             "a blocked user or an owner-only command.")
     translate_notices: Any = Field(None, description="Send notices in the language of the "
                                                      "message they answer (a model call).")
     claude: _obj = Field(None, description="`bin`, `mcp_config`, `strict_mcp_config`, "
                                            "`timeout_s`, `max_concurrent`, `extra_args`, `cwd`.")
-    slack: _obj = Field(None, description="`enabled`, `prompt` (the run command, with "
-                                          "`{variables}`), `owner_user_id`, "
-                                          "`thread_lookback_days`, and the write-only "
-                                          "`app_token`, `bot_token`, `user_token`.")
-    jira: _obj = Field(None, description="`enabled`, `prompt` (the run command), "
-                                         "`base_url`, `email`, `owner_account_id`, "
-                                         "`marker`, `poll_seconds`, `jql`, `max_catchup_hours`, "
+    refuse_without_model: Any = Field(None, description="A refusal is posted as written "
+                                                        "through the source's API, or only "
+                                                        "logged: never a model call.")
+    slack: _obj = Field(None, description="`enabled`, `owner_user_id`, "
+                                          "`thread_lookback_days`, `dms`, `dms_open`, "
+                                          "`allowed_users`, "
+                                          "`blocked_users`, `events` (`{kind: {on, do, action, "
+                                          "http, script}}`), `commands` (the whole list), "
+                                          "`prompt` (the old mention run command), and the "
+                                          "write-only `app_token`, `bot_token`, `user_token`.")
+    jira: _obj = Field(None, description="`enabled`, `base_url`, `email`, "
+                                         "`owner_account_id`, `marker`, `poll_seconds`, `jql`, "
+                                         "`watch_jql`, `max_catchup_hours`, `events`, `prompt`, "
                                          "and the write-only `token`.")
     github: _obj = Field(None, description="`enabled`, `api_url`, `login`, `marker`, "
                                            "`poll_seconds`, `repos`, `trusted_associations`, "
@@ -329,6 +336,13 @@ class UploadScripts(Body):
     filename: Text = T("The file's name. A name not ending in .zip is staged as one "
                        "script by that name.")
     data: Text = T("A scripts zip or one script file, base64 (a data: URL is accepted).")
+
+
+class CreateScript(Body):
+    name: Text = T("A bare filename, e.g. `deploy.sh`.")
+    text: Text = T("The script itself.")
+    executable: Any = Field(True, description="Write it with the executable bit (default).")
+    replace: Any = Field(False, description="Overwrite one by that name, after a backup.")
 
 
 class ImportScripts(Body):

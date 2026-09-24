@@ -3187,8 +3187,47 @@ def import_scripts(path: Path, select: dict) -> dict:
     return res
 
 
+def write_script(name: str, text: str, executable: bool = True, replace: bool = False) -> dict:
+    """Write one script into `<home>/scripts`: what a trigger's "new script"
+    does, so the person need not leave the page to make the file a trigger
+    runs. An existing file is replaced only when asked, after its old bytes go
+    to `<home>/backups/scripts-<stamp>/`, like an import."""
+    if not script_name_ok(name or ""):
+        return {"ok": False, "error": "a script name is a bare filename: letters, digits, "
+                                      ". _ -, no leading dot"}
+    blob = (text or "").encode("utf-8")
+    if len(blob) > SCRIPT_MAX_BYTES:
+        return {"ok": False, "error": f"larger than {SCRIPT_MAX_BYTES // (1024 * 1024)}MB"}
+    d = scripts_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    target = d / name
+    if target.is_symlink():
+        return {"ok": False, "error": f"{name} is a symlink; change it on disk"}
+    exists = target.is_file()
+    if exists and not replace:
+        return {"ok": False, "exists": True, "error": f"{name} already exists"}
+    res = {"ok": True, "dir": str(d), "name": name, "action": "replaced" if exists else "created"}
+    if exists:
+        backup = backups_dir() / f"scripts-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        backup.mkdir(parents=True, exist_ok=True)
+        (backup / name).write_bytes(target.read_bytes())
+        res["backup"] = str(backup)
+    tmp = d / f".{name}.{secrets.token_hex(4)}.tmp"
+    tmp.write_bytes(blob)
+    tmp.chmod(0o755 if executable else 0o644)
+    os.replace(tmp, target)
+    res["script"] = _script_row(name, blob, executable)
+    return res
+
+
 def cmd_scripts(args):
     out(list_scripts())
+
+
+def cmd_create_script(args):
+    text = Path(args.file).expanduser().read_text(encoding="utf-8") if args.file \
+        else sys.stdin.read()
+    out(write_script(args.name, text, executable=not args.no_exec, replace=args.replace))
 
 
 def cmd_export_scripts(args):
@@ -6385,6 +6424,17 @@ def build_parser():
     a.set_defaults(func=cmd_export_scripts)
     a.add_argument("--name", action="append", help="script filename (repeatable)")
     a.add_argument("--out", help="destination zip")
+
+    a = sub.add_parser("create-script", description=(
+        "Write one script into <home>/scripts, from --file or stdin. An existing "
+        "one is replaced only with --replace, after a copy goes to "
+        "<home>/backups/scripts-<stamp>/."))
+    a.set_defaults(func=cmd_create_script)
+    a.add_argument("--name", required=True, help="bare filename, e.g. deploy.sh")
+    a.add_argument("--file", help="read the text from this file (default: stdin)")
+    a.add_argument("--no-exec", dest="no_exec", action="store_true",
+                   help="write it without the executable bit")
+    a.add_argument("--replace", action="store_true", help="overwrite an existing one")
 
     a = sub.add_parser("inspect-scripts", description=(
         "What a scripts zip holds and which of it is already here. Reads only."))

@@ -228,6 +228,7 @@ def _slack_main(cfg: dict, stop_event: threading.Event) -> None:
         _note("slack", state="misconfigured", last_error=str(e))
         return
     notify = trigger.slack_notify(cfg, _notice)
+    dms = bool((cfg.get("slack") or {}).get("dms")) and bool(trigger.secret(cfg, "slack", "user_token"))
 
     def on_mention(event: dict) -> None:
         try:
@@ -240,6 +241,15 @@ def _slack_main(cfg: dict, stop_event: threading.Event) -> None:
         except Exception as e:
             _note("slack", last_error=str(e)[:300])
 
+    def on_member(event: dict) -> None:
+        try:
+            ev = trigger.slack_member_event(event, cfg, bot_user_id=bot)
+            res = trigger.handle(ev, cfg, _dispatch)
+            if ev:
+                _note("slack", last_event=_now(), last_action=res.get("action"))
+        except Exception as e:
+            _note("slack", last_error=str(e)[:300])
+
     def listener(client, req) -> None:
         if req.type != "events_api":
             return
@@ -249,6 +259,14 @@ def _slack_main(cfg: dict, stop_event: threading.Event) -> None:
         event = (req.payload or {}).get("event") or {}
         if event.get("type") == "app_mention":
             threading.Thread(target=on_mention, args=(event,), daemon=True).start()
+        elif (event.get("type") == "message" and dms
+              and event.get("channel_type") in trigger.DM_TYPES
+              and trigger.mentions_bot(event.get("text") or "", bot)):
+            # One of the owner's DMs, heard through their user token: the bot
+            # is never in it, so no app_mention comes for it.
+            threading.Thread(target=on_mention, args=(event,), daemon=True).start()
+        elif event.get("type") in trigger.SLACK_MEMBER_EVENTS and event.get("user") == bot:
+            threading.Thread(target=on_member, args=(event,), daemon=True).start()
 
     client = SocketModeClient(app_token=app_token, web_client=WebClient(token=bot_token))
     client.socket_mode_request_listeners.append(listener)

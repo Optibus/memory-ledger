@@ -3,8 +3,12 @@
 Mention the brain in a Slack thread or a Jira comment and it answers there, as
 you, without anyone opening Claude Code and pasting a link. On GitHub a mention
 of you works the same way, and so do the pull request changes you pick: a
-review on your PR, a review request, failing checks, a merge. Everything runs on
-your own machine. Nothing is exposed to the internet, and no bot ever speaks.
+review on your PR, a review request, failing checks, a merge. Jira and Slack have
+changes of their own to pick (an issue moving status or changing hands, the bot
+added to a channel), and Slack takes **commands**: `@brain deploy {staging, v1.2}`.
+Each trigger either starts a Claude session, calls an API, or runs one of your
+scripts. Everything runs on your own machine. Nothing is exposed to the
+internet, and no bot ever speaks.
 
 This page is the design and the reference. Setup is in
 [Setting it up](#setting-it-up); the moving parts are in
@@ -50,7 +54,11 @@ A conversation is **closed until you open it**.
 | you (the owner) | anywhere | runs, and that conversation is **enabled** from then on |
 | someone else | an enabled conversation | runs |
 | someone else | not enabled | **refused**: nothing runs, and one short notice says so |
-| GitHub: a change you switched on | anywhere the token sees | runs, **as a subscription**. It opens nothing for anyone else |
+| someone else, in a DM with you (`slack.dms`) | a DM you opened with your own tag, or any DM with `slack.dms_open` | runs, and answers in the DM as you |
+| Slack: someone on `allowed_users` | anywhere | runs, and opens nothing for anyone else |
+| Slack: someone on `blocked_users` | anywhere, open channels included | **refused** with the not-allowed notice. The owner is never blocked |
+| Slack: someone else's command | wherever the gate lets them in | runs only if the command is marked `anyone`; else **refused** with the not-allowed notice |
+| a change you switched on (GitHub, Jira, Slack) | anywhere the token sees | runs, **as a subscription**. It opens nothing for anyone else, even when you made the change |
 
 A conversation is a Slack thread (`slack:<channel>:<thread_ts>`), a Jira issue
 (`jira:<KEY>`), a GitHub pull request or issue (`github:<owner>/<repo>#<n>`), or a
@@ -58,6 +66,12 @@ A conversation is a Slack thread (`slack:<channel>:<thread_ts>`), a Jira issue
 your own mention and live in `trigger_gate`. Whole channels are a list you keep
 by hand, in `trigger_channel`: an open channel runs everyone's mentions in every
 thread. Both are in `graph.db`, so they survive restarts.
+
+**Deciding costs nothing.** Who may summon the brain is decided by the engine
+from the gate, the lists and the command's `anyone` flag, before any session
+exists. A refusal never reaches a model (see `refuse_without_model` below), so
+someone the brain turns away cannot spend on it. A command the owner runs does
+not open the thread: it is not a conversation.
 
 **The channel list is history, not just state.** Closing a channel keeps its row,
 marked with who closed it and when, and reopening it restores that same row. In
@@ -72,25 +86,35 @@ python3 scripts/trigger.py channels --remove C0123ABCD
 python3 scripts/trigger.py enable  --scope jira:PROJ-42              # a thread or issue
 ```
 
-## Saying no — two notices
+## Saying no — three notices
 
 | Notice | When | Sent by |
 |---|---|---|
 | **not enabled here** (`refusals.not_enabled`) | someone mentions the brain in a conversation you have not opened | the engine, before any session. Once per conversation, so a colleague hammering the bot does not fill the thread. The request is `refused` |
+| **not allowed** (`refusals.not_allowed`) | someone on `slack.blocked_users`, or someone else running a command only you may run | the engine, like the one above, once per conversation. The request is `refused`, with `blocked` or `owner-only command` as its reason |
 | **against a rule** (`refusals.policy`) | the session reads the request and finds it breaks one of your rules or guardrails | the session, through `trigger.py decline`, which records the rule and reason and prints the notice. `{reason}` is a one-line why, safe to show. The request is `declined` |
 
-**Both go out as you, never as the bot**, and both end with the signature:
+**They go out as you, never as the bot**, and end with the signature.
 
-- **With a Slack user token** (`xoxp-…`), the engine posts the not-enabled notice
-  itself.
-- **Without one** (it is optional), it goes out through **your Slack MCP**, in a
-  short headless session whose only job is to post that one message. You still
-  post it, and it costs a model call.
-- **On Jira**, it is a comment made with the Jira token.
+**A refusal makes no model call** (`refuse_without_model`, on by default). The
+engine's two notices go out exactly as written, through the source's own API:
 
-**Every notice is in the sender's language.** The message that mentioned the
-brain decides, not the channel or the person: someone writing in Hebrew gets
-Hebrew, and the same person writing in English the next day gets English.
+- **On Slack, with a user token** (`xoxp-…`), the engine posts it itself.
+- **On Slack without one**, there is no way to post as you without a model, so
+  the refusal is **only logged** (`refusal-notice-skipped`), never posted.
+- **On Jira**, it is a comment made with the Jira token; **on GitHub**, one made
+  with the GitHub token, when `github.refusal_notice` is on.
+
+Switched off, the behaviour of the first version comes back: each notice is
+translated first (below), and on Slack without a user token it goes out through
+**your Slack MCP**, in a short headless session whose only job is to post that one
+message. You still post it, and it costs a model call.
+
+**With `refuse_without_model` off, every notice is in the sender's language.**
+The message that mentioned the brain decides, not the channel or the person:
+someone writing in Hebrew gets Hebrew, and the same person writing in English
+the next day gets English. (The policy notice is posted by the session, which
+translates it either way: that request already passed the gate.)
 
 - With a user token, and on Jira, a small tool-less model (`claude.notice_model`,
   default `haiku`) rewrites the template first.
@@ -122,9 +146,17 @@ fires, in your words, with variables in braces where a value belongs.
 
 | Trigger | Where the run command lives | Empty means |
 |---|---|---|
-| a Slack mention | `slack.prompt` | read the thread, do what it asks, reply there |
-| a marked Jira comment | `jira.prompt` | read the issue, do what it asks, comment on it |
-| each GitHub event | `github.events.<kind>.do`; your own marked comment uses `mention`'s | the event's default instruction (for `mention`: none) |
+| a Slack mention | `slack.events.mention.do` (`slack.prompt` until one is saved) | read the thread, do what it asks, reply there |
+| a marked Jira comment | `jira.events.mention.do` (`jira.prompt` until one is saved) | read the issue, do what it asks, comment on it |
+| each Slack, Jira or GitHub event | `<source>.events.<kind>.do`; your own marked GitHub comment uses `mention`'s | the event's default instruction (for `mention`: none) |
+| a Slack command | `slack.commands[].do` | read the thread and do what the command asks |
+
+A run command is what a **Claude** action is told. An event or command can
+instead call an API or run a script ([Actions](#actions)); those use the same
+variables, in their URL, headers, body or arguments.
+
+The run command is kept on the request when it fires (`meta.do`, `meta.action`),
+so the audit shows what ran even after the setting changes.
 
 ```json
 {"slack": {"prompt": "{trigger_source} sent this task. Pick it up and reply to {trigger_user} in the thread at {trigger_link}."},
@@ -140,8 +172,8 @@ rendered command.
 | Variable | On | What it is | Example |
 |---|---|---|---|
 | `{trigger_source}` | every trigger | Where it came from: slack, jira or github. | `github` |
-| `{trigger_kind}` | every trigger | What happened: mention on Slack and Jira; on GitHub the event (mention, review_requested, review, comment, pushed, ci_failed, merged, closed, assigned), or request for your own comment with the marker. | `review_requested` |
-| `{trigger_user}` | every trigger | Who caused it: who mentioned you on Slack or Jira; on GitHub who commented, reviewed, requested the review, pushed, merged, closed or assigned (ci for failing checks). | `octocat` |
+| `{trigger_kind}` | every trigger | What happened: the event (on Slack mention, command, joined_channel, left_channel; on Jira mention, transitioned, assigned, unassigned, comment; on GitHub mention, review_requested, review, comment, pushed, ci_failed, merged, closed, assigned, or request for your own comment with the marker). | `review_requested` |
+| `{trigger_user}` | every trigger | Who caused it: who mentioned you, commented, added or removed you, moved or assigned the issue; on GitHub who commented, reviewed, requested the review, pushed, merged, closed or assigned (ci for failing checks). | `octocat` |
 | `{trigger_user_id}` | every trigger | Their id: a Slack user id, a Jira account id, a GitHub login. | `U012AB3CD` |
 | `{trigger_user_is_owner}` | every trigger | true when it was you. | `false` |
 | `{trigger_time}` | every trigger | When it happened at the source, ISO 8601 in UTC. | `2026-09-23T21:47:48+00:00` |
@@ -156,13 +188,33 @@ rendered command.
 | `{signature}` | every trigger | The signature line the brain ends its replies with. | `_sent by Gabriel's second brain_` |
 | `{slack_channel}` | Slack | The channel id. | `C0123ABCD` |
 | `{slack_thread}` | Slack | The thread's timestamp. | `1700000000.000100` |
+| `{slack_channel_name}` | Slack | The channel's name, without the #, when the bot may read it; else its id. | `general` |
+| `{command}` | Slack | A command: its name. | `deploy` |
+| `{args}` | Slack | A command: what was in its braces, as written. | `staging, v1.2` |
+| `{arg_1}` | Slack | A command: argument 1 in its braces, trimmed. | `staging` |
+| `{arg_2}` | Slack | A command: argument 2 in its braces, trimmed. | `v1.2` |
+| `{arg_3}` | Slack | A command: argument 3 in its braces, trimmed. | `now` |
+| `{arg_4}` | Slack | A command: argument 4 in its braces, trimmed. |  |
+| `{arg_5}` | Slack | A command: argument 5 in its braces, trimmed. |  |
+| `{arg_6}` | Slack | A command: argument 6 in its braces, trimmed. |  |
+| `{arg_7}` | Slack | A command: argument 7 in its braces, trimmed. |  |
+| `{arg_8}` | Slack | A command: argument 8 in its braces, trimmed. |  |
+| `{arg_9}` | Slack | A command: argument 9 in its braces, trimmed. |  |
 | `{jira_issue}` | Jira | The issue key. | `PROJ-123` |
+| `{jira_from}` | Jira | A transition: the status it left. | `In Progress` |
+| `{jira_to}` | Jira | A transition: the status it reached. | `In Review` |
+| `{jira_assignee}` | Jira | An assignment: who it is assigned to now; empty when unassigned. | `Ana Lima` |
+| `{jira_assignee_id}` | Jira | Their account id. | `712020:abcd` |
+| `{jira_previous_assignee}` | Jira | An assignment: who had it before; empty when nobody did. | `Bo Chen` |
 | `{github_repo}` | GitHub | owner/name. | `Optibus/memory-ledger` |
 | `{github_number}` | GitHub | The PR or issue number. | `5` |
 | `{github_item}` | GitHub | pull request or issue. | `pull request` |
 
 **How it is filled in.** Each `{name}` in the list is replaced by its value;
-a source-only one is empty on the other sources. Anything else in braces is
+a source-only one is empty on the other sources, and an event-only one (a
+transition's `{jira_from}`, a command's `{arg_1}`) is empty on the others. A
+command's pattern adds its named groups: `(?P<env>\w+)` is `{env}`, in that
+command only. Anything else in braces is
 left as written, so a command needs no escaping, but a `{word}` that looks
 like a variable and is not one is refused on save, so a typo is caught before
 anything runs.
@@ -174,6 +226,106 @@ request id, the message quoted verbatim as the request, how to log actions, how
 to decline, the signature, and the brain's rules and guardrails, which no run
 command overrides. `{trigger_content}` and `{trigger_user}` are written by whoever
 triggered it: put them in a command as their words, not as yours.
+
+## Events
+
+Each source lists what it notices, each with its own switch and what it does
+when it happens: `<source>.events.<kind> = {on, do, action, http, script}`. A
+switched-on event is a **subscription**: the switch is the permission, so it
+runs whoever caused it (you included: an event you fire is never ignored), and
+it opens no conversation. Its session is told it is not answering anyone, gets
+`<source>_event: <kind>`, and posts on that source only if its run command says
+to. GitHub's events are in [GitHub — polling](#github--polling).
+
+**Slack**
+
+| Kind | When | Variables of its own | On by default |
+|---|---|---|---|
+| `mention` | someone mentions the bot. Always on: the gate decides | | yes |
+| `joined_channel` | the bot is added to a channel (`member_joined_channel`) | `{slack_channel_name}`; `{trigger_user}` is who added it | no |
+| `left_channel` | the bot is removed from one (`member_left_channel`) | `{slack_channel_name}` | no |
+
+The two channel events arrive live only: Slack's history has nothing reliable to
+catch up from after a restart. They need the app to subscribe to those bot
+events (below). Being added does **not** open the channel; a run command can do
+that on purpose with `trigger.py channels --add {slack_channel}`.
+
+**Jira** — the changes count on the issues `jira.watch_jql` picks (default:
+assigned to you, reported by you, or watched by you), ANDed with `jira.jql`.
+
+| Kind | When | Variables of its own |
+|---|---|---|
+| `mention` | a comment carries the marker and mentions you, or is yours. Always on | |
+| `transitioned` | the status changes | `{jira_from}`, `{jira_to}` |
+| `assigned` | the assignee changes to someone (anyone, not only you) | `{jira_assignee}`, `{jira_assignee_id}`, `{jira_previous_assignee}` |
+| `unassigned` | the assignee is cleared | `{jira_previous_assignee}` |
+| `comment` | a new comment that is not a mention. Your own plain comments do not count: they are conversation | |
+
+All four change kinds are off by default. `{trigger_user}` is who made the change.
+
+## Commands
+
+A Slack mention can carry a command: `@brain deploy {staging, v1.2}`. Commands
+are a list in `slack.commands`:
+
+```json
+{"slack": {"commands": [
+  {"name": "deploy", "action": "script", "script": {"name": "deploy.sh"}},
+  {"name": "ticket", "pattern": "^ticket (?P<key>[A-Z]+-\\d+)", "anyone": true,
+   "action": "http", "http": {"method": "POST", "url": "https://hooks.example/t/{key}",
+                              "body": "{\"who\": \"{trigger_user}\"}"}},
+  {"name": "rota", "anyone": true, "do": "Tell {trigger_user} who is on call for {arg_1}."}
+]}}
+```
+
+- **Matching.** The message, with the bot's mention taken out, is matched
+  against each switched-on command's `pattern` in order, case-blind, and the first
+  that matches runs **instead of** the mention's handling. With no `pattern`, the
+  name as the first word: `deploy` matches `deploy {x}`, not `deployment`.
+- **Arguments.** The first `{...}` in the message is `{args}` as written, and
+  split on commas and trimmed, `{arg_1}` … `{arg_9}`. A pattern's named groups
+  are variables of that command. A group named like a variable is refused on
+  save.
+- **Who.** The same gate as a mention, and more: a command runs for **you
+  only**, unless it is marked `anyone`, and then for whoever the gate lets in
+  (an open thread or channel, an allowed user). Anyone else gets the not-allowed
+  notice. Running a command never opens the thread.
+- The session, for a Claude command, gets `slack_event: command`, `command:` and
+  `command_args:` lines, and replies in the thread as for a mention.
+
+## Actions
+
+What an event or a command does:
+
+| `action` | Does | Costs a model call |
+|---|---|---|
+| `claude` (default) | the headless session below, told the run command (`do`) | yes |
+| `http` | one HTTP request: `http.method`, `http.url`, `http.headers`, `http.body` | no |
+| `script` | runs a file in `<home>/scripts`: `script.name`, `script.args` | no |
+
+- **An API call** fills the variables in, escaped for where each lands:
+  percent-encoded in the URL, JSON-escaped inside a JSON body (a body starting
+  with `{` or `[`, or a JSON `Content-Type`), one line in a header. A value can
+  fill a field; it cannot add one. The URL must start with `http(s)://` and a
+  host, so a variable cannot choose where the request goes. A status of 400 or
+  more is `failed`; the status and the start of the answer are the request's
+  result. Headers are stored in `trigger.json`, mode 600, like the tokens.
+- **A script** is linked by name from `<home>/scripts`
+  ([CONVENTIONS §5c](../CONVENTIONS.md)), or written there from the page with
+  **New script…** (`POST /api/create-script`, `graph.py create-script`). It runs
+  as you, from `claude.cwd` or the brain home, with the session timeout. There
+  is **no shell in between**: each of `script.args` is one argv item with the
+  variables filled in, and with none, a command passes its own arguments, in
+  order. Every variable is also in its environment as `BRAIN_<NAME>`
+  (`BRAIN_TRIGGER_USER`, `BRAIN_ARG_1`, …), the command's arguments as
+  `BRAIN_ARGS_JSON`, and `MEMORY_LEDGER_REQUEST_ID` plus
+  `MEMORY_LEDGER_TRIGGER_SCRIPT` (the path of `trigger.py`) so it can log what it
+  did: `python3 "$MEMORY_LEDGER_TRIGGER_SCRIPT" action --kind … --detail …`. A
+  file that is not executable runs through its language's interpreter (python,
+  sh, node, ruby, perl). Exit 0 is `done`; its output is the result.
+- Both log an action on the request (`http` with the status, `script` with the
+  exit code and argv), and a switched-on one that could not run (no URL, a
+  script that is gone) is refused on save and reported by **Check**.
 
 ## Loops
 
@@ -194,10 +346,14 @@ A Slack app in **Socket Mode** opens an outbound websocket, so there is no publi
 endpoint. It subscribes to `app_mention` and listens while the server runs.
 
 - **Scopes (bot):** `app_mentions:read`, `channels:history`, `groups:history`,
-  and `channels:read` + `groups:read` for catch-up to list where it is;
-  `users:read` is optional and only turns a requester's id into a name. **No
-  `chat:write`.** An app-level token with `connections:write` opens the socket.
-- **Live:** each `app_mention` is acked, then handed to the engine.
+  and `channels:read` + `groups:read` for catch-up to list where it is (and for
+  a channel's name); `users:read` is optional and only turns a requester's id
+  into a name. **No `chat:write`.** An app-level token with `connections:write`
+  opens the socket.
+- **Bot events:** `app_mention`; add `member_joined_channel` and
+  `member_left_channel` for the two channel events.
+- **Live:** each `app_mention` is acked, then handed to the engine; so is a
+  `member_joined_channel` or `member_left_channel` whose member is the bot.
 - **Catch-up:** on every (re)connect, for each channel the bot is in (or only
   `slack.channels`), `conversations.history` reaching back
   `thread_lookback_days` (default 7) before the checkpoint, and
@@ -217,6 +373,31 @@ This half needs `slack_sdk` for the websocket, so it lives in the server
 (`scripts/brain_api/trigger_runtime.py`) with the server's other dependencies.
 Catch-up and the refusal notice are plain HTTPS and stay in the stdlib engine.
 
+### Slack — your direct messages
+
+People tag the brain in a chat **with you**: `@brain what's the status of the
+export?` in your DM, and it answers there, as you, signed. The bot can never be a
+member of a DM between two people, so Slack sends it nothing for one; these are
+heard through **your user token** instead, as events "on behalf of" you.
+
+- **Switch:** `slack.dms` (Settings: *Listen in your direct messages*). Needs the
+  user token, plus in the Slack app: the **user** scopes `im:history` and
+  `mpim:history` (and `chat:write` for refusal notices), and under **Event
+  Subscriptions → Subscribe to events on behalf of users**, `message.im` and
+  `message.mpim`. Reinstall the app after adding them.
+- **What counts:** a message in one of your DMs or group DMs that tags the bot.
+  Slack writes a tag outside the bot's channels as `<@U…|name>`; both forms
+  count. Every other message in your DMs is ignored and never stored.
+- **The gate:** a 1:1 DM is **one** conversation (`slack:D…`), since people rarely
+  thread there. Your own tag in a DM with Ana opens that DM to Ana's tags from
+  then on. `slack.dms_open` opens every DM with you at once, which lets anyone in
+  the workspace start a session as you by messaging you; blocked people are still
+  refused. A group DM keeps threads, like a channel.
+- **The reply** goes in the DM as a new message, not a thread, unless the tag was
+  in one.
+- **Live only:** catch-up does not read your DMs, so a tag sent while the server
+  was down is not answered.
+
 ### Jira — polling
 
 There is no Jira bot yet (creating one is heavier; it is the obvious next step).
@@ -233,6 +414,11 @@ the brain" — e.g. `@Your Name @brain can you move this to review?`.
 - A comment is a mention when it contains the marker (compared without case or
   accents, so `@cérebro` matches `@Cerebro`) **and** either mentions your account
   or is yours.
+- **Changes**, when a change kind is on: a second search,
+  `updated >= -<N>m AND (<watch_jql>) [AND (<jql>)]`, with the changelog
+  (`expand: changelog`, or `/issue/<key>/changelog` when the search does not carry
+  it). Each status or assignee item newer than the window is an event, and so is
+  each new comment that is not a mention. They are handled oldest first.
 - The checkpoint is the time the last successful poll started; the next poll
   reaches back to it plus a margin. Missed a day with the laptop shut? The first
   poll reaches back to the checkpoint, capped at `max_catchup_hours`.
@@ -402,8 +588,12 @@ All of it is **per person** and lives in the brain home, never in this repo:
 `<home>/trigger.json`, written mode 600 because it may hold tokens.
 
 **The easy way is the web UI: Settings → Triggers.** It has a master switch, and
-one panel each for Slack, Jira, GitHub and Claude. The GitHub panel also lists
-every event kind, each with its switch and its instruction. Each panel has its own on/off switch,
+one panel each for Slack, Jira, GitHub and Claude. The Slack, Jira and GitHub
+panels list every event kind, each with its switch and its action; the Slack
+panel also has the allowed and blocked lists and the commands. **Everything
+folds**: each panel by its title, each events list and command list by its
+heading, and each switched-on event or command down to one line saying what it
+does. What is folded is remembered in the browser. Each panel has its own on/off switch,
 its fields, a **Save** and a **Check** that proves the stored tokens against the
 real service without starting anything. Saving restarts the watchers on the new
 file, so a switch flipped there takes effect at once. Tokens are write-only: the
@@ -420,8 +610,10 @@ The file itself, for editing by hand or scripting:
   "signature": "_sent by {owner}'s second brain_",
   "refusals": {
     "not_enabled": "I'm not enabled in this conversation, so I did nothing. {owner} can enable me by mentioning me here.",
-    "policy": "I can't do that: it goes against a rule {owner} has set for me, so I did nothing. {reason}"
+    "policy": "I can't do that: it goes against a rule {owner} has set for me, so I did nothing. {reason}",
+    "not_allowed": "You can't ask me that here, so I did nothing. Only {owner} can change who may."
   },
+  "refuse_without_model": true,
   "translate_notices": true,
   "claude": {
     "bin": "claude",
@@ -435,7 +627,18 @@ The file itself, for editing by hand or scripting:
   "slack": {
     "enabled": true,
     "owner_user_id": "U00000000",
-    "thread_lookback_days": 7
+    "thread_lookback_days": 7,
+    "dms": true,
+    "dms_open": false,
+    "allowed_users": ["U0FRIEND1"],
+    "blocked_users": [],
+    "events": {
+      "mention": {"do": "Read the thread, do what it asks, and reply there."},
+      "joined_channel": {"on": true, "action": "script", "script": {"name": "joined.sh", "args": ["{slack_channel}"]}}
+    },
+    "commands": [
+      {"name": "deploy", "action": "script", "script": {"name": "deploy.sh"}}
+    ]
   },
   "jira": {
     "enabled": true,
@@ -445,7 +648,12 @@ The file itself, for editing by hand or scripting:
     "marker": "@brain",
     "poll_seconds": 60,
     "jql": "",
-    "max_catchup_hours": 72
+    "watch_jql": "assignee = currentUser() OR reporter = currentUser() OR watcher = currentUser()",
+    "max_catchup_hours": 72,
+    "events": {
+      "transitioned": {"on": true, "do": "Note that {jira_issue} moved from {jira_from} to {jira_to}."},
+      "assigned": {"on": true, "action": "http", "http": {"method": "POST", "url": "https://hooks.example/assigned", "body": "{\"issue\": \"{jira_issue}\", \"to\": \"{jira_assignee}\"}"}}
+    }
   },
   "github": {
     "enabled": true,
@@ -473,14 +681,23 @@ from the page, and the page says so:
 |---|---|---|
 | Slack app-level token (`xapp-…`, opens the socket) | `MEMORY_LEDGER_SLACK_APP_TOKEN` | `slack.app_token` |
 | Slack bot token (`xoxb-…`, reads only) | `MEMORY_LEDGER_SLACK_BOT_TOKEN` | `slack.bot_token` |
-| Slack user token (`xoxp-…`, **optional**: posts refusal notices directly; without it they go through your Slack MCP). Needs `chat:write` and `im:write` for the DM fallback | `MEMORY_LEDGER_SLACK_USER_TOKEN` | `slack.user_token` |
+| Slack user token (`xoxp-…`, **optional**: posts refusal notices directly; without it they go through your Slack MCP, or with `refuse_without_model` are only logged. **Required for `slack.dms`**, with `im:history` and `mpim:history`). Needs `chat:write` and `im:write` for the DM fallback | `MEMORY_LEDGER_SLACK_USER_TOKEN` | `slack.user_token` |
 | Jira API token | `MEMORY_LEDGER_JIRA_TOKEN` | `jira.token` |
 | GitHub token (`github_pat_…` fine-grained, or `ghp_…` classic). Read: Pull requests, Issues, Checks, Metadata (classic: `repo`). Write to issues and PRs only for `refusal_notice` | `MEMORY_LEDGER_GITHUB_TOKEN` | `github.token` |
 
 - `signature` — `{owner}` is the brain's `owner` setting. Keep it distinctive: it
   is also the loop guard.
-- `refusals` — the two notices; see [Saying no](#saying-no--two-notices).
-- `translate_notices` — send them in the sender's language (default on).
+- `refusals` — the three notices; see [Saying no](#saying-no--three-notices).
+- `refuse_without_model` — a refusal is posted as written through the source's
+  API, or only logged, never through a model (default on).
+- `translate_notices` — with `refuse_without_model` off, send notices in the
+  sender's language (default on).
+- `slack.allowed_users` / `slack.blocked_users` — Slack user ids; see
+  [the gate](#who-may-summon-it--the-gate).
+- `slack.events`, `jira.events` — only the kinds you name change; see
+  [Events](#events). `slack.commands` is replaced whole on save; see
+  [Commands](#commands). Each carries an [action](#actions).
+- `jira.watch_jql` — the issues a change counts on.
 - `claude.notice_model` — the model that translates a notice (default `haiku`).
 - Open channels are **not** in this file: they are a list in `graph.db`, edited
   from the UI or `trigger.py channels`.
@@ -524,7 +741,16 @@ Then:
   nothing on GitHub.
 - **It acts while you are away.** That is the point; the audit log is what makes
   it answerable afterwards.
-- **Tokens on disk.** Prefer the env vars; the file is mode 600 either way.
+- **Tokens on disk.** Prefer the env vars; the file is mode 600 either way. So
+  are an API action's headers.
+- **Scripts and API calls act with no session to judge them.** That is their
+  point, and why they are yours to aim: a command runs for you only unless you
+  mark it `anyone`, arguments reach a script as argv items with no shell, and
+  values are escaped where they land in a request. What the script does with a
+  stranger's argument is the script's business, so treat `{trigger_content}`
+  and `{arg_N}` as untrusted input in it.
+- **A refusal costs nothing.** With `refuse_without_model` on, someone the brain
+  turns away never starts a model, however often they try.
 
 ## Not done yet
 
@@ -535,3 +761,5 @@ Then:
 - A full Requests view in the web UI. Settings → Triggers lists only the newest
   five; `trigger.py requests` and `show` have the rest.
 - DMs to the bot (`message.im`) — today only `app_mention` in channels.
+- Catch-up for the Slack channel events and your DMs: they are live only.
+- Allowed and blocked lists for Jira and GitHub; only Slack has them.

@@ -195,9 +195,13 @@ deep block, because the cheapest day is the one with the fewest re-entries, not
 the fullest one. Ends with one clear first action.
 **Mention it instead of opening it.** With `<home>/trigger.json` set up, a
 mention in a Slack thread, a marked Jira comment, a GitHub mention or a PR change
-you picked (reviews, review requests, failing checks, merges) starts a headless
+you picked (reviews, review requests, failing checks, merges; a Jira issue moving
+status or changing hands; the bot added to a Slack channel) starts a headless
 session that answers there as you, signed as your second brain, and logs who asked for what
-under a request id. Closed conversations stay closed until you open them. See
+under a request id. A Slack command (`@brain deploy {staging, v1.2}`) can do the
+same, or call an API or run one of your scripts with no model call at all.
+Closed conversations stay closed until you open them, and turning someone away
+costs nothing. See
 [docs/trigger.md](docs/trigger.md).
 **`/neo4j-up`** stands up the optional local graph database (Docker, one command,
 data under `~/.second_brain/neo4j`) and points the brain at it.
@@ -600,7 +604,8 @@ Processes in a bundle land in your current realm unless you pick another.
 
 The automation in `<home>/scripts` (too tied to one person's setup to ship in the
 plugin) is listed under **Scripts** on the Capabilities section. Open one to read
-it; the brain never runs it. *Options › Export all scripts* zips them with their
+it; the brain never runs one on its own, only a script you linked to a trigger
+([docs/trigger.md](docs/trigger.md#actions)). *Options › Export all scripts* zips them with their
 executable bits; *Import scripts…* takes that zip, or one loose file, shows which
 are new, identical or different from yours, and keeps yours unless you say
 **Replace** — the replaced file is copied to `<home>/backups/` first.

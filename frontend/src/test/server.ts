@@ -169,6 +169,7 @@ export const handlers = [
       scripts: ["dev_env.py", "mithra_token.sh"],
     }),
   ),
+  write("/api/create-script", () => ok({ name: "new.sh", action: "created" })),
   write("/api/upload-scripts", () =>
     ok({
       token: "tok-s",

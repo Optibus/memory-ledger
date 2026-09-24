@@ -423,6 +423,15 @@ export const statusFixture: Status = {
   },
 };
 
+/** One event's setting, the Claude action with an empty API call and script. */
+function ev(on: boolean, run: string): import("@/api/types").TriggerEventSetting {
+  return {
+    on, do: run, action: "claude",
+    http: { method: "POST", url: "", headers: {}, body: "" },
+    script: { name: "", args: [] },
+  };
+}
+
 export const triggerFixture: import("@/api/types").TriggerStatus = {
   ok: true,
   watching: true,
@@ -437,31 +446,55 @@ export const triggerFixture: import("@/api/types").TriggerStatus = {
     refusals: {
       not_enabled: "I'm not enabled in this conversation, so I did nothing.",
       policy: "I can't do that: it goes against a rule {owner} has set for me. {reason}",
+      not_allowed: "You can't ask me that here, so I did nothing.",
     },
+    refuse_without_model: true,
     translate_notices: true,
     claude: {
       bin: "claude", notice_model: "haiku", mcp_config: "", strict_mcp_config: false, timeout_s: 900,
       max_concurrent: 3, extra_args: [], cwd: "",
     },
-    slack: { enabled: true, active: true, prompt: "", owner_user_id: "U0OWNER", thread_lookback_days: 7 },
+    slack: {
+      enabled: true, active: true, prompt: "", owner_user_id: "U0OWNER", thread_lookback_days: 7,
+      allowed_users: ["U0FRIEND"], blocked_users: [], dms: false, dms_open: false,
+      events: {
+        mention: ev(true, ""),
+        joined_channel: ev(false, "Note who added me to #{slack_channel_name}."),
+        left_channel: ev(false, "Note that I was removed."),
+      },
+      commands: [
+        {
+          ...ev(true, ""), name: "deploy", anyone: false, pattern: "", description: "Ship a build",
+          action: "script", script: { name: "dev_env.py", args: [] },
+        },
+      ],
+    },
     jira: {
       enabled: false, active: false, prompt: "", base_url: "https://j.example", email: "me@example.com",
       owner_account_id: "", marker: "@brain", poll_seconds: 60, jql: "", max_catchup_hours: 72,
+      watch_jql: "assignee = currentUser()",
+      events: {
+        mention: ev(true, ""),
+        transitioned: ev(false, "Note {jira_from} to {jira_to}."),
+        assigned: ev(false, "Add a task."),
+        unassigned: ev(false, "Note it."),
+        comment: ev(false, "Answer as a task."),
+      },
     },
     github: {
       enabled: false, active: false, api_url: "https://api.github.com", login: "", marker: "/brain",
       poll_seconds: 120, repos: ["acme/api"], trusted_associations: ["OWNER", "MEMBER", "COLLABORATOR"],
       refusal_notice: false, max_catchup_hours: 72,
       events: {
-        mention: { on: true, do: "" },
-        review_requested: { on: true, do: "Add a task to my brain to review it." },
-        review: { on: true, do: "List each change asked for." },
-        comment: { on: false, do: "Answer questions as a task." },
-        pushed: { on: false, do: "Note what changed." },
-        ci_failed: { on: false, do: "Find the likely cause." },
-        merged: { on: false, do: "Close my task." },
-        closed: { on: false, do: "Note who closed it." },
-        assigned: { on: false, do: "Add a task." },
+        mention: ev(true, ""),
+        review_requested: ev(true, "Add a task to my brain to review it."),
+        review: ev(true, "List each change asked for."),
+        comment: ev(false, "Answer questions as a task."),
+        pushed: ev(false, "Note what changed."),
+        ci_failed: ev(false, "Find the likely cause."),
+        merged: ev(false, "Close my task."),
+        closed: ev(false, "Note who closed it."),
+        assigned: ev(false, "Add a task."),
       },
     },
     secrets: {
@@ -476,7 +509,13 @@ export const triggerFixture: import("@/api/types").TriggerStatus = {
       { name: "trigger_user", sources: ["slack", "jira", "github"], global: true, description: "Who caused it.", example: "octocat" },
       { name: "trigger_link", sources: ["slack", "jira", "github"], global: true, description: "A link to it.", example: "https://github.com/o/r/pull/5" },
       { name: "github_repo", sources: ["github"], global: false, description: "owner/name.", example: "o/r" },
+      { name: "jira_from", sources: ["jira"], global: false, description: "The status it left.", example: "In Progress" },
+      { name: "jira_to", sources: ["jira"], global: false, description: "The status it reached.", example: "In Review" },
+      { name: "arg_1", sources: ["slack"], global: false, description: "Argument 1.", example: "staging" },
     ],
+    actions: ["claude", "http", "script"],
+    http_methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+    scripts_dir: "/home/brain/scripts",
   },
   runtime: {
     running: true, reason: "", started_at: "2026-09-23T12:00:00+00:00",

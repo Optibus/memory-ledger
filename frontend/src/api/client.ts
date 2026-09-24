@@ -233,6 +233,8 @@ export const api = {
   exportScripts: (names: string[] = []) => post<ExportScriptsResult>("/api/export-scripts", { names }),
   uploadScripts: (filename: string, data: string) =>
     post<UploadScriptsResult>("/api/upload-scripts", { filename, data }),
+  createScript: (name: string, text: string, executable = true, replace = false) =>
+    post<import("./types").CreateScriptResult>("/api/create-script", { name, text, executable, replace }),
   importScripts: (token: string, select: Record<string, ScriptChoice>) =>
     post<ImportScriptsResult>("/api/import-scripts", { token, select }),
   deleteContracts: (ids: string[], force = false) =>

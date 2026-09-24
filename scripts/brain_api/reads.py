@@ -149,7 +149,7 @@ def bundle(name: str = Query("", description="The bundle filename.")):
 
 @router.get("/scripts", tags=["scripts"], summary="The local scripts in <home>/scripts",
             description="Name, size, executable bit, language and the first line that "
-                        "says what each one is. Files only: the brain never runs them.")
+                        "says what each one is. The brain runs one only when a trigger links it.")
 def scripts():
     return graph.list_scripts()
 

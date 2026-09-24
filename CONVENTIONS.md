@@ -182,7 +182,8 @@ Commands:
 | `export-bundle [--skill ID]... [--rule ID]... [--process ID]... [--spec F] [--out Z]` | A **selection** as one zip (§5a): a directory per kind plus an `import-plan.json` naming the order it can be read back in. Rules a selected skill honors travel with it; a skill it *requires* that was not selected is **named in the report**, never pulled in silently. |
 | `inspect-bundle --zip Z` | What is inside a bundle and which of it this brain already holds. Read-only, so it is safe to run on a zip you were sent. |
 | `import-bundle --zip Z [--select ID:MODE]... [--spec F] [--mode M] [--process-realm R]` | Apply a bundle in its plan's order. Processes land in `--process-realm` (default: the configured realm), keeping the realm they left as `origin_realm`. An item already here is left alone unless you name it: `update` refreshes it, `replace` deletes it first, `ignore` skips it. An item you never mentioned is created when new and untouched when it exists. |
-| `scripts` | List the person's local scripts in `<home>/scripts` (§5c): name, size, executable bit, language, and the first docstring or comment line. Files only — the brain never runs one. |
+| `scripts` | List the person's local scripts in `<home>/scripts` (§5c): name, size, executable bit, language, and the first docstring or comment line. Files only — the brain runs one only when a trigger links it. |
+| `create-script --name N [--file F] [--no-exec] [--replace]` | Write one script into `<home>/scripts`, from a file or stdin, executable unless `--no-exec`. An existing one is overwritten only with `--replace`, after its old bytes go to `<home>/backups/scripts-<stamp>/` (§5c). |
 | `export-scripts [--name N]... [--out Z]` | Zip the named scripts (all, when none are named) into `<home>/bundles/scripts-<stamp>.zip`, each keeping its executable bit (§5c). |
 | `inspect-scripts --zip Z` | What a scripts zip holds and which of it collides with a local file, and whether the bytes are identical. Read-only. |
 | `import-scripts --zip Z [--select NAME:MODE]... [--all] [--spec F] [--mode keep\|replace]` | Land scripts in `<home>/scripts`. A new file is written; an existing one is overwritten **only** for `replace`, after its old bytes are copied to `<home>/backups/scripts-<stamp>/`. A name not selected is not imported. |
@@ -1412,9 +1413,12 @@ convention. Run it before any bulk edit of the genome, not only this one.
 the plugin**: it assumes one person's repos, ticket keys or tool set (the home
 README says why). The plugin stays company-neutral; these ride alongside it. They
 are **files, not nodes** — nothing about a script is written into the graph, and
-the brain **never executes one**. It does three things with them, from the CLI
-(`scripts`, `export-scripts`, `inspect-scripts`, `import-scripts`) and from the
-Capabilities page:
+the brain **never executes one on its own**. The one exception is a script the
+person linked to a trigger's `script` action in Settings → Triggers
+([docs/trigger.md](docs/trigger.md#actions)): that link is the person's choice,
+and the engine runs that file, by name, with argv and no shell. Otherwise it does
+three things with them, from the CLI (`scripts`, `export-scripts`,
+`inspect-scripts`, `import-scripts`) and from the Capabilities page:
 
 - **List and read.** Each script shows its name, language, size, executable bit,
   and the first line that says what it is (a module docstring or a leading
@@ -1433,6 +1437,10 @@ Capabilities page:
   is the worst way to find out two machines drifted. **Replace** is an explicit
   choice, and the old bytes go to `<home>/backups/scripts-<stamp>/` before the
   new ones land.
+
+- **Create** one, from a trigger's *New script…* or `graph.py create-script`
+  (`POST /api/create-script`): written executable, refused over an existing name
+  unless replacing, and a replaced file's bytes are backed up first, as on import.
 
 A scripts zip is **untrusted**: only members named `scripts/<name>` are read, the
 name must match a strict bare-filename pattern (no separator, no leading dot, no
