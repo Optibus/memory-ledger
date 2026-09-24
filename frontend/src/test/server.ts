@@ -16,6 +16,8 @@ import {
   skillsFixture,
   statusFixture,
   triggerFixture,
+  tasksFixture,
+  taskDetailFixture,
 } from "./fixtures";
 
 /** Every write the tests observed, so a test can assert what was actually sent. */
@@ -76,6 +78,8 @@ export const handlers = [
   http.get("/api/settings", () => HttpResponse.json(settingsFixture)),
   http.get("/api/status", () => HttpResponse.json(statusFixture)),
   http.get("/api/trigger", () => HttpResponse.json(triggerFixture)),
+  http.get("/api/tasks", () => HttpResponse.json(tasksFixture)),
+  http.get("/api/task", () => HttpResponse.json(taskDetailFixture)),
   http.get("/api/timezones", () => ok({ zones: ["UTC", "America/Sao_Paulo", "Europe/Lisbon"] })),
   http.get("/api/capture", () => HttpResponse.json(captureFixture)),
   http.get("/api/doctor", () => HttpResponse.json(doctorFixture)),

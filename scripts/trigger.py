@@ -327,6 +327,10 @@ CREATE TABLE IF NOT EXISTS trigger_request (
     exit_code      INTEGER,
     result         TEXT NOT NULL DEFAULT '',
     cost_usd       REAL,
+    session_id     TEXT NOT NULL DEFAULT '',  -- the headless session, to find its transcript
+    command        TEXT NOT NULL DEFAULT '',  -- JSON argv (or call) the task ran with
+    cwd            TEXT NOT NULL DEFAULT '',
+    stderr         TEXT NOT NULL DEFAULT '',
     UNIQUE(source, event_id)
 );
 CREATE INDEX IF NOT EXISTS idx_trigger_request_status ON trigger_request(status);
@@ -491,9 +495,20 @@ def now_iso() -> str:
     return graph.now()
 
 
+# Columns added after the table first shipped: CREATE TABLE IF NOT EXISTS
+# leaves an existing table alone, so they are added in place.
+LATE_COLUMNS = {"session_id": "TEXT NOT NULL DEFAULT ''", "command": "TEXT NOT NULL DEFAULT ''",
+                "cwd": "TEXT NOT NULL DEFAULT ''", "stderr": "TEXT NOT NULL DEFAULT ''"}
+
+
 def db():
     con = graph.connect()
     con.executescript(SCHEMA)
+    have = {r[1] for r in con.execute("PRAGMA table_info(trigger_request)")}
+    for col, decl in LATE_COLUMNS.items():
+        if col not in have:
+            con.execute(f"ALTER TABLE trigger_request ADD COLUMN {col} {decl}")
+    con.commit()
     return con
 
 
@@ -743,6 +758,276 @@ def request_detail(request_id: str) -> dict:
     if not req:
         return {"ok": False, "error": f"no request {request_id}"}
     return {"ok": True, "request": req, "actions": actions_for(con, request_id)}
+
+
+# ---------------------------------------------------------------- tasks
+# The UI's Tasks panel: every request as a card, polled, and one request in
+# full — the trigger, the command it ran, its output and the session's tool
+# calls, read from the headless session's own transcript.
+TASKS_MAX = 500
+TRANSCRIPT_EVENTS_MAX = 400
+TRANSCRIPT_FIELD_MAX = 4000
+
+
+def claude_projects_dir() -> Path:
+    base = os.environ.get("CLAUDE_CONFIG_DIR") or str(Path.home() / ".claude")
+    return Path(base).expanduser() / "projects"
+
+
+def _project_slug(cwd: str) -> str:
+    """How Claude Code names a working directory's transcript folder: after
+    the real path, so a symlinked brain home lands where the session wrote."""
+    return re.sub(r"[^A-Za-z0-9]", "-", os.path.realpath(os.path.expanduser(cwd)))
+
+
+def transcript_path(req: dict) -> Path | None:
+    """The session's transcript, where Claude Code keeps it. A request that ran
+    before its session id was recorded is found by its id in the first lines of
+    the transcripts written around the time it ran, and remembered."""
+    root = claude_projects_dir()
+    sid = req.get("session_id") or ""
+    if sid:
+        if req.get("cwd"):
+            p = root / _project_slug(req["cwd"]) / f"{sid}.jsonl"
+            if p.is_file():
+                return p
+        hits = list(root.glob(f"*/{sid}.jsonl"))
+        return hits[0] if hits else None
+    started = _parse_dt(req.get("started_at") or "")
+    if not started or req.get("status") in ("refused", "queued") or not root.is_dir():
+        return None
+    folder = root / _project_slug(session_cwd(load_config()))
+    if not folder.is_dir():
+        return None
+    lo = started.timestamp() - 60
+    for p in folder.glob("*.jsonl"):
+        try:
+            if p.stat().st_mtime < lo:
+                continue
+            with p.open(encoding="utf-8", errors="replace") as f:
+                head = "".join(next(f, "") for _ in range(30))
+        except OSError:
+            continue
+        if f"request_id: {req['id']}" in head:
+            con = db()
+            _set_request(con, req["id"], session_id=p.stem)
+            return p
+    return None
+
+
+def _clip(text, n: int = TRANSCRIPT_FIELD_MAX) -> str:
+    text = text if isinstance(text, str) else json.dumps(text, ensure_ascii=False, indent=1)
+    return text if len(text) <= n else text[:n] + f"\n… ({len(text) - n} more chars)"
+
+
+def _result_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(c.get("text", "") if isinstance(c, dict) and c.get("type") == "text"
+                         else f"[{c.get('type', '?')}]" if isinstance(c, dict) else str(c)
+                         for c in content)
+    return json.dumps(content, ensure_ascii=False)
+
+
+def read_transcript(path: Path | None) -> dict:
+    """The session as a list of events: what it said and every tool call with
+    its input and result. Budgeted: the newest events, each field clipped."""
+    if not path or not path.is_file():
+        return {"found": False, "path": str(path or ""), "events": [], "tool_calls": 0,
+                "truncated": False}
+    events, calls = [], {}
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        lines = []
+    for line in lines:
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        if d.get("type") not in ("user", "assistant") or d.get("isSidechain"):
+            continue
+        msg = d.get("message") or {}
+        content = msg.get("content")
+        at = d.get("timestamp", "")
+        if isinstance(content, str):
+            content = [{"type": "text", "text": content}]
+        for c in content if isinstance(content, list) else []:
+            if not isinstance(c, dict):
+                continue
+            t = c.get("type")
+            if t == "text" and c.get("text", "").strip():
+                role = "prompt" if d["type"] == "user" and not events else d["type"]
+                events.append({"kind": "text", "role": role, "at": at,
+                               "text": _clip(c["text"], TRANSCRIPT_FIELD_MAX * 3)})
+            elif t == "tool_use":
+                ev = {"kind": "tool", "at": at, "id": c.get("id", ""),
+                      "name": c.get("name", "?"), "input": _clip(c.get("input") or {}),
+                      "result": None, "is_error": False}
+                calls[ev["id"]] = ev
+                events.append(ev)
+            elif t == "tool_result" and c.get("tool_use_id") in calls:
+                ev = calls[c["tool_use_id"]]
+                ev["result"] = _clip(_result_text(c.get("content")))
+                ev["is_error"] = bool(c.get("is_error"))
+                ev["done_at"] = at
+    n = len(events)
+    return {"found": True, "path": str(path), "tool_calls": len(calls),
+            "events": events[-TRANSCRIPT_EVENTS_MAX:], "of": n,
+            "truncated": n > TRANSCRIPT_EVENTS_MAX}
+
+
+def session_activity(con, req: dict) -> dict | None:
+    """What the brain's own hooks have written about this task's session, as
+    it happens: the conversation, each agent (the main one and every subagent,
+    with its outcome), each captured turn, and every action the session
+    logged. All from the database, so it is live while the task runs."""
+    sid = req.get("session_id") or ""
+    actions = actions_for(con, req["id"])
+    if not sid and not actions:
+        return None
+    conv = con.execute("SELECT * FROM nodes WHERE id=?", (graph._conv_id(sid),)).fetchone() \
+        if sid else None
+    rows = con.execute(
+        "SELECT * FROM nodes WHERE type IN ('agent','capture') "
+        "AND json_extract(props,'$.session_id')=? ORDER BY created, rowid",
+        (sid,)).fetchall() if sid else []
+    agents, timeline, last_msg, updated = [], [], None, ""
+    if conv:
+        c = graph._node_dict(conv)
+        updated = c.get("updated") or ""
+        timeline.append({"at": c["created"], "kind": "session", "title": "session started"})
+        if c.get("status") == "done":
+            timeline.append({"at": c["props"].get("ended_at") or c.get("updated", ""),
+                             "kind": "session", "title": "session ended"})
+    for r in rows:
+        n = graph._node_dict(r)
+        pr = n.get("props") or {}
+        updated = max(updated, n.get("updated") or "")
+        if n["type"] == "agent":
+            a = {"id": n["id"], "role": pr.get("role") or n["title"], "status": n.get("status"),
+                 "outcome": pr.get("outcome") or "", "started_at": pr.get("started_at") or n["created"],
+                 "ended_at": pr.get("ended_at") or "", "depth": pr.get("depth"),
+                 "tokens_out": pr.get("tokens_out"), "brief": _brief(n.get("body") or "", 200)}
+            agents.append(a)
+            if a["role"] != "main":
+                timeline.append({"at": a["started_at"], "kind": "agent",
+                                 "title": f"subagent {a['role']} started", "detail": a["brief"]})
+                if n.get("status") == "done":
+                    timeline.append({"at": a["ended_at"] or n.get("updated", ""), "kind": "agent",
+                                     "title": f"subagent {a['role']} {a['outcome'] or 'done'}",
+                                     "status": a["outcome"]})
+        else:
+            role = pr.get("role") or ""
+            text = n.get("body") or n.get("title") or ""
+            ev = {"at": pr.get("captured_at") or n["created"], "kind": "message", "role": role,
+                  "title": "prompt" if role == "user" else "answered",
+                  "detail": _clip(text, TRANSCRIPT_FIELD_MAX)}
+            timeline.append(ev)
+            if role == "assistant":
+                last_msg = ev
+    for a in actions:
+        updated = max(updated, a["at"])
+        timeline.append({"at": a["at"], "kind": "action", "title": a["kind"],
+                         "target": a["target"], "detail": a["detail"]})
+    timeline.sort(key=lambda e: e.get("at") or "")
+    return {"session_id": sid,
+            "conversation": ({"status": graph._node_dict(conv).get("status"),
+                              "id": conv["id"]} if conv else None),
+            "agents": agents,
+            "subagents_running": sum(1 for a in agents
+                                     if a["role"] != "main" and a["status"] != "done"),
+            "messages": sum(1 for e in timeline if e["kind"] == "message"),
+            "actions": len(actions),
+            "last_action": ({"kind": actions[-1]["kind"], "target": actions[-1]["target"],
+                             "at": actions[-1]["at"]} if actions else None),
+            "last_message": (last_msg["detail"][:300] if last_msg else ""),
+            "updated": updated, "timeline": timeline}
+
+
+def _progress(con, req: dict) -> dict | None:
+    """For a running task: what the hooks have written to the database so far
+    (subagents, actions, the latest answer), and the tool calls from its
+    transcript."""
+    act = session_activity(con, req)
+    tr = read_transcript(transcript_path(req))
+    if not act and not tr["found"]:
+        return None
+    tools = [e for e in tr["events"] if e["kind"] == "tool"]
+    last = tools[-1] if tools else None
+    at = max((tr["events"][-1]["at"] if tr["events"] else ""), (act or {}).get("updated", ""))
+    return {"tool_calls": tr["tool_calls"],
+            "last_tool": last["name"] if last else "",
+            "last_input": (last["input"][:160] if last else ""),
+            "last_at": at,
+            "subagents": len([a for a in (act or {}).get("agents", []) if a["role"] != "main"]),
+            "subagents_running": (act or {}).get("subagents_running", 0),
+            "actions": (act or {}).get("actions", 0),
+            "last_action": (act or {}).get("last_action"),
+            "last_message": (act or {}).get("last_message", "")}
+
+
+def _task_name(req: dict) -> str:
+    """What fired it, in a few words: a command, a title, or the event kind."""
+    meta = req.get("meta") or {}
+    if meta.get("command"):
+        return f"/{meta['command']}" if meta.get("kind") == "command" else str(meta["command"])
+    return str(meta.get("title") or meta.get("kind") or "mention")
+
+
+def _task_row(req: dict, full: bool = False) -> dict:
+    meta = req.get("meta") or {}
+    try:
+        command = json.loads(req.get("command") or "null")
+    except ValueError:
+        command = req.get("command")
+    row = {k: req.get(k) for k in (
+        "id", "source", "scope", "event_id", "requester_id", "requester_name", "is_owner",
+        "permalink", "status", "reason", "node_id", "received_at", "started_at",
+        "finished_at", "exit_code", "cost_usd", "session_id", "cwd")}
+    row.update(name=_task_name(req), kind=str(meta.get("kind") or "mention"),
+               action=str((meta.get("action") or {}).get("type") or "claude"),
+               text=req.get("text", "") if full else req.get("text", "")[:600],
+               result=req.get("result", "") if full else req.get("result", "")[:300])
+    if full:
+        row.update(meta=meta, command=command, stderr=req.get("stderr", ""))
+    return row
+
+
+def tasks_payload(limit: int = 200) -> dict:
+    """Every request, newest first, as the Tasks panel's cards. A running one
+    carries its progress, read from its transcript."""
+    limit = max(1, min(TASKS_MAX, int(limit or 200)))
+    con = db()
+    rows = [_row(r) for r in con.execute(
+        "SELECT * FROM trigger_request ORDER BY received_at DESC LIMIT ?", (limit,))]
+    counts = {r["status"]: r["n"] for r in con.execute(
+        "SELECT status, count(*) AS n FROM trigger_request GROUP BY status")}
+    n_actions = {r["request_id"]: r["n"] for r in con.execute(
+        "SELECT request_id, count(*) AS n FROM trigger_action GROUP BY request_id")}
+    tasks = []
+    for req in rows:
+        t = _task_row(req)
+        t["actions"] = n_actions.get(req["id"], 0)
+        if req["status"] == "running":
+            t["progress"] = _progress(con, req)
+        tasks.append(t)
+    return {"ok": True, "tasks": tasks, "counts": counts, "total": sum(counts.values()),
+            "limit": limit, "truncated": sum(counts.values()) > len(tasks), "now": now_iso()}
+
+
+def task_detail(request_id: str) -> dict:
+    """One request in full: the trigger, the command, the output, every action
+    logged and the session's transcript."""
+    con = db()
+    req = get_request(con, request_id or "")
+    if not req:
+        return {"ok": False, "error": f"no request {request_id}"}
+    path = transcript_path(req)
+    req = get_request(con, request_id) or req      # the lookup may have remembered the session
+    return {"ok": True, "task": _task_row(req, full=True), "actions": actions_for(con, request_id),
+            "activity": session_activity(con, req), "transcript": read_transcript(path)}
 
 
 # ---------------------------------------------------------------- intake
@@ -1143,10 +1428,13 @@ def session_cwd(cfg: dict) -> str:
     return str(Path.home())
 
 
-def build_command(prompt: str, cfg: dict) -> list:
+def build_command(prompt: str, cfg: dict, session_id: str = "") -> list:
     c = cfg.get("claude") or {}
     cmd = [str(c.get("bin") or "claude"), "-p", prompt, "--output-format", "json",
            "--dangerously-skip-permissions"]
+    if session_id:
+        # Chosen up front, so the transcript can be read while the task runs.
+        cmd += ["--session-id", session_id]
     mcp = str(c.get("mcp_config") or "").strip()
     if mcp:
         # `=` form: --mcp-config is variadic, and would swallow what follows it.
@@ -1174,11 +1462,13 @@ def run_request(request_id: str, cfg: dict | None = None) -> dict:
         return run_script(con, req, act.get("script") or {}, cfg)
     c = cfg.get("claude") or {}
     timeout = max(30, int(c.get("timeout_s") or 900))
-    cmd = build_command(build_prompt(req, cfg), cfg)
+    session_id = str(uuid.uuid4())
+    cmd = build_command(build_prompt(req, cfg), cfg, session_id)
     env = {**os.environ, "MEMORY_LEDGER_REQUEST_ID": request_id,
            "MEMORY_LEDGER_TRIGGER_SOURCE": req["source"]}
     cwd = session_cwd(cfg)
-    _set_request(con, request_id, status="running", started_at=now_iso())
+    _set_request(con, request_id, status="running", started_at=now_iso(),
+                 session_id=session_id, command=json.dumps(cmd, ensure_ascii=False), cwd=cwd)
     t0 = datetime.now(timezone.utc)
     log.info("task %s started  %s %s from %s", request_id, req["source"], req["scope"],
              req.get("requester_name") or req.get("requester_id") or "someone")
@@ -1214,6 +1504,7 @@ def run_request(request_id: str, cfg: dict | None = None) -> dict:
         status = "declined"            # the session declined it; keep its verdict
     _set_request(con, request_id, status=status, finished_at=now_iso(),
                  exit_code=pr.returncode, result=result[-8000:],
+                 stderr=(pr.stderr or "").strip()[-8000:],
                  cost_usd=cost if isinstance(cost, (int, float)) else None)
     (log.warning if is_error else log.info)(
         "task %s %s  in %s, exit %s%s%s", request_id, status, took(), pr.returncode,
@@ -1289,6 +1580,8 @@ def run_script(con, req: dict, spec: dict, cfg: dict) -> dict:
     argv = ([render(str(a), values) for a in args] if args
             else [str(a) for a in (req.get("meta") or {}).get("args") or []])
     timeout = max(30, int((cfg.get("claude") or {}).get("timeout_s") or 900))
+    _set_request(con, req["id"], command=json.dumps(prefix + argv, ensure_ascii=False),
+                 cwd=session_cwd(cfg))
     try:
         pr = subprocess.run(prefix + argv, capture_output=True, text=True, timeout=timeout,
                             env={**os.environ, **action_env(req, cfg)}, cwd=session_cwd(cfg),
@@ -1302,6 +1595,8 @@ def run_script(con, req: dict, spec: dict, cfg: dict) -> dict:
         return _finished(con, req, t0, False, None, f"could not start {name}: {e}",
                          reason=f"could not start {name}: {e}"[:300])
     out = (pr.stdout or "").strip()
+    if (pr.stderr or "").strip():
+        _set_request(con, req["id"], stderr=pr.stderr.strip()[-8000:])
     if pr.returncode != 0 and (pr.stderr or "").strip():
         out = (out + "\n" + pr.stderr.strip()).strip()
     log_action(con, req["id"], "script", name,
@@ -1350,6 +1645,9 @@ def run_http(con, req: dict, spec: dict, cfg: dict) -> dict:
     """Call the configured API. A status of 400 or more is a failure."""
     call = render_http(spec, request_variables(req, cfg))
     t0 = _started(con, req, f"http {call['method']} {call['url'].split('?')[0]}")
+    # Headers stay out: that is where a token goes.
+    _set_request(con, req["id"], command=json.dumps(
+        [call["method"], call["url"].split("?")[0]], ensure_ascii=False))
     if not re.match(r"https?://[^\s/]+", call["url"]):
         return _finished(con, req, t0, False, None, f"not an http(s) URL: {call['url'][:200]}")
     data = call["body"].encode("utf-8") if call["body"] and call["method"] != "GET" else None

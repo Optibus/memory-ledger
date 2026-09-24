@@ -143,6 +143,10 @@ export const api = {
   settings: (signal?: AbortSignal) => get<Settings>("/api/settings", undefined, signal),
   timezones: (signal?: AbortSignal) => get<Timezones>("/api/timezones", undefined, signal),
   status: (signal?: AbortSignal) => get<Status>("/api/status", undefined, signal),
+  tasks: (signal?: AbortSignal) =>
+    get<import("./types").TasksPayload>("/api/tasks", { limit: 500 }, signal),
+  task: (id: string, signal?: AbortSignal) =>
+    get<import("./types").TaskDetail>("/api/task", { id }, signal),
   trigger: (signal?: AbortSignal) =>
     get<import("./types").TriggerStatus>("/api/trigger", { limit: 5 }, signal),
   capture: (signal?: AbortSignal) =>

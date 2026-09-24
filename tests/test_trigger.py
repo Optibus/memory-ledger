@@ -1456,6 +1456,110 @@ def test_slack_dms(cfg):
        any("slack.dms is on but there is no user_token" in x for x in chk["problems"]), str(chk))
 
 
+# =================================================================== tasks
+def test_tasks(cfg):
+    print("\n== tasks: every request as a card, and one in full with its session ==")
+    install_http()
+    ran, dispatch = dispatcher()
+    projects = Path(HOME) / "claude-config" / "projects"
+    os.environ["CLAUDE_CONFIG_DIR"] = str(projects.parent)
+    try:
+        ev = trigger.slack_event(slack_msg("950.1", "UOWNER", "<@UBOT> watch me run"), "C1", cfg,
+                                 bot_user_id="UBOT")
+        rid = trigger.handle(ev, cfg, dispatch)["request_id"]
+        trigger.run_request(rid, cfg)
+        con = trigger.db()
+        req = trigger.get_request(con, rid)
+        args = json.loads((Path(HOME) / "claude-calls.jsonl").read_text().splitlines()[-1])["args"]
+        ck("the session id is chosen up front and passed to claude",
+           req["session_id"] and args[args.index("--session-id") + 1] == req["session_id"])
+        ck("the command and working directory are recorded",
+           json.loads(req["command"])[1:] == args and Path(req["cwd"]).is_dir())
+
+        # The session's transcript, where Claude Code writes it.
+        folder = projects / trigger._project_slug(req["cwd"])
+        folder.mkdir(parents=True, exist_ok=True)
+        lines = [
+            {"type": "user", "timestamp": "t0", "message": {"content": "You were summoned"}},
+            {"type": "assistant", "timestamp": "t1", "message": {"content": [
+                {"type": "text", "text": "Reading it."},
+                {"type": "tool_use", "id": "tu1", "name": "Bash", "input": {"command": "ls"}}]}},
+            {"type": "user", "timestamp": "t2", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "tu1", "content": "a.txt", "is_error": False}]}},
+            {"type": "assistant", "timestamp": "t3", "isSidechain": True, "message": {"content": [
+                {"type": "text", "text": "a subagent, not this session"}]}},
+            {"type": "assistant", "timestamp": "t4", "message": {"content": [
+                {"type": "tool_use", "id": "tu2", "name": "Read", "input": {"file": "x"}}]}},
+        ]
+        (folder / f"{req['session_id']}.jsonl").write_text(
+            "\n".join(json.dumps(x) for x in lines) + "\nnot json\n")
+
+        d = trigger.task_detail(rid)
+        t = d["transcript"]
+        ck("the detail carries the command, the whole message and the actions",
+           d["ok"] and d["task"]["command"][0] == cfg["claude"]["bin"]
+           and d["task"]["text"].endswith("watch me run") and isinstance(d["actions"], list))
+        ck("the transcript is read: prompt, what it said, tool calls with results",
+           t["found"] and t["tool_calls"] == 2
+           and [e["kind"] for e in t["events"]] == ["text", "text", "tool", "tool"]
+           and t["events"][0]["role"] == "prompt"
+           and t["events"][2]["result"] == "a.txt" and t["events"][3]["result"] is None)
+        ck("a subagent's lines and a broken line are skipped",
+           not any("subagent" in (e.get("text") or "") for e in t["events"]))
+
+        trigger._set_request(con, rid, status="running")
+        p = trigger.tasks_payload(50)
+        row = next(x for x in p["tasks"] if x["id"] == rid)
+        ck("the list names each task and counts by status",
+           p["ok"] and row["name"] == "mention" and row["source"] == "slack"
+           and p["counts"].get("running", 0) >= 1 and "command" not in row)
+        ck("a running task carries its progress: tool calls and the latest one",
+           row["progress"]["tool_calls"] == 2 and row["progress"]["last_tool"] == "Read"
+           and '"file"' in row["progress"]["last_input"])
+        # What the brain's hooks write while the session runs, read back live.
+        g = trigger.graph
+        sid = req["session_id"]
+        conv = g.api_conversation(con, sid)["node"]["id"]
+        main_ = g.api_agent_spawn(con, conv, "main", session_id=sid)["node"]["id"]
+        sub = g.api_agent_spawn(con, main_, "pr-reviewer", body="review it",
+                                session_id=sid)["node"]["id"]
+        g.api_create_node(con, "capture", "answered", "Done, replied in thread.",
+                          {"role": "assistant", "session_id": sid, "captured_at": "2099-01-01T00:00:00+00:00"})
+        trigger.log_action(con, rid, "reply", "https://slack.example/r", "answered")
+        act = trigger.task_detail(rid)["activity"]
+        ck("the detail carries the session's live activity from the database",
+           act["conversation"]["status"] == "open" and len(act["agents"]) == 2
+           and act["subagents_running"] == 1 and act["actions"] == 1
+           and act["last_message"] == "Done, replied in thread.")
+        kinds = [(e["kind"], e["title"]) for e in act["timeline"]]
+        ck("its timeline has the session, the subagent, the action and the answer, in order",
+           kinds[0] == ("session", "session started")
+           and ("agent", "subagent pr-reviewer started") in kinds
+           and ("action", "reply") in kinds and kinds[-1] == ("message", "answered"))
+        g.api_update_node(con, sub, status="done", props_patch={"outcome": "completed"})
+        row = next(x for x in trigger.tasks_payload(50)["tasks"] if x["id"] == rid)
+        ck("the card's progress follows the database as the hooks write",
+           row["progress"]["subagents"] == 1 and row["progress"]["subagents_running"] == 0
+           and row["progress"]["last_action"]["kind"] == "reply")
+        trigger._set_request(con, rid, status="done")
+
+        # A request from before session ids were kept is found by its id.
+        old = trigger.handle(trigger.slack_event(slack_msg("950.2", "UOWNER", "<@UBOT> old"), "C1",
+                                                 cfg, bot_user_id="UBOT"), cfg, dispatch)["request_id"]
+        trigger._set_request(con, old, status="done", started_at=trigger.now_iso())
+        legacy = projects / trigger._project_slug(trigger.session_cwd(trigger.load_config()))
+        legacy.mkdir(parents=True, exist_ok=True)
+        (legacy / "legacy-session.jsonl").write_text(json.dumps(
+            {"type": "user", "timestamp": "t0",
+             "message": {"content": f"request_id: {old}\nsource: slack"}}) + "\n")
+        ck("an older task's transcript is found by its request id, and remembered",
+           trigger.task_detail(old)["transcript"]["found"]
+           and trigger.get_request(con, old)["session_id"] == "legacy-session")
+        ck("an unknown task is refused", trigger.task_detail("nope")["ok"] is False)
+    finally:
+        os.environ.pop("CLAUDE_CONFIG_DIR", None)
+
+
 def main():
     try:
         test_config()
@@ -1474,6 +1578,7 @@ def main():
         test_notices(cfg)
         test_decline(cfg)
         test_session_hygiene(cfg)
+        test_tasks(cfg)
         test_access(cfg)
         test_commands(cfg)
         test_slack_member(cfg)

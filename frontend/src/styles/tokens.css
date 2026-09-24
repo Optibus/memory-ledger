@@ -23,6 +23,16 @@
   --edge-hi: #58a6ff;
   --hover: #ffffff10;
 
+  /* A trigger task's status: the card's edge, its chip, the filter swatch. */
+  --task-queued: #8b949e;
+  --task-running: #58a6ff;
+  --task-done: #3fb950;
+  --task-failed: #f85149;
+  --task-timeout: #f85149;
+  --task-interrupted: #db6d28;
+  --task-declined: #d29922;
+  --task-refused: #a371f7;
+
   --radius-sm: 6px;
   --radius: 7px;
   --radius-lg: 10px;

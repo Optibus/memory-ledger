@@ -855,3 +855,132 @@ export interface TriggerCheck extends Envelope {
   problems: string[];
   notes: string[];
 }
+
+/** A trigger task as the Tasks panel lists it (`/api/tasks`). */
+export interface TriggerTask {
+  id: string;
+  source: "slack" | "jira" | "github" | string;
+  scope: string;
+  event_id: string;
+  requester_id: string;
+  requester_name: string;
+  is_owner: boolean;
+  permalink: string;
+  status: string;
+  reason: string;
+  node_id: string;
+  received_at: string;
+  started_at: string;
+  finished_at: string;
+  exit_code: number | null;
+  cost_usd: number | null;
+  session_id: string;
+  cwd: string;
+  /** What fired it: a command, a title, or the event kind. */
+  name: string;
+  kind: string;
+  /** claude | http | script */
+  action: string;
+  text: string;
+  result: string;
+  actions?: number;
+  /** A running task only: read from its session transcript. */
+  progress?: {
+    tool_calls: number;
+    last_tool: string;
+    last_input: string;
+    last_at: string;
+    /** From the database, written by the brain's hooks as the session runs. */
+    subagents: number;
+    subagents_running: number;
+    actions: number;
+    last_action: { kind: string; target: string; at: string } | null;
+    last_message: string;
+  } | null;
+}
+
+export interface TasksPayload extends Envelope {
+  tasks: TriggerTask[];
+  counts: Record<string, number>;
+  total: number;
+  limit: number;
+  truncated: boolean;
+  now: string;
+}
+
+export interface TaskAction {
+  id: number;
+  request_id: string;
+  at: string;
+  kind: string;
+  target: string;
+  detail: string;
+}
+
+export type TranscriptEvent =
+  | { kind: "text"; role: "prompt" | "user" | "assistant"; at: string; text: string }
+  | {
+      kind: "tool";
+      at: string;
+      id: string;
+      name: string;
+      input: string;
+      result: string | null;
+      is_error: boolean;
+      done_at?: string;
+    };
+
+export interface TaskDetail extends Envelope {
+  task: TriggerTask & {
+    meta: Record<string, unknown>;
+    /** The argv (or `[method, url]`) it ran with; null before it started. */
+    command: string[] | string | null;
+    stderr: string;
+  };
+  actions: TaskAction[];
+  /** What the hooks wrote to the database for this session; live while it runs. */
+  activity: TaskActivity | null;
+  transcript: {
+    found: boolean;
+    path: string;
+    events: TranscriptEvent[];
+    tool_calls: number;
+    of?: number;
+    truncated: boolean;
+  };
+}
+
+export interface TaskAgent {
+  id: string;
+  role: string;
+  status: string;
+  outcome: string;
+  started_at: string;
+  ended_at: string;
+  depth: number | null;
+  tokens_out: number | null;
+  brief: string;
+}
+
+export interface ActivityEvent {
+  at: string;
+  kind: "session" | "agent" | "message" | "action";
+  title: string;
+  role?: string;
+  target?: string;
+  detail?: string;
+  status?: string;
+}
+
+export interface TaskActivity {
+  session_id: string;
+  conversation: { id: string; status: string } | null;
+  agents: TaskAgent[];
+  subagents_running: number;
+  messages: number;
+  actions: number;
+  last_action: { kind: string; target: string; at: string } | null;
+  last_message: string;
+  updated: string;
+  timeline: ActivityEvent[];
+}

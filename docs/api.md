@@ -133,6 +133,8 @@ Every response is `Cache-Control: no-store`.
 | `/api/ui-prefs` | the browser's stored view state, and whether syncing it is on |
 | `/api/trigger?limit=N` | the [trigger](trigger.md) config (whether each token is set, never the token), what this process's watchers are doing, request counts by status, enabled conversations, the open and closed Slack `channels`, and the newest requests |
 | `/api/trigger-request?id=<uuid>` | one request and every action taken for it |
+| `/api/tasks?limit=N` | every trigger task, newest first (default 200, max 500), for the Tasks section: who fired it, the source, a `name` (command, title or event kind), the status and timings, `counts` by status. A running task carries `progress`: the subagents, actions and latest answer the hooks have written to the database, plus the tool calls from its transcript. `text` and `result` are clipped |
+| `/api/task?id=<uuid>` | one task in full: the request with its `command`, `cwd`, `session_id` and `stderr`, every action, `activity` (the session's conversation, agents and a timeline, read live from the database) and `transcript` (the session's text and tool calls with input and result; the newest 400 events, each field clipped to 4000 characters) |
 | `/api/<view>?<params>` | any `brain_query.py` view: `agenda`, `open`, `today`, `tomorrow`, `week`, `closed`, `range` |
 
 `/api/meta` exists so the UI never hardcodes vocabulary. Two of those sets are

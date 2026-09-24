@@ -508,7 +508,7 @@ Each allowed mention runs:
 
 ```bash
 claude -p "<the request>" --output-format json --dangerously-skip-permissions \
-       [--mcp-config=<your config>] [--strict-mcp-config] [extra args]
+       --session-id <uuid> [--mcp-config=<your config>] [--strict-mcp-config] [extra args]
 ```
 
 `--dangerously-skip-permissions` is what makes it run end to end with no one at a
@@ -529,7 +529,17 @@ That skill is the contract: read the rules that apply, do what was asked, log
 every outward action against the request id, reply in place, end with the
 signature.
 
-The dispatcher records the exit code, the final text and the cost on the
+The session id is chosen before the session starts and stored on the request
+with the full command and its working directory, so the session can be followed
+while it runs. The UI's **Tasks** section does that, from two places. One is the
+database, where the brain's own hooks write the conversation, every subagent and
+its outcome, and each captured turn, all keyed by that session id; the actions the
+session logs land there as well. The other is Claude Code's transcript for the
+session, which holds every tool call with its input and result. A request from
+before session ids were kept is matched to its transcript by the request id in
+its prompt, and the id is stored once it is found.
+
+The dispatcher records the exit code, the final text, stderr and the cost on the
 request. A session that outlives `timeout_s` is killed and marked `timeout`; a
 server restart that orphans one marks it `interrupted` on the next start.
 
@@ -539,7 +549,7 @@ Two tables in `graph.db`, and one node per request:
 
 | Where | What |
 |---|---|
-| `trigger_request` | one row per mention or GitHub event noticed: `id` (UUID), `source`, `event_id`, `scope`, requester id and name, permalink, text, `received_at`, `status` (`queued` → `running` → `done` / `declined` / `failed` / `timeout` / `interrupted`, or `refused`), exit code, result, cost |
+| `trigger_request` | one row per mention or GitHub event noticed: `id` (UUID), `source`, `event_id`, `scope`, requester id and name, permalink, text, `received_at`, `status` (`queued` → `running` → `done` / `declined` / `failed` / `timeout` / `interrupted`, or `refused`), exit code, result, stderr, cost, and what ran: `session_id`, `command` (JSON argv; for an `http` action only the method and URL, never the headers) and `cwd` |
 | `trigger_action` | append-only: every action taken for a request — `kind` (`reply`, `reply-dm`, `declined`, `refusal-notice`, `refusal-notice-dm`, `jira-transition`, …), `target`, `detail`, `at` |
 | `trigger_channel` | the Slack channels open to everyone, with who opened and closed each and when. Closed ones are kept |
 | a `request` node | the same request in the graph, so `recall "who asked me to …"` finds it, and it mirrors to neo4j like any other node |
@@ -554,7 +564,8 @@ python3 scripts/trigger.py requests --limit 20
 python3 scripts/trigger.py show --id <request-id>
 ```
 
-or `GET /api/trigger` and `GET /api/trigger-request?id=` on a running server.
+or `GET /api/trigger` and `GET /api/trigger-request?id=` on a running server, or
+`GET /api/tasks` and `GET /api/task?id=` for what the Tasks section shows.
 
 ### The server log
 

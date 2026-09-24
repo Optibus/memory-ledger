@@ -205,6 +205,26 @@ def trigger_request(id: str = Query("", description="The request id (UUID).")):
     return trigger.request_detail(id)
 
 
+@router.get("/tasks", tags=["trigger"],
+            summary="Every trigger task, newest first, for the Tasks panel",
+            description="One row per request: who fired it, from where, what it is "
+                        "called, its status and timings. A running task carries "
+                        "`progress` (tool calls so far and the latest one), read from "
+                        "its session transcript. `text` and `result` are clipped; "
+                        "`/api/task` has them whole.")
+def tasks(limit: int = Query(200, ge=1, le=trigger.TASKS_MAX)):
+    return trigger.tasks_payload(limit)
+
+
+@router.get("/task", tags=["trigger"],
+            summary="One task in full: trigger, command, output, actions, tool calls",
+            description="The transcript is budgeted: the newest "
+                        f"{trigger.TRANSCRIPT_EVENTS_MAX} events, each field clipped to "
+                        f"{trigger.TRANSCRIPT_FIELD_MAX} characters (`truncated`, `of`).")
+def task(id: str = Query("", description="The request id (UUID).")):
+    return trigger.task_detail(id)
+
+
 @router.get("/meta", tags=["vocabulary"], summary="The vocabulary, so no client hard-codes it",
             description="`rels` and `statuses` are CLOSED and enforced on write. "
                         "`realms`, `kinds` and `types` are OPEN: whatever this brain "

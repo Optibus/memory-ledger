@@ -44,7 +44,7 @@ GET_ROUTES = [
     "/api/person-duplicates", "/api/kinds", "/api/skills", "/api/bundle",
     "/api/rule", "/api/settings", "/api/timezones", "/api/status", "/api/meta",
     "/api/suggest-links", "/api/search", "/api/trigger", "/api/trigger-request",
-    "/api/scripts", "/api/script",
+    "/api/scripts", "/api/script", "/api/tasks", "/api/task",
 ]
 POST_ROUTES = [
     "/api/set-due", "/api/add-task", "/api/complete", "/api/set-status",
@@ -796,6 +796,15 @@ def test_trigger_routes(s: Server):
     ck("an unknown request is a successful read of nothing",
        s.get("/api/trigger-request", id="nope").json().get("ok") is False)
     ck("status lists it", any(r["id"] == rid for r in s.get("/api/trigger").json()["recent"]))
+    t = s.get("/api/tasks").json()
+    ck("tasks lists it as a card, with the counts",
+       t.get("ok") and any(r["id"] == rid and r["name"] == "mention" for r in t["tasks"])
+       and t["total"] >= 1)
+    d = s.get("/api/task", id=rid).json()
+    ck("task returns it in full, with its transcript state",
+       d.get("ok") and d["task"]["text"] == "hello" and d["transcript"]["found"] is False)
+    ck("an unknown task is a successful read of nothing",
+       s.get("/api/task", id="nope").json().get("ok") is False)
 
     a = s.post("/api/trigger-action", {"request_id": rid, "kind": "reply",
                                        "target": "https://x", "detail": "answered"})
