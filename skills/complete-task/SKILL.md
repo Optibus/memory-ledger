@@ -74,7 +74,7 @@ See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTION
 
 One calm line of acknowledgement, then the natural next action.
 
-> Done, archived "Reply to Ravid". You have 9 active tasks left. Next up:
+> Done, archived "Reply to Priya". You have 9 active tasks left. Next up:
 > **fix the failing CI on PR #7357.** Want it?
 
 To un-complete: `update-node --id <id> --status open`.

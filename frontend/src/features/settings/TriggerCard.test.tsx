@@ -233,7 +233,7 @@ describe("Triggers", () => {
   it("lists the newest requests", async () => {
     renderApp(<TriggerCard writable />, { route: "/settings" });
     const list = await screen.findByRole("list", { name: "recent requests" });
-    expect(within(list).getByText(/Isadora: can you summarise this thread/)).toBeInTheDocument();
+    expect(within(list).getByText(/Maria: can you summarise this thread/)).toBeInTheDocument();
   });
 
   it("has a GitHub panel with its own switch and a write-only token", async () => {

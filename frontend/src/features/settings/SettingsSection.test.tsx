@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 import { SettingsSection } from "./SettingsSection";
 import { renderApp } from "@/test/utils";
@@ -86,9 +86,39 @@ describe("Settings", () => {
     renderApp(<SettingsSection />, { route: "/settings" });
     const select = (await screen.findByLabelText("Default realm")) as HTMLSelectElement;
     const values = [...select.options].map((o) => o.value);
-    expect(values).toContain("optibus");
+    expect(values).toContain("work");
     // "" is the "fall back to the default" option, not a realm.
     expect(values).toContain("");
+  });
+
+  it("renames a realm only after confirming, and says when it merges into one that exists", async () => {
+    const { user } = renderApp(<SettingsSection />, { route: "/settings" });
+    await user.selectOptions(await screen.findByLabelText("Rename realm"), "work");
+    await user.type(screen.getByLabelText("New name"), "personal");
+    expect(screen.getByText(/personal already exists/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Rename" }));
+    expect(writes.find((w) => w.path === "/api/rename-realm")).toBeUndefined();
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Rename" }));
+    await waitFor(() =>
+      expect(writes.find((w) => w.path === "/api/rename-realm")?.body).toEqual({ old: "work", new: "personal" }),
+    );
+    expect(await screen.findByText(/merged into the existing realm/)).toBeInTheDocument();
+  });
+
+  it("refuses a realm name the engine would refuse, before sending it", async () => {
+    const { user } = renderApp(<SettingsSection />, { route: "/settings" });
+    await user.type(await screen.findByLabelText("New name"), "Side Projects");
+    expect(screen.getByRole("button", { name: "Rename" })).toBeDisabled();
+    expect(screen.getByText(/Lowercase letters, digits and dashes only/)).toBeInTheDocument();
+  });
+
+  it("adds a realm by making it where new nodes land", async () => {
+    const { user } = renderApp(<SettingsSection />, { route: "/settings" });
+    await user.type(await screen.findByLabelText(/Add a realm/), "side-projects");
+    await user.click(screen.getByRole("button", { name: "Add and make default" }));
+    await waitFor(() =>
+      expect(writes.find((w) => w.path === "/api/settings")?.body).toEqual({ realm: "side-projects" }),
+    );
   });
 
   it("says when an env var has taken a switch over, instead of offering a dead box", async () => {

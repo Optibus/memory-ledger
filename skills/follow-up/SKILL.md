@@ -101,5 +101,5 @@ See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTION
 The single most important loop to close now, then a short grouped remainder, then
 the offer to take the action rather than just list it.
 
-> **Ravid is waiting on your review of PR #7357**, 4 days. 6 other loops: 2
+> **Priya is waiting on your review of PR #7357**, 4 days. 6 other loops: 2
 > overdue tasks, 3 emails, 1 PR. Want me to open the review?

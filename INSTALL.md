@@ -220,7 +220,7 @@ already have exported breaks.
 - `$MEMORY_LEDGER_TZ` (was `$SECOND_BRAIN_TZ`) — timezone for date bucketing;
   the env var wins over `settings.json`.
 - `$MEMORY_LEDGER_REALM` (was `$SECOND_BRAIN_REALM`) — default section for new
-  nodes (`optibus`, `personal`, ...).
+  nodes (`default`, `work`, `personal`, ...).
 
 **The home directory is now `~/.memory-ledger`, and your data still isn't
 moving.** On a machine that predates the rename, the first session creates

@@ -16,7 +16,7 @@ const node = (id: string, over: Partial<GraphNode> = {}): GraphNode => ({
   id,
   title: id,
   type: "task",
-  realm: "optibus",
+  realm: "work",
   ...over,
 });
 

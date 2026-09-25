@@ -158,7 +158,7 @@ def norm_assignee(raw: str, owner: str = "") -> str:
     '' -> 'unassigned'; the owner (by any of their names) / me / self -> 'me';
     else the lowercased name.
 
-    The owner's own first name counts as a match — "Gabriel Nori" and "gabriel"
+    The owner's own first name counts as a match — "Alex Rivera" and "alex"
     are one person — which is what the hardcoded substring used to do for
     exactly one user. It is derived from the configured owner now, so it does
     the same job for whoever the brain actually belongs to."""
@@ -535,7 +535,7 @@ def main(argv=None):
     p.add_argument("--assignee",
                    help="comma list of assignee tokens to keep: me | unassigned | <name>")
     p.add_argument("--realm",
-                   help="comma list of realms to keep (optibus | personal | ...); "
+                   help="comma list of realms to keep (work | personal | ...); "
                         "omit for every realm")
     p.add_argument("--kind",
                    help="comma list of props.kind values to keep; '(none)' selects "

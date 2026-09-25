@@ -352,7 +352,7 @@ def save_settings(data: m.Settings = body(m.Settings)):
     graph.save_settings(patch)
     # This process read DEFAULT_REALM once, at import. Re-resolve it so a realm
     # changed in the browser applies to the next write, not the next restart.
-    graph.DEFAULT_REALM = graph.setting("realm", "optibus")
+    graph.DEFAULT_REALM = graph.setting("realm", graph.REALM_FALLBACK)
     return reply(payloads.settings_payload())
 
 
@@ -468,6 +468,14 @@ def save_ui_prefs(data: m.UiPrefs = body(m.UiPrefs)):
     if not res.get("ok"):
         return reply(res)
     return reply({**res, "synced": graph.flag("ui_sync")})
+
+
+@router.post("/rename-realm", tags=["settings"], summary="Rename a realm",
+             description="Moves every node in `old` to `new` — merging when `new` "
+                         "already has nodes — and follows it in the default realm "
+                         "setting. Snapshots the graph first. `updated` is untouched.")
+def rename_realm(data: m.RenameRealm = body(m.RenameRealm)):
+    return reply(graph.api_rename_realm(graph.connect(), clip(data.old, 40), clip(data.new, 40)))
 
 
 @router.post("/backup", tags=["settings"], summary="Snapshot the graph now",

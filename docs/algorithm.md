@@ -89,7 +89,7 @@ distinction that makes this safe to leave running.
 ### 1. Cue extraction
 
 Words shorter than 3 characters are dropped, then a bilingual stop-list
-(`_CUE_STOP`, English + pt-BR — the brain is driven in both) removes function
+(`_CUE_STOP`, English + pt-BR out of the box) removes function
 words. Each survivor becomes a prefix term. If stripping would leave nothing,
 the original words are kept — an empty cue is worse than a noisy one.
 

@@ -101,5 +101,5 @@ See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTION
 
 The draft, then one line naming who it is pitched at and asking for the yes.
 
-> Drafted for **Ravid, product owner**, so it leads with what the customer sees
+> Drafted for **Priya, product owner**, so it leads with what the customer sees
 > and leaves the parser detail in the ticket. Send it?

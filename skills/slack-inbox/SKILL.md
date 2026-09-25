@@ -82,5 +82,5 @@ See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTION
 
 The count, then the single most important thing to do next.
 
-> 6 new messages, 4 were chatter. **Ryllari is asking whether the export fix ships
+> 6 new messages, 4 were chatter. **Tomas is asking whether the export fix ships
 > this sprint.** Want me to draft the answer?

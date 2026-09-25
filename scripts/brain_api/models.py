@@ -178,6 +178,11 @@ class UiPrefs(Body):
         None, description="The whole blob. Replaces what is stored.")
 
 
+class RenameRealm(Body):
+    old: Text = T("The realm to rename.")
+    new: Text = T("Its new name; an existing realm is merged into.")
+
+
 class Backup(Body):
     label: Text = T("Default `manual`.")
 

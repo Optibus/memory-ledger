@@ -218,6 +218,17 @@ export const api = {
     post<{ ok: boolean; capture: import("./types").CaptureState }>("/api/capture", { enabled }),
   saveUiPrefs: (prefs: import("./types").UiPrefs) =>
     post<{ ok: boolean; synced: boolean }>("/api/ui-prefs", { prefs }),
+  renameRealm: (old: string, name: string) =>
+    post<{
+      ok: boolean;
+      error?: string;
+      from: string;
+      to: string;
+      moved: number;
+      merged_into_existing: boolean;
+      default?: string;
+      warning?: string;
+    }>("/api/rename-realm", { old, new: name }),
   backup: (label?: string) =>
     post<import("./types").BackupList & { created: import("./types").Backup }>(
       "/api/backup",

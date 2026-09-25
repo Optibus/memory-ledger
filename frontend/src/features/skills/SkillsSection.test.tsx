@@ -283,7 +283,7 @@ describe("Skills processes", () => {
     await user.click(screen.getByRole("button", { name: "New process…" }));
     await user.type(await screen.findByRole("textbox", { name: /Title/ }), "Sunday review");
     const realm = screen.getByRole("combobox", { name: /Realm/ });
-    expect(realm).toHaveValue("optibus");
+    expect(realm).toHaveValue("work");
     await user.selectOptions(realm, "personal");
     await user.click(screen.getByRole("button", { name: "Save process" }));
     await waitFor(() =>
@@ -304,10 +304,10 @@ describe("Skills processes", () => {
         title: "Ship a hotfix",
         trigger: "",
         body: "",
-        realm: "optibus",
+        realm: "work",
       }),
     );
-    expect(await screen.findByText(/in the optibus realm/)).toBeInTheDocument();
+    expect(await screen.findByText(/in the work realm/)).toBeInTheDocument();
   });
 
   it("asks which realm a bundle's processes land in, defaulting to the current one", async () => {
@@ -326,7 +326,7 @@ describe("Skills processes", () => {
     const input = document.querySelector('input[type="file"]') as HTMLInputElement;
     await user.upload(input, new File(["zip"], "mate.zip", { type: "application/zip" }));
     const realm = await screen.findByRole("combobox", { name: "process realm" });
-    expect(realm).toHaveValue("optibus");
+    expect(realm).toHaveValue("work");
     expect(screen.getByText("from team-b")).toBeInTheDocument();
     await user.selectOptions(realm, "personal");
     await user.click(screen.getByRole("button", { name: "Import" }));

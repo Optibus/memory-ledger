@@ -27,7 +27,7 @@ describe("Tasks", () => {
   it("searches the message, the name and who asked", async () => {
     const { user } = renderApp(<TasksSection />, { route: "/tasks", withMeta: false });
     const list = await screen.findByRole("list", { name: "tasks" });
-    await user.type(screen.getByLabelText("search tasks"), "ryllari");
+    await user.type(screen.getByLabelText("search tasks"), "tomas");
     expect(within(list).getAllByRole("listitem")).toHaveLength(1);
     expect(within(list).getByText("Duty Cards: report the route-group error")).toBeInTheDocument();
   });
@@ -37,10 +37,10 @@ describe("Tasks", () => {
       "t-done",
       "t-failed",
     ]);
-    expect(filterTasks(tasksFixture.tasks, "", { requester: ["Gabriel"], status: ["done"] }).map((t) => t.id)).toEqual([
+    expect(filterTasks(tasksFixture.tasks, "", { requester: ["Alex"], status: ["done"] }).map((t) => t.id)).toEqual([
       "t-running",
     ]);
-    expect(filterTasks(tasksFixture.tasks, "triage os-1", {}).map((t) => t.id)).toEqual(["t-failed"]);
+    expect(filterTasks(tasksFixture.tasks, "triage abc-1", {}).map((t) => t.id)).toEqual(["t-failed"]);
   });
 
   it("opens a task to its trigger, command, output, actions and tool calls", async () => {
@@ -55,7 +55,7 @@ describe("Tasks", () => {
     const { user } = renderApp(<TasksSection />, { route: "/tasks", withMeta: false });
     const list = await screen.findByRole("list", { name: "tasks" });
     expect(asked).toBe(0);
-    await user.click(within(list).getByRole("button", { name: /from Isadora, running/ }));
+    await user.click(within(list).getByRole("button", { name: /from Maria, running/ }));
     await waitFor(() => expect(asked).toBe(1));
 
     expect(await screen.findByText(/claude -p <prompt> --output-format json --session-id s-1/)).toBeInTheDocument();

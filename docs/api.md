@@ -160,7 +160,7 @@ The dashboard views accept the same parameters as the CLI, as query string:
 /api/agenda?mine=1
 /api/open?assignee=unassigned
 /api/agenda?realm=personal
-/api/open?realm=optibus,shared&mine=1
+/api/open?realm=work,shared&mine=1
 /api/open?kind=postmortem
 /api/agenda?kind=(none)          # nodes that carry no kind at all
 /api/range?from=2026-07-20&to=2026-07-31&status=open
@@ -169,7 +169,7 @@ The dashboard views accept the same parameters as the CLI, as query string:
 ```
 
 `realm` takes a comma list; omitting it means every realm. An empty realm on a
-node is normalised to the configured default (`$SECOND_BRAIN_REALM`, `optibus`
+node is normalised to the configured default (`$SECOND_BRAIN_REALM`, `default`
 out of the box), so filtering never silently drops untagged nodes.
 
 `kind` works the same way over `props.kind`, which is optional and sparse — most
@@ -198,6 +198,7 @@ since the dashboard lists tasks and a kind with none would be dead UI.
 | `/api/add-alias` | `{id, alias}` | pins another spelling onto a person, through the engine's `api_add_alias`. A spelling they already answer to is a no-op |
 | `/api/ui-prefs` | `{prefs}` | **replaces** `<home>/ui_prefs.json` (≤64KB). The browser holds the whole blob; merging would resurrect a preference just cleared |
 | `/api/backup` | `{label?}` | snapshots the graph now and expires the ones past their window |
+| `/api/rename-realm` | `{old, new}` | moves every node in `old` to `new` (merging if `new` exists), follows it in the default realm setting, snapshots first; `updated` is untouched |
 | `/api/neo4j-config` | `{url, db?, user?, password?}` | writes `<home>/neo4j.json` (mode 600) and reports whether the master answered. Blank `password` keeps the stored one; empty `url` deletes the file (sqlite-only) |
 | `/api/neo4j-test` | `{}` | runs `RETURN 1` against the configured master |
 | `/api/flush` | `{}` | drains the outbox to the master |

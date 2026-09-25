@@ -10,7 +10,7 @@ tab and becomes part of the graph.
 
 ## When to use
 
-"What is the status of OS-1234", "show my tickets", "what did they say on that
+"What is the status of ABC-123", "show my tickets", "what did they say on that
 ticket", "what is in this sprint".
 
 ## Given
@@ -58,10 +58,10 @@ See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTION
 
 ## Judged against
 
-- **One node per ticket key.** A second node for `OS-1234` means the match-on-key
+- **One node per ticket key.** A second node for `ABC-123` means the match-on-key
   clause was skipped.
 - **The cached status matches Jira** at the time of reading.
-- **The reply names what needs him**, not the full field list.
+- **The reply names what needs them**, not the full field list.
 
 ## Guardrails — must not
 
@@ -73,7 +73,7 @@ See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTION
 
 ## Reply (focus contract)
 
-Status plus the one thing that needs him.
+Status plus the one thing that needs them.
 
-> **OS-82316 is In Review, waiting on Alessandro's approval** since Monday.
-> Nothing needed from you until he answers. Want a reminder for Thursday?
+> **ABC-2316 is In Review, waiting on Marco's approval** since Monday.
+> Nothing needed from you until they answer. Want a reminder for Thursday?

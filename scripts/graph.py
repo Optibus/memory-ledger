@@ -45,7 +45,11 @@ from _switch import (  # noqa: E402,F401
 # Default section (realm) for new nodes; override with $SECOND_BRAIN_REALM or
 # --realm, or set it once in <home>/settings.json. Assigned below, after the
 # settings reader it depends on — see `settings()`.
-DEFAULT_REALM = "optibus"
+#: The realm a fresh brain writes into until one is configured. Nothing treats
+#: the name as special: `rename-realm` renames it, and writing a node with
+#: `--realm <new>` is all it takes to add another.
+REALM_FALLBACK = "default"
+DEFAULT_REALM = REALM_FALLBACK
 
 # ---------------------------------------------------------------------------
 # vocabulary (soft — not enforced, just documented + used for defaults)
@@ -265,7 +269,7 @@ BACKENDS = ("sqlite", "neo4j", "auto")
 # The fallback owner, used only when neither the env var nor the file names one.
 # It is a name rather than "" because norm_assignee() has to map SOMETHING to
 # "me", and a blank owner would quietly make every task somebody else's.
-DEFAULT_OWNER = "Gabriel"
+DEFAULT_OWNER = "Owner"
 
 
 def settings_path() -> Path:
@@ -372,7 +376,7 @@ def owner() -> str:
 _resolve_owner = owner
 
 
-DEFAULT_REALM = setting("realm", "optibus")
+DEFAULT_REALM = setting("realm", REALM_FALLBACK)
 
 
 def slugify(text: str) -> str:
@@ -3561,7 +3565,7 @@ _LINK_CUES = [(rel, re.compile(r"(?:" + pat + r")[\s:,\-–—]*$")) for rel, pa
 _CUE_WINDOW = 40
 
 # Filler that commonly sits between the cue and the mention — "blocked by *PR*
-# #7366", "waiting on *the ticket* OS-82651". Stripped from the tail of the
+# #7366", "waiting on *the ticket* ABC-2651". Stripped from the tail of the
 # window before cue matching. Deliberately contains NO prepositions or verbs:
 # cues like "depends on" / "caused by" / "part of" end in one, and eating it
 # would stop them matching.
@@ -3574,8 +3578,8 @@ def _mention_keys(d: dict) -> set:
     """Distinctive strings that, appearing in free text, mean THIS node.
 
     Deliberately narrow: a whole title (only if long enough to be unambiguous),
-    plus the identifiers people actually type — ticket keys (OS-84566), PR/issue
-    numbers (#7366), channel handles (#cord-devs), and a person's first name.
+    plus the identifiers people actually type — ticket keys (ABC-4521), PR/issue
+    numbers (#7366), channel handles (#team-devs), and a person's first name.
     """
     title = (d.get("title") or "").strip().lower()
     if not title:
@@ -3583,9 +3587,9 @@ def _mention_keys(d: dict) -> set:
     keys = set()
     if len(title) >= 6:
         keys.add(title)
-    keys.update(re.findall(r"\b[a-z]{2,5}-\d{1,6}\b", title))   # OS-84566, MS-33
+    keys.update(re.findall(r"\b[a-z]{2,5}-\d{1,6}\b", title))   # ABC-4521, MS-33
     keys.update(re.findall(r"#\d{2,6}", title))                  # #7366
-    if title.startswith("#") and len(title) > 3:                 # #cord-devs
+    if title.startswith("#") and len(title) > 3:                 # #team-devs
         keys.add(title)
     if d.get("type") == "person":
         for part in re.split(r"\s+", title):
@@ -3595,8 +3599,8 @@ def _mention_keys(d: dict) -> set:
 
 
 def _find_mention(text_low: str, key: str) -> int:
-    """Index of `key` in text as a whole token, or -1. Boundary-aware so 'os-8'
-    does not match inside 'os-84566' and a name does not match mid-word."""
+    """Index of `key` in text as a whole token, or -1. Boundary-aware so 'abc-4'
+    does not match inside 'abc-4521' and a name does not match mid-word."""
     m = re.search(r"(?<![\w#-])" + re.escape(key) + r"(?![\w-])", text_low)
     return m.start() if m else -1
 
@@ -3674,7 +3678,7 @@ def cmd_suggest_links(args):
 # ---------------------------------------------------------------------------
 # The same colleague arrives through many doors: a Slack display name, an email
 # local part, a first name in a meeting transcript, a surname in a Jira comment.
-# Left alone that produces "Isa", "Isadora" and "Isadora Martini" as three people,
+# Left alone that produces "Mari", "Maria" and "Maria Castillo" as three people,
 # which quietly splits their tasks three ways.
 #
 # Two tiers, because the cost of the two mistakes is not the same. Merging two
@@ -3692,7 +3696,7 @@ _NAME_NOISE = {"mr", "mrs", "ms", "dr", "prof", "sr", "jr", "the"}
 
 def norm_name(raw: str) -> str:
     """Casefold, strip accents, drop punctuation, collapse whitespace.
-    'Isadora  MARTINI' / 'isadora martini' / 'Isadóra Martini' all agree."""
+    'Maria  CASTILLO' / 'maria castillo' / 'María Castillo' all agree."""
     s = unicodedata.normalize("NFKD", (raw or "").strip())
     s = "".join(c for c in s if not unicodedata.combining(c))
     s = re.sub(r"[^\w\s@.]+", " ", s.lower())
@@ -3701,7 +3705,7 @@ def norm_name(raw: str) -> str:
 
 def name_parts(raw: str) -> list:
     """A name reduced to comparable parts. An email becomes its local part split
-    on the usual separators, so isadora.martini@optibus.com -> [isadora, martini]."""
+    on the usual separators, so maria.castillo@example.com -> [maria, castillo]."""
     s = norm_name(raw)
     if "@" in s:
         s = s.split("@", 1)[0]
@@ -3714,7 +3718,7 @@ def name_match(a: str, b: str) -> str:
 
     The load-bearing rule is the last one: two names that BOTH carry a surname and
     disagree on it are different people, however much the first name matches.
-    Without it 'Gabriel Nori' and 'Gabriel Santos' collapse into one.
+    Without it 'Daniel Reyes' and 'Daniel Moore' collapse into one.
     """
     pa, pb = name_parts(a), name_parts(b)
     if not pa or not pb:
@@ -3722,25 +3726,25 @@ def name_match(a: str, b: str) -> str:
     if pa == pb:
         return "certain"
     sa, sb = set(pa), set(pb)
-    # one side is a bare single name — "Isa", or "Martini"
+    # one side is a bare single name — "Mari", or "Castillo"
     if len(pa) == 1 or len(pb) == 1:
         short = (pa if len(pa) == 1 else pb)[0]
         long_ = pb if len(pa) == 1 else pa
         if short in set(long_):
             return "likely"                      # a first name or a surname on its own
-        # a nickname clipped off the front: isa -> isadora, gab -> gabriel
+        # a nickname clipped off the front: mari -> maria, dan -> daniel
         if len(short) >= 3 and any(p.startswith(short) for p in long_):
             return "likely"
         return ""
     # both sides carry at least two parts
     if sa == sb:
-        return "certain"                         # "Martini, Isadora" — same parts, reordered
+        return "certain"                         # "Castillo, Maria" — same parts, reordered
     if pa[0] == pb[0] and pa[-1] == pb[-1]:
         return "certain"                         # middle name added or dropped
     # Deliberately NOT matching on a shared surname plus a matching first initial.
-    # It reads as a rule for "I. Martini", but that already reduces to a single
+    # It reads as a rule for "M. Castillo", but that already reduces to a single
     # token and is caught above; the only thing it actually catches is
-    # "Gabriel Nori" vs "Gabriela Nori" — two different people whose work would
+    # "Daniel Reyes" vs "Daniela Reyes" — two different people whose work would
     # then be silently pooled. A duplicate node is much cheaper than that.
     return ""
 
@@ -3893,7 +3897,7 @@ def api_merge_person(con, canonical_id: str, duplicate_id: str) -> dict:
     Edges move to the canonical node, the duplicate's name is pinned there as an
     alias, and the duplicate stays in the graph as a RESOLVER: superseded_by plus
     an edge pointing at its replacement. Nothing is deleted and no already-written
-    name is rewritten, so an old capture that said "Isa" still says "Isa" and still
+    name is rewritten, so an old capture that said "Mari" still says "Mari" and still
     resolves to the right human.
     """
     if canonical_id == duplicate_id:
@@ -4195,7 +4199,7 @@ def _slim(d: dict, terms=(), snippet=True) -> dict:
 
 
 # Function words carry no cue value, and each one widens the activation sweep for
-# nothing. Bilingual because this brain is driven in English and pt-BR.
+# nothing. Ships English + pt-BR; add the languages your brain is driven in.
 _CUE_STOP = {
     "the","and","for","was","were","are","did","does","what","when","who","why","how",
     "with","from","that","this","these","those","have","has","had","will","would",
@@ -4917,6 +4921,49 @@ def cmd_sections(args):
          "sections": {r["realm"]: r["c"] for r in rows}})
 
 
+def api_rename_realm(con, old: str, new: str) -> dict:
+    """Move every node in realm `old` to `new`, and follow it in the settings.
+
+    Renaming onto a realm that already has nodes merges the two: the result says
+    so rather than refusing, because "fold `scratch` into `work`" is a rename too.
+    A node with an empty realm counts as the current default, so renaming the
+    default takes those along. `updated` is left alone on purpose: moving a
+    section is not an edit to what a node says, and it must not make five
+    thousand old nodes look fresh to recall. Snapshots the graph first."""
+    old, new = (old or "").strip().lower(), (new or "").strip().lower()
+    if not old or not new:
+        return {"ok": False, "error": "both the old and the new realm name are required"}
+    if new != slugify(new):
+        return {"ok": False, "error": "realm must be lowercase letters, digits and dashes"}
+    if old == new:
+        return {"ok": False, "error": "the new name is the same as the old one"}
+    cur = current_realm()
+    where = "realm=?" + (" OR realm=''" if old == cur else "")
+    ids = [r["id"] for r in con.execute(f"SELECT id FROM nodes WHERE {where}", (old,))]
+    if not ids and old != cur:
+        return {"ok": False, "error": f"no realm named {old!r}"}
+    existing = con.execute("SELECT COUNT(*) c FROM nodes WHERE realm=?", (new,)).fetchone()["c"]
+    backup = backup_db("rename-realm") if ids else None
+    con.execute(f"UPDATE nodes SET realm=? WHERE {where}", (new, old))
+    res = {"ok": True, "from": old, "to": new, "moved": len(ids),
+           "merged_into_existing": existing > 0, "backup": backup}
+    if old == cur:
+        if _env("REALM"):
+            res["warning"] = ("the default realm comes from $MEMORY_LEDGER_REALM / "
+                              f"$SECOND_BRAIN_REALM; set it to {new!r} there too")
+        else:
+            save_settings({"realm": new})
+        global DEFAULT_REALM
+        DEFAULT_REALM = setting("realm", REALM_FALLBACK)
+        res["default"] = DEFAULT_REALM
+    res["sync"] = _after_write(con, nodes=ids)
+    return res
+
+
+def cmd_rename_realm(args):
+    out(api_rename_realm(connect(), args.old, args.new))
+
+
 def _areas(con):
     """Every area node with its member count, biggest first."""
     return con.execute(
@@ -5087,8 +5134,8 @@ Path resolution: `$SECOND_BRAIN_DB` (explicit file) -> `$SECOND_BRAIN_HOME/graph
 directory moves brain + learned skills. Identical behaviour in Claude Code and the
 Claude app. The file is the whole product — no server, no account, no network.
 
-Two orthogonal groupings: `realm` is which section of life (`optibus`, `personal`,
-`shared`); an `area` (`hub_*`, linked with `part-of`) is which domain of meaning.
+Two orthogonal groupings: `realm` is which section of life (`default`, `work`, `personal`,
+`shared`, …); an `area` (`hub_*`, linked with `part-of`) is which domain of meaning.
 """),
     "spec_sync": ("Optional graph mirror and reconciliation", """
 The brain is one local SQLite file and needs no network. OPTIONALLY, a graph mirror
@@ -6116,7 +6163,7 @@ def build_parser():
     a.add_argument("--title", required=True)
     a.add_argument("--body"); a.add_argument("--props")
     a.add_argument("--status"); a.add_argument("--due"); a.add_argument("--id")
-    a.add_argument("--realm", help="section: optibus | personal | ... (default $SECOND_BRAIN_REALM or optibus)")
+    a.add_argument("--realm", help="section: work | personal | ... (default $SECOND_BRAIN_REALM or default)")
     a.add_argument("--area", help="file under a domain area (hub_quote | quote | hub_health ...) "
                                  "— adds the part-of edge; errors if the area does not exist")
     a.add_argument("--force-new", action="store_true",
@@ -6146,6 +6193,11 @@ def build_parser():
     a = sub.add_parser("flush").set_defaults(func=cmd_flush)
     sub.add_parser("neo4j-status").set_defaults(func=cmd_neo4j_status)
     sub.add_parser("sections").set_defaults(func=cmd_sections)
+    a = sub.add_parser("rename-realm", help="move every node in one realm to another "
+                                            "(merges if the new one exists)")
+    a.add_argument("--from", dest="old", required=True)
+    a.add_argument("--to", dest="new", required=True)
+    a.set_defaults(func=cmd_rename_realm)
     sub.add_parser("areas").set_defaults(func=cmd_areas)
 
     a = sub.add_parser("add-area"); a.set_defaults(func=cmd_add_area)

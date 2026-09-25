@@ -14,17 +14,17 @@ describe("People", () => {
     // Scoped to the list: the same names also appear in the duplicates card,
     // which is a different claim about them.
     const list = await screen.findByRole("list", { name: "people" });
-    expect(within(list).getByText("Gabriel")).toBeInTheDocument();
-    expect(within(list).getByText("Isadora")).toBeInTheDocument();
-    expect(within(list).getByText("also isa")).toBeInTheDocument();
+    expect(within(list).getByText("Alex")).toBeInTheDocument();
+    expect(within(list).getByText("Maria")).toBeInTheDocument();
+    expect(within(list).getByText("also mari")).toBeInTheDocument();
   });
 
   it("searches aliases too, because that is the point of having them", async () => {
     const { user } = renderApp(<PeopleSection />, { route: "/people" });
     const list = await screen.findByRole("list", { name: "people" });
-    await user.type(screen.getByLabelText("filter people"), "isa");
-    expect(within(list).getByText("Isadora")).toBeInTheDocument();
-    expect(within(list).queryByText("Gabriel")).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText("filter people"), "mari");
+    expect(within(list).getByText("Maria")).toBeInTheDocument();
+    expect(within(list).queryByText("Alex")).not.toBeInTheDocument();
   });
 
   it("fetches a person's connections only when you open them", async () => {
@@ -39,14 +39,14 @@ describe("People", () => {
     const list = await screen.findByRole("list", { name: "people" });
     expect(asked).toBe(0);              // a hundred people is not a hundred reads
 
-    await user.click(within(list).getByRole("button", { name: /Gabriel/ }));
+    await user.click(within(list).getByRole("button", { name: /Alex/ }));
     await waitFor(() => expect(asked).toBe(1));
   });
 
   it("groups a person's connections by relation", async () => {
     const { user } = renderApp(<PeopleSection />, { route: "/people" });
     const list = await screen.findByRole("list", { name: "people" });
-    await user.click(within(list).getByRole("button", { name: /Gabriel/ }));
+    await user.click(within(list).getByRole("button", { name: /Alex/ }));
     // Each neighbour, under the heading for the relation that reaches it, with
     // the biggest group first — two tasks before the one note.
     for (const edge of personDetailFixture.edges) {
@@ -62,13 +62,13 @@ describe("People", () => {
   it("pins another spelling through the engine's own add-alias", async () => {
     const { user } = renderApp(<PeopleSection />, { route: "/people" });
     const list = await screen.findByRole("list", { name: "people" });
-    await user.click(within(list).getByRole("button", { name: /Gabriel/ }));
+    await user.click(within(list).getByRole("button", { name: /Alex/ }));
     const input = await screen.findByLabelText("Also known as");
     await user.type(input, "Gab");
     await user.click(screen.getByRole("button", { name: "Add" }));
     await waitFor(() =>
       expect(writes.find((w) => w.path === "/api/add-alias")?.body).toMatchObject({
-        id: "person_gabriel",
+        id: "person_alex",
         alias: "Gab",
       }),
     );
@@ -89,15 +89,15 @@ describe("People — duplicates", () => {
     const { user } = renderApp(<PeopleSection />, { route: "/people" });
     await screen.findByText("Possible duplicates");
 
-    await user.click(screen.getByRole("button", { name: "Merge into Isadora" }));
+    await user.click(screen.getByRole("button", { name: "Merge into Maria" }));
     // The dialog explains the merge before anything is written.
     expect(await screen.findByText(/Nothing is deleted/)).toBeInTheDocument();
     expect(writes.some((w) => w.path === "/api/merge-person")).toBe(false);
 
-    await user.click(screen.getByRole("button", { name: "Merge Isa into Isadora" }));
+    await user.click(screen.getByRole("button", { name: "Merge Mari into Maria" }));
     await waitFor(() =>
       expect(writes.find((w) => w.path === "/api/merge-person")?.body).toMatchObject({
-        canonical: "person_isadora",
+        canonical: "person_maria",
         duplicate: "person_isa",
       }),
     );
@@ -107,16 +107,16 @@ describe("People — duplicates", () => {
     const { user } = renderApp(<PeopleSection />, { route: "/people" });
     await screen.findByText("Possible duplicates");
 
-    // The engine picked Isadora (most connected). Say it is the other one.
-    const group = screen.getByText("Isa").closest(".ml-dupe") as HTMLElement;
-    await user.click(within(group).getByRole("radio", { name: "Isa" }));
-    await user.click(within(group).getByRole("button", { name: "Merge into Isa" }));
-    await user.click(await screen.findByRole("button", { name: "Merge Isadora into Isa" }));
+    // The engine picked Maria (most connected). Say it is the other one.
+    const group = screen.getByText("Mari").closest(".ml-dupe") as HTMLElement;
+    await user.click(within(group).getByRole("radio", { name: "Mari" }));
+    await user.click(within(group).getByRole("button", { name: "Merge into Mari" }));
+    await user.click(await screen.findByRole("button", { name: "Merge Maria into Mari" }));
 
     await waitFor(() =>
       expect(writes.find((w) => w.path === "/api/merge-person")?.body).toMatchObject({
         canonical: "person_isa",
-        duplicate: "person_isadora",
+        duplicate: "person_maria",
       }),
     );
   });

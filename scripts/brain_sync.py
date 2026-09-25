@@ -70,7 +70,7 @@ def collect():
             "id": d["id"], "type": d["type"], "title": d["title"],
             "body": d["body"], "status": d["status"], "due": d["due"],
             "created": d["created"], "updated": d["updated"],
-            "realm": d.get("realm") or "optibus",
+            "realm": d.get("realm") or graph.DEFAULT_REALM,
             "props": _clean_props(d["props"]),
         })
     edges = [{"src": e["src"], "dst": e["dst"], "rel": e["rel"]}

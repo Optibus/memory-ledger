@@ -184,8 +184,8 @@ rendered command.
 | `{trigger_title}` | Jira, GitHub | The Jira issue's summary, or the PR or issue title. | `Add logging` |
 | `{trigger_scope}` | every trigger | The conversation's gate key. | `github:o/r#5` |
 | `{request_id}` | every trigger | This run's request id, for `trigger.py show`. | `0a255d52-6c1e-4f0b-9a57-2f3e8d41c9b0` |
-| `{owner}` | every trigger | Your name, as the brain knows it. | `Gabriel` |
-| `{signature}` | every trigger | The signature line the brain ends its replies with. | `_sent by Gabriel's second brain_` |
+| `{owner}` | every trigger | Your name, as the brain knows it. | `Alex` |
+| `{signature}` | every trigger | The signature line the brain ends its replies with. | `_sent by Alex's second brain_` |
 | `{slack_channel}` | Slack | The channel id. | `C0123ABCD` |
 | `{slack_thread}` | Slack | The thread's timestamp. | `1700000000.000100` |
 | `{slack_channel_name}` | Slack | The channel's name, without the #, when the bot may read it; else its id. | `general` |
@@ -206,7 +206,7 @@ rendered command.
 | `{jira_assignee}` | Jira | An assignment: who it is assigned to now; empty when unassigned. | `Ana Lima` |
 | `{jira_assignee_id}` | Jira | Their account id. | `712020:abcd` |
 | `{jira_previous_assignee}` | Jira | An assignment: who had it before; empty when nobody did. | `Bo Chen` |
-| `{github_repo}` | GitHub | owner/name. | `Optibus/memory-ledger` |
+| `{github_repo}` | GitHub | owner/name. | `acme/widgets` |
 | `{github_number}` | GitHub | The PR or issue number. | `5` |
 | `{github_item}` | GitHub | pull request or issue. | `pull request` |
 
@@ -743,7 +743,7 @@ Then:
   you opened, the `respond` skill treats the message as a *request* rather than
   as instructions that outrank the brain's rules, and personal material never
   crosses to an outward surface without your say-so
-  (`rule_user_nothing-personal-goes-out-without-explic` in a brain that has it).
+  (a rule of your own that says so, in a brain that has one).
   Open channels deliberately, not by habit.
 - **On GitHub, text from strangers.** A public repo lets anyone comment, and a
   PR description or a review is input to the session like a mention is.

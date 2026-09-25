@@ -61,7 +61,7 @@ skills to my other machine", "change the timezone", "run prune".
     groups that look like one human, matched by name across every alias with no
     model call. Merging moves the edges onto the node you keep, pins the other
     spelling as an alias, and leaves the duplicate pointing at its replacement,
-    so an old capture that said "Isa" still resolves. The engine picks the most
+    so an old capture that said "Mari" still resolves. The engine picks the most
     connected node as canonical; a radio overrules it.
   - **Settings.** Your name (who `--mine` means), timezone, default realm, read
     backend, map and dashboard refresh intervals, and three switches: mirror

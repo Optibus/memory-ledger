@@ -21,7 +21,7 @@ describe("Dashboard", () => {
     renderApp(<DashboardSection />, { route: "/dashboard" });
     await screen.findByText(/Ship the new UI/);
     expect(screen.getByText("⏱ 2026-09-20")).toBeInTheDocument();
-    expect(screen.getByText("👤 gabriel")).toBeInTheDocument();
+    expect(screen.getByText("👤 alex")).toBeInTheDocument();
     expect(screen.getByText("🔒 blocked ×1")).toBeInTheDocument();
     expect(screen.getByText("📅 not set")).toBeInTheDocument();
   });
@@ -78,7 +78,7 @@ describe("Dashboard", () => {
     await user.click(await screen.findByRole("button", { name: /Ship the new UI/ }));
     expect(await screen.findByText(/The whole viz, as a real app/)).toBeInTheDocument();
     expect(screen.getByText(/Related \(2\)/)).toBeInTheDocument();
-    expect(screen.getByText(/← relates-to: Gabriel/)).toBeInTheDocument();
+    expect(screen.getByText(/← relates-to: Alex/)).toBeInTheDocument();
   });
 
   it("completes a task through the archive endpoint, never a delete", async () => {
@@ -150,12 +150,12 @@ describe("Dashboard", () => {
   it("removes a relation using its real direction, not the one it is rendered from", async () => {
     const { user } = renderApp(<DashboardSection />, { route: "/dashboard" });
     await user.click(await screen.findByRole("button", { name: /Ship the new UI/ }));
-    // The Gabriel edge renders as incoming, so unlink has to send Gabriel as src.
-    await user.click(await screen.findByRole("button", { name: /remove relates-to link to Gabriel/ }));
+    // The Alex edge renders as incoming, so unlink has to send Alex as src.
+    await user.click(await screen.findByRole("button", { name: /remove relates-to link to Alex/ }));
     await waitFor(() =>
       expect(writes).toContainEqual({
         path: "/api/unlink",
-        body: { src: "person_gabriel", dst: "task_ship-ui_a1", rel: "relates-to" },
+        body: { src: "person_alex", dst: "task_ship-ui_a1", rel: "relates-to" },
       }),
     );
   });
