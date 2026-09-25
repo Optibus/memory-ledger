@@ -984,3 +984,23 @@ export interface TaskActivity {
   updated: string;
   timeline: ActivityEvent[];
 }
+
+/** One stored `usage-week` node, slim — what the Usage section's picker needs. */
+export interface UsageWeek {
+  week: string;
+  from: string;
+  to: string;
+  costUSD: number;
+  sessions: number;
+}
+
+/** `/api/usage-report`: the report, rendered by the server with no model call. */
+export interface UsageReportPayload {
+  ok: boolean;
+  /** Every stored week, oldest first. */
+  weeks: UsageWeek[];
+  /** The weeks the page covers. Empty when there is nothing to draw. */
+  selected: string[];
+  /** One self-contained HTML document. */
+  html: string;
+}

@@ -38,6 +38,16 @@ describe("the app shell", () => {
     expect(await screen.findByRole("heading", { name: "People" })).toBeInTheDocument();
   });
 
+  it("reaches the Usage report through the drawer, and it owns the viewport", async () => {
+    const { user } = renderApp(<App />, { route: "/map", withMeta: false });
+    await screen.findByText(/nodes · 3 edges/);
+    await user.click(screen.getByRole("button", { name: "sections" }));
+    await user.click(screen.getByRole("link", { name: /Usage/ }));
+    expect(await screen.findByRole("heading", { name: "Usage" })).toBeInTheDocument();
+    expect(await screen.findByTitle("usage report")).toBeInTheDocument();
+    await waitFor(() => expect(document.body.dataset.section).toBe("usage"));
+  });
+
   it("opens the server's API docs inside the app, framed", async () => {
     const { user } = renderApp(<App />, { route: "/map", withMeta: false });
     await screen.findByText(/nodes · 3 edges/);

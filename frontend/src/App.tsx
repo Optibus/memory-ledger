@@ -10,6 +10,7 @@ import { PeopleSection } from "@/features/people/PeopleSection";
 import { CreateLauncher } from "@/features/create/CreateLauncher";
 import { ApiDocsSection } from "@/features/apidocs/ApiDocsSection";
 import { TasksSection } from "@/features/tasks/TasksSection";
+import { UsageSection } from "@/features/usage/UsageSection";
 
 /**
  * Five sections behind one drawer, each owning the whole viewport.
@@ -34,6 +35,7 @@ export function App() {
             <Route path="/dashboard" element={<DashboardSection />} />
             <Route path="/people" element={<PeopleSection />} />
             <Route path="/tasks" element={<TasksSection />} />
+            <Route path="/usage" element={<UsageSection />} />
             {/* The tab was "Skills" before it held rules, processes and scripts too. */}
             <Route path="/skills" element={<Navigate to="/capabilities" replace />} />
             <Route

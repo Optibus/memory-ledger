@@ -44,7 +44,7 @@ GET_ROUTES = [
     "/api/person-duplicates", "/api/kinds", "/api/skills", "/api/bundle",
     "/api/rule", "/api/settings", "/api/timezones", "/api/status", "/api/meta",
     "/api/suggest-links", "/api/search", "/api/trigger", "/api/trigger-request",
-    "/api/scripts", "/api/script", "/api/tasks", "/api/task",
+    "/api/scripts", "/api/script", "/api/tasks", "/api/task", "/api/usage-report",
 ]
 POST_ROUTES = [
     "/api/set-due", "/api/add-task", "/api/complete", "/api/set-status",
@@ -907,6 +907,37 @@ def test_trigger_routes(s: Server):
                                                400, "scope must look like"))
 
 
+# ============================================================ usage report
+def test_usage_report(s: Server):
+    print("\n== the usage report is rendered from usage-week nodes, no model ==")
+    r = s.get("/api/usage-report").json()
+    ck("with no weeks it is an empty state, not an error",
+       r.get("ok") is True and r["weeks"] == [] and r["selected"] == []
+       and "No usage weeks in the brain" in r["html"])
+    metrics = {"costUSD": 12.5, "sessions": 3, "turns": 100, "typedPrompts": 4, "activeDays": 2,
+               "byModel": {"claude-opus-5": 12.5}, "composition": {"cacheRead": 8.0, "output": 4.5},
+               "rateLimits": []}
+    for tag, frm, to in (("2026-W01", "2025-12-29", "2026-01-04"),
+                         ("2026-W02", "2026-01-05", "2026-01-11")):
+        made = s.cli("add-node", "--type", "usage-week", "--id", f"usage-week_{tag}",
+                     "--title", f"Usage {tag}", "--props",
+                     json.dumps({"week": tag, "from": frm, "to": to, "metrics": metrics}))
+        ck(f"a {tag} node is stored", made.get("ok") is True, str(made)[:160])
+    r = s.get("/api/usage-report").json()
+    ck("it lists every stored week and renders them all",
+       [w["week"] for w in r["weeks"]] == ["2026-W01", "2026-W02"]
+       and r["selected"] == ["2026-W01", "2026-W02"] and "$25.00" in r["html"])
+    again = s.get("/api/usage-report").json()
+    ck("the same weeks give the same bytes", again["html"] == r["html"])
+    one = s.get("/api/usage-report", weeks=1).json()
+    ck("weeks=N keeps the newest N", one["selected"] == ["2026-W02"] and "$12.50" in one["html"])
+    rng = s.get("/api/usage-report", **{"from": "2026-W01", "to": "2026-W01"}).json()
+    ck("from/to is an inclusive range", rng["selected"] == ["2026-W01"])
+    bad = s.get("/api/usage-report", **{"from": "last week"}).json()
+    ck("a malformed week tag is refused with the reason",
+       bad.get("ok") is False and "ISO week" in bad.get("error", ""))
+
+
 # ========================================================== read-only mode
 def test_read_only():
     print("\n== --no-write refuses every write, and says so ==")
@@ -942,6 +973,7 @@ def main():
         test_contract_writes(s)
         test_scripts(s)
         test_trigger_routes(s)
+        test_usage_report(s)
     finally:
         s.stop()
     test_read_only()

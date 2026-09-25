@@ -18,6 +18,7 @@ import {
   triggerFixture,
   tasksFixture,
   taskDetailFixture,
+  usageReportFixture,
 } from "./fixtures";
 
 /** Every write the tests observed, so a test can assert what was actually sent. */
@@ -80,6 +81,10 @@ export const handlers = [
   http.get("/api/trigger", () => HttpResponse.json(triggerFixture)),
   http.get("/api/tasks", () => HttpResponse.json(tasksFixture)),
   http.get("/api/task", () => HttpResponse.json(taskDetailFixture)),
+  http.get("/api/usage-report", ({ request }) => {
+    const q = new URL(request.url).searchParams;
+    return HttpResponse.json(usageReportFixture(q.get("from") || "", q.get("to") || ""));
+  }),
   http.get("/api/timezones", () => ok({ zones: ["UTC", "America/Sao_Paulo", "Europe/Lisbon"] })),
   http.get("/api/capture", () => HttpResponse.json(captureFixture)),
   http.get("/api/doctor", () => HttpResponse.json(doctorFixture)),

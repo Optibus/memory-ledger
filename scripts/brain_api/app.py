@@ -30,6 +30,8 @@ TAGS = [
     {"name": "vocabulary", "description": "The open and closed sets a client must read "
                                           "rather than hard-code."},
     {"name": "settings", "description": "Preferences, store health, and upkeep."},
+    {"name": "usage", "description": "The usage report over the `usage-week` nodes, "
+                                     "rendered as one HTML page with no model call."},
     {"name": "trigger", "description": "Slack, Jira and GitHub events that summon the brain: "
                                        "the request log, its actions, and the "
                                        "per-conversation gate (docs/trigger.md)."},
