@@ -147,6 +147,9 @@ export const api = {
     get<import("./types").TasksPayload>("/api/tasks", { limit: 500 }, signal),
   task: (id: string, signal?: AbortSignal) =>
     get<import("./types").TaskDetail>("/api/task", { id }, signal),
+  /** The usage report over a range of ISO weeks ("" leaves a bound open). */
+  usageReport: (range: { from?: string; to?: string; weeks?: number }, signal?: AbortSignal) =>
+    get<import("./types").UsageReportPayload>("/api/usage-report", range, signal),
   trigger: (signal?: AbortSignal) =>
     get<import("./types").TriggerStatus>("/api/trigger", { limit: 5 }, signal),
   capture: (signal?: AbortSignal) =>

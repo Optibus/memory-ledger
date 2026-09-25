@@ -66,6 +66,9 @@ NODE_TYPES = [
     # triggers (docs/trigger.md): one per Slack/Jira mention that summoned the
     # brain, so "who asked for that?" is a recall, not an archaeology dig.
     "request",
+    # usage (scripts/usage_report.py): one ISO week of Claude Code usage metrics,
+    # written by the person's own ingest and drawn by the Usage section.
+    "usage-week",
 ]
 
 # Default character budget for read paths that would otherwise return whole

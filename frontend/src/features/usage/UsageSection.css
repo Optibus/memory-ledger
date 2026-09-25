@@ -1,0 +1,20 @@
+/* Owns the viewport like API docs does (see global.css): the report scrolls
+   inside its frame, so the page around it must not scroll too. */
+.ml-usage {
+  position: fixed; inset: 0; display: flex; flex-direction: column;
+}
+/* Left padding clears the fixed menu button. */
+.ml-usage__bar {
+  display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap;
+  min-height: 66px; padding: var(--space-2) var(--space-5) var(--space-2) 64px;
+  border-bottom: 1px solid var(--border);
+}
+.ml-usage__title { margin: 0; font-size: 18px; }
+.ml-usage__range {
+  display: flex; align-items: center; gap: var(--space-2); color: var(--muted);
+}
+.ml-usage__range .ml-input { width: auto; }
+.ml-usage__actions { margin-left: auto; display: flex; gap: var(--space-2); }
+.ml-usage__msg { padding: var(--space-4) var(--space-5) 0 64px; }
+/* The report paints its own ground, light or dark with the system. */
+.ml-usage__frame { flex: 1; width: 100%; border: 0; background: transparent; }

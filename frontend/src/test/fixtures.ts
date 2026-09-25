@@ -694,3 +694,23 @@ export const taskDetailFixture: import("@/api/types").TaskDetail = {
     ],
   },
 };
+
+/** `/api/usage-report`, as scripts/usage_report.py answers it. The html is a
+ *  stand-in: the real page is pinned by tests/test_usage_report.py. */
+export const usageWeeksFixture: import("@/api/types").UsageWeek[] = [
+  { week: "2026-W01", from: "2025-12-29", to: "2026-01-04", costUSD: 100, sessions: 10 },
+  { week: "2026-W02", from: "2026-01-05", to: "2026-01-11", costUSD: 300, sessions: 20 },
+  { week: "2026-W03", from: "2026-01-12", to: "2026-01-18", costUSD: 200, sessions: 10 },
+];
+
+export function usageReportFixture(from = "", to = ""): import("@/api/types").UsageReportPayload {
+  const selected = usageWeeksFixture
+    .map((w) => w.week)
+    .filter((w) => (!from || w >= from) && (!to || w <= to));
+  return {
+    ok: true,
+    weeks: usageWeeksFixture,
+    selected,
+    html: `<!doctype html><html><body><h1>Where the Quota Went</h1><p>${selected.join(",")}</p></body></html>`,
+  };
+}

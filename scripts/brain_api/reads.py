@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse
 import brain_query
 import graph
 import trigger
+import usage_report
 
 from . import commands, payloads, state, trigger_runtime
 
@@ -223,6 +224,25 @@ def tasks(limit: int = Query(200, ge=1, le=trigger.TASKS_MAX)):
                         f"{trigger.TRANSCRIPT_FIELD_MAX} characters (`truncated`, `of`).")
 def task(id: str = Query("", description="The request id (UUID).")):
     return trigger.task_detail(id)
+
+
+@router.get("/usage-report", tags=["usage"],
+            summary="The usage report, rendered: one self-contained HTML page",
+            description="Drawn from the brain's `usage-week` nodes (one per ISO week) by "
+                        "`scripts/usage_report.py`, with no model call: the same weeks give "
+                        "the same page, byte for byte. `weeks` lists every stored week for "
+                        "a picker, `selected` the ones in the page. With no week stored the "
+                        "page is an empty state, not an error. A malformed week tag is "
+                        "`ok: false`.")
+def usage_report_page(
+        weeks: Optional[int] = Query(None, ge=1, le=520,
+                                     description="Only the newest N weeks (after from/to)."),
+        from_: str = Query("", alias="from", description="First ISO week, inclusive (YYYY-Www)."),
+        to: str = Query("", description="Last ISO week, inclusive (YYYY-Www).")):
+    try:
+        return usage_report.report(graph.db_path(), weeks, from_ or None, to or None)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
 
 
 @router.get("/meta", tags=["vocabulary"], summary="The vocabulary, so no client hard-codes it",
