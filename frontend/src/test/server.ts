@@ -132,6 +132,14 @@ export const handlers = [
   write("/api/assign"),
   write("/api/link"),
   write("/api/unlink"),
+  write("/api/propose-idea", (body: { title?: string; detail?: string; realm?: string }) =>
+    ok({
+      node: {
+        id: "idea_new_0001", type: "idea", title: body.title, body: body.detail ?? "",
+        status: "proposed", realm: body.realm || "optibus",
+      },
+    }),
+  ),
   write("/api/settings"),
   write("/api/neo4j-config"),
   write("/api/neo4j-test"),

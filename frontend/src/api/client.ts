@@ -8,6 +8,7 @@
 import type {
   Envelope,
   ExportBundleResult,
+  GraphNode,
   GraphPayload,
   ImportBundleResult,
   ImportChoice,
@@ -179,6 +180,8 @@ export const api = {
   updateNode: (body: Record<string, unknown>) => post("/api/update-node", body),
   link: (src: string, dst: string, rel: string) => post("/api/link", { src, dst, rel }),
   unlink: (src: string, dst: string, rel: string) => post("/api/unlink", { src, dst, rel }),
+  proposeIdea: (body: { title: string; detail?: string; realm?: string }) =>
+    post<{ ok: boolean; node: GraphNode }>("/api/propose-idea", body),
   assign: (body: Record<string, unknown>) => post("/api/assign", body),
   /** Named, not a loose record: the server reads `canonical` and `duplicate`,
    *  and an object literal is exactly the kind of thing that drifts silently. */

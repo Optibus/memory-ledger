@@ -456,6 +456,7 @@ guarantee as the read layer.
 | Set a due date | `POST /api/set-due` | The date chip ("📅 not set" when empty) opens a picker. |
 | Create a relation | `POST /api/link` | Search for the other end, pick the relation, done. |
 | Remove a relation | `POST /api/unlink` | The `×` on any row under **Related**. |
+| Record an idea | `POST /api/propose-idea` | `{title, detail, realm}` — the map's **+ idea**. Same write as `idea-propose` (§2k): `idea` node, `proposed`, first transition logged. |
 | Read the vocabulary | `GET /api/meta` | Relations + statuses + `writable`; the UI never hardcodes them. |
 | Read the API itself | `GET /api/docs` | Swagger UI over `GET /api/openapi.json`, generated from the routes by the running process so it cannot describe a different server. Linked from the drawer, above Settings: the row opens it framed inside the app (`#/api-docs`), so reading the API never leaves the brain, and the ↗ arrow beside it opens the server's page in its own tab. |
 | Find a node to link | `GET /api/search?q=` | Title substring, for the relation picker. |

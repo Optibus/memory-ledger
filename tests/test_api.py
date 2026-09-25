@@ -49,7 +49,7 @@ GET_ROUTES = [
 POST_ROUTES = [
     "/api/set-due", "/api/add-task", "/api/complete", "/api/set-status",
     "/api/set-assignee", "/api/assign", "/api/merge-person", "/api/add-alias",
-    "/api/update-node", "/api/link", "/api/unlink", "/api/settings",
+    "/api/update-node", "/api/link", "/api/unlink", "/api/propose-idea", "/api/settings",
     "/api/neo4j-config", "/api/neo4j-test", "/api/flush", "/api/prune",
     "/api/capture", "/api/consolidate", "/api/ui-prefs", "/api/backup",
     "/api/create-rule", "/api/create-skill", "/api/create-process",
@@ -518,6 +518,28 @@ def test_task_writes(s: Server):
     ck("complete", r.status == 200 and r.json().get("ok"), r.raw[:120])
 
 
+def test_idea_writes(s: Server):
+    print("\n== the idea write ==")
+    ck("propose-idea needs a title",
+       refused(s.post("/api/propose-idea", {"detail": "d"}), 400, "missing title"))
+    ck("and a realm that is a slug", refused(
+        s.post("/api/propose-idea", {"title": "x", "realm": "Not A Slug"}), 400,
+        "realm must be lowercase"))
+    r = s.post("/api/propose-idea", {"title": "Cache the layout", "detail": "Why: speed."})
+    j = r.json()
+    ck("propose-idea writes the node", r.status == 200 and j.get("ok"), r.raw[:120])
+    node = j["node"]
+    ck("an idea, proposed, with its detail", node["type"] == "idea"
+       and node["status"] == "proposed" and node["body"] == "Why: speed.", str(node)[:160])
+    ck("in the configured realm by default",
+       node["realm"] == s.get("/api/skills").json()["realm"], node["realm"])
+    hist = s.cli("idea-history", "--id", node["id"])
+    ck("its first transition is logged",
+       [h.get("to") for h in hist.get("history", [])] == ["proposed"], str(hist)[:200])
+    r = s.post("/api/propose-idea", {"title": "Work idea", "realm": "work"})
+    ck("an explicit realm is kept", r.json()["node"]["realm"] == "work", r.raw[:120])
+
+
 def test_people_writes(s: Server):
     print("\n== the people writes ==")
     a = s.cli("add-node", "--type", "person", "--title", "Alan Turing")["node"]["id"]
@@ -563,6 +585,9 @@ def test_settings_writes(s: Server):
        and j["effective"]["ui_sync"] is True, str(j.get("effective"))[:200])
     ck("a realm set here applies to the next write, not the next restart",
        s.post("/api/add-task", {"title": "realm probe"}).json()["node"]["realm"] == "personal")
+    ck("and to an idea proposed from the map",
+       s.post("/api/propose-idea", {"title": "realm probe"}).json()["node"]["realm"]
+       == "personal")
 
     ck("the ui prefs are stored", s.post("/api/ui-prefs", {"prefs": {"tab": "map"}})
        .json().get("synced") is True)
@@ -968,6 +993,7 @@ def main():
         test_static(s)
         test_reads(s)
         test_task_writes(s)
+        test_idea_writes(s)
         test_people_writes(s)
         test_settings_writes(s)
         test_contract_writes(s)

@@ -271,6 +271,22 @@ def unlink(data: m.Edge = body(m.Edge)):
     return reply(err or graph.api_unlink(graph.connect(), *args))
 
 
+# ------------------------------------------------------------------ ideas
+@router.post("/propose-idea", tags=["graph"], summary="Record an alternative as an idea",
+             description="An `idea` node, `proposed`, with its first transition logged "
+                         "— the same write `graph.py idea-propose` makes (CONVENTIONS "
+                         "§2k). `realm` defaults to the configured one.")
+def propose_idea(data: m.ProposeIdea = body(m.ProposeIdea)):
+    realm, err = _realm_or_error(data.realm)
+    if err:
+        return reply(err)
+    # read the realm NOW: the engine's own fallback is the one it imported with,
+    # and the Settings page can change it under a long-lived server
+    return reply(graph.api_idea_propose(graph.connect(), clip(data.title, 300),
+                                        detail=clip(data.detail, 20000),
+                                        realm=realm or graph.current_realm()))
+
+
 # ------------------------------------------------ settings + maintenance
 @router.post("/settings", tags=["settings"], summary="Save preferences",
              description="Writes `<home>/settings.json`. Only these keys, each "

@@ -80,11 +80,85 @@ describe("Map", () => {
   });
 });
 
+describe("adding an idea from the map", () => {
+  const open = async () => {
+    const view = renderApp(<MapSection />);
+    await screen.findByText("4/4 nodes · 3 edges");
+    await view.user.click(await screen.findByRole("button", { name: "+ idea" }));
+    await screen.findByRole("heading", { name: "New idea" });
+    return view.user;
+  };
+
+  it("will not save an idea with no title", async () => {
+    await open();
+    expect(screen.getByRole("button", { name: "Save idea" })).toBeDisabled();
+  });
+
+  it("offers the brain's realms, the current one first", async () => {
+    await open();
+    const realm = (await screen.findByLabelText(/realm/i)) as HTMLSelectElement;
+    expect(realm.value).toBe(metaFixture.default_realm);
+    expect([...realm.options].map((o) => o.value)[0]).toBe(metaFixture.default_realm);
+  });
+
+  it("writes the idea, then selects it once the map has read it back", async () => {
+    let written = false;
+    server.use(
+      http.get("/api/graph", () =>
+        HttpResponse.json(
+          written
+            ? {
+                ...graphFixture,
+                nodes: [
+                  ...graphFixture.nodes,
+                  { id: "idea_new_0001", title: "Cache the layout", type: "idea", realm: "personal",
+                    status: "proposed", degree: 0, kind: "(none)" },
+                ],
+              }
+            : graphFixture,
+        ),
+      ),
+      http.post("/api/propose-idea", async ({ request }) => {
+        writes.push({ path: "/api/propose-idea", body: await request.json() });
+        written = true;
+        return HttpResponse.json({ ok: true, node: { id: "idea_new_0001", type: "idea" } });
+      }),
+    );
+    const user = await open();
+    await user.type(screen.getByLabelText(/^Title/), "Cache the layout");
+    await user.type(screen.getByLabelText(/^Detail/), "Why: speed.");
+    await user.selectOptions(screen.getByLabelText(/realm/i), "personal");
+    await user.click(screen.getByRole("button", { name: "Save idea" }));
+    await waitFor(() =>
+      expect(writes.find((w) => w.path === "/api/propose-idea")?.body).toEqual({
+        title: "Cache the layout",
+        detail: "Why: speed.",
+        realm: "personal",
+      }),
+    );
+    expect(await screen.findByRole("heading", { name: "Cache the layout" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "New idea" })).not.toBeInTheDocument();
+    expect(await screen.findByText("5/5 nodes · 3 edges")).toBeInTheDocument();
+  });
+
+  it("keeps the dialog open and says why when the server refuses", async () => {
+    failWith("post", "/api/propose-idea", 400, "realm must be lowercase letters, digits and dashes");
+    const user = await open();
+    await user.type(screen.getByLabelText(/^Title/), "Cache the layout");
+    await user.click(screen.getByRole("button", { name: "Save idea" }));
+    expect(
+      await screen.findByText("realm must be lowercase letters, digits and dashes"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "New idea" })).toBeInTheDocument();
+  });
+});
+
 describe("Map, read-only server", () => {
   it("names the reason editing is gone", async () => {
     server.use(http.get("/api/meta", () => HttpResponse.json({ ...metaFixture, writable: false })));
     renderApp(<MapSection />);
     await screen.findByText("4/4 nodes · 3 edges");
+    expect(screen.queryByRole("button", { name: "+ idea" })).not.toBeInTheDocument();
     // Nothing on the map writes without a selection, so the check is that the
     // toolbar still renders and no write was attempted while read-only.
     expect(writes).toHaveLength(0);

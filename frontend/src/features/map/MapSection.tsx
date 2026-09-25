@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useBootReload } from "@/api/MetaContext";
+import { useBootReload, useMeta } from "@/api/MetaContext";
 import { useIntervals } from "@/hooks/useIntervals";
 import { usePref } from "@/hooks/usePrefs";
 import { Panel, StatusMessage } from "@/components";
@@ -14,6 +14,7 @@ import {
 } from "@/lib/graphFilter";
 import type { FilterState, StoredFilter } from "@/lib/graphFilter";
 import { GraphCanvas } from "./GraphCanvas";
+import { IdeaDialog } from "./IdeaDialog";
 import { MapToolbar } from "./MapToolbar";
 import { NodeCard } from "./NodeCard";
 import { useGraphData } from "./useGraphData";
@@ -45,6 +46,18 @@ export function MapSection() {
   const { mapPollMs } = useIntervals();
   const graph = useGraphData(mapPollMs, true);
   useBootReload(graph.meta.boot);
+
+  const { writable } = useMeta();
+  const [addingIdea, setAddingIdea] = useState(false);
+  // A new idea is selected once a read carries it, not when the write answers:
+  // the canvas can only centre on a node that already has a body.
+  const [pendingFocus, setPendingFocus] = useState<string | null>(null);
+  useEffect(() => {
+    if (!pendingFocus || !graph.byId.has(pendingFocus)) return;
+    setSelected(pendingFocus);
+    setFocusId(pendingFocus);
+    setPendingFocus(null);
+  }, [pendingFocus, graph.byId]);
 
   const cascadeOff = useMemo(
     () => computeCascade(graph.nodes, graph.edges, filter),
@@ -115,7 +128,18 @@ export function MapSection() {
         cascadeCount={cascadeOff.size}
         stats={stats}
         live={graph.live}
+        onAddIdea={writable ? () => setAddingIdea(true) : undefined}
       />
+      {addingIdea ? (
+        <IdeaDialog
+          onCancel={() => setAddingIdea(false)}
+          onCreated={(id) => {
+            setAddingIdea(false);
+            setPendingFocus(id);
+            graph.refresh();
+          }}
+        />
+      ) : null}
       {selectedNode ? (
         <NodeCard
           node={selectedNode}
