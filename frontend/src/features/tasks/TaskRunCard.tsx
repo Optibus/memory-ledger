@@ -51,8 +51,15 @@ export function TaskRunCard({ task, open, onToggle, now }: TaskRunCardProps) {
           </span>
           <span className="ml-run__meta">
             {took ? <span title="duration">{active ? `running ${took}` : took}</span> : null}
-            {task.cost_usd != null ? <span title="cost">${task.cost_usd.toFixed(2)}</span> : null}
-            <span title={formatDate(task.received_at)}>{ago(task.received_at, now)}</span>
+            {task.cost_usd != null ? (
+              <span title={task.cost_estimated ? "estimated cost, from the session's token usage at list price" : "cost"}>
+                {task.cost_estimated ? "~" : ""}${task.cost_usd.toFixed(2)}
+              </span>
+            ) : null}
+            <span className="ml-run__when">
+              <time dateTime={task.received_at}>{formatDate(task.received_at)}</time>
+              <span className="ml-run__dim"> · {ago(task.received_at, now)}</span>
+            </span>
             <span className="ml-run__chevron" aria-hidden="true">{open ? "▾" : "▸"}</span>
           </span>
         </span>

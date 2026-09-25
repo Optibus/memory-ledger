@@ -874,6 +874,8 @@ export interface TriggerTask {
   finished_at: string;
   exit_code: number | null;
   cost_usd: number | null;
+  /** cost_usd was worked out from the transcript: the run died before claude reported it. */
+  cost_estimated?: boolean;
   session_id: string;
   cwd: string;
   /** What fired it: a command, a title, or the event kind. */

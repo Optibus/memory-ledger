@@ -649,6 +649,8 @@ export const tasksFixture: import("@/api/types").TasksPayload = {
       text: "triage ABC-1",
       received_at: "2026-09-24T10:00:00+00:00",
       result: "it broke",
+      cost_usd: 1.234,
+      cost_estimated: true,
     },
   ],
 };

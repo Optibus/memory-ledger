@@ -24,6 +24,15 @@ describe("Tasks", () => {
     expect(screen.getByText("Bash")).toBeInTheDocument();
   });
 
+  it("shows when each task came in, and a failed run's estimated cost, while folded", async () => {
+    renderApp(<TasksSection />, { route: "/tasks", withMeta: false });
+    const list = await screen.findByRole("list", { name: "tasks" });
+    const failed = (await within(list).findAllByRole("listitem"))[2];
+    expect(failed.querySelector("time")).toHaveAttribute("dateTime", "2026-09-24T10:00:00+00:00");
+    expect(failed.querySelector("time")?.textContent).toMatch(/Sep 24/);
+    expect(within(failed).getByText("~$1.23")).toHaveAttribute("title", expect.stringMatching(/estimated/));
+  });
+
   it("searches the message, the name and who asked", async () => {
     const { user } = renderApp(<TasksSection />, { route: "/tasks", withMeta: false });
     const list = await screen.findByRole("list", { name: "tasks" });

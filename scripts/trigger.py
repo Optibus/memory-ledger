@@ -498,7 +498,10 @@ def now_iso() -> str:
 # Columns added after the table first shipped: CREATE TABLE IF NOT EXISTS
 # leaves an existing table alone, so they are added in place.
 LATE_COLUMNS = {"session_id": "TEXT NOT NULL DEFAULT ''", "command": "TEXT NOT NULL DEFAULT ''",
-                "cwd": "TEXT NOT NULL DEFAULT ''", "stderr": "TEXT NOT NULL DEFAULT ''"}
+                "cwd": "TEXT NOT NULL DEFAULT ''", "stderr": "TEXT NOT NULL DEFAULT ''",
+                # 1 when cost_usd was worked out from the transcript, not reported
+                # by claude; -1 when that was tried and there was nothing to read
+                "cost_estimated": "INTEGER NOT NULL DEFAULT 0"}
 
 
 def db():
@@ -815,6 +818,63 @@ def transcript_path(req: dict) -> Path | None:
     return None
 
 
+# List price, $ per million tokens: (input, output, cache read). A cache write
+# is 1.25x input for the 5-minute cache and 2x for the 1-hour one. Matched by
+# prefix, longest first; a model not listed is priced as Opus.
+MODEL_PRICES = {
+    "claude-fable-5": (10.0, 50.0, 0.25), "claude-mythos-5": (10.0, 50.0, 1.0),
+    "claude-opus-5-5": (4.0, 20.0, 0.20), "claude-opus-5": (5.0, 25.0, 0.5),
+    "claude-opus-4": (5.0, 25.0, 0.5), "claude-sonnet-5": (2.0, 10.0, 0.2),
+    "claude-sonnet-4": (3.0, 15.0, 0.3), "claude-haiku-4": (1.0, 5.0, 0.1),
+}
+
+
+def _price(model: str) -> tuple:
+    for k in sorted(MODEL_PRICES, key=len, reverse=True):
+        if model.startswith(k):
+            return MODEL_PRICES[k]
+    return MODEL_PRICES["claude-opus-5"]
+
+
+def estimate_cost(path: Path | None) -> float | None:
+    """What a session cost at list price, from the token usage in its
+    transcript and its subagents'. For a run that died before claude printed
+    its own total: a timeout or a crash. None when there is nothing to read."""
+    if not path or not path.is_file():
+        return None
+    files = [path, *sorted(path.with_suffix("").glob("subagents/*.jsonl"))]
+    usage: dict = {}
+    for f in files:
+        try:
+            lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            msg = d.get("message") if d.get("type") == "assistant" else None
+            if isinstance(msg, dict) and isinstance(msg.get("usage"), dict):
+                # One API message is written once per content block: count it once.
+                usage[(f.name, msg.get("id") or len(usage))] = (str(msg.get("model") or ""),
+                                                                msg["usage"])
+    if not usage:
+        return None
+    total = 0.0
+    for model, u in usage.values():
+        if model.startswith("<"):               # <synthetic>: no API call
+            continue
+        inp, out, read = _price(model)
+        cc = u.get("cache_creation") or {}
+        w1h = cc.get("ephemeral_1h_input_tokens") or 0
+        w5m = cc.get("ephemeral_5m_input_tokens") if cc else u.get("cache_creation_input_tokens")
+        total += ((u.get("input_tokens") or 0) * inp + (u.get("output_tokens") or 0) * out
+                  + (u.get("cache_read_input_tokens") or 0) * read
+                  + (w5m or 0) * inp * 1.25 + w1h * inp * 2) / 1e6
+    return round(total, 6)
+
+
 def _clip(text, n: int = TRANSCRIPT_FIELD_MAX) -> str:
     text = text if isinstance(text, str) else json.dumps(text, ensure_ascii=False, indent=1)
     return text if len(text) <= n else text[:n] + f"\n… ({len(text) - n} more chars)"
@@ -986,6 +1046,7 @@ def _task_row(req: dict, full: bool = False) -> dict:
         "id", "source", "scope", "event_id", "requester_id", "requester_name", "is_owner",
         "permalink", "status", "reason", "node_id", "received_at", "started_at",
         "finished_at", "exit_code", "cost_usd", "session_id", "cwd")}
+    row["cost_estimated"] = req.get("cost_estimated") == 1
     row.update(name=_task_name(req), kind=str(meta.get("kind") or "mention"),
                action=str((meta.get("action") or {}).get("type") or "claude"),
                text=req.get("text", "") if full else req.get("text", "")[:600],
@@ -1008,6 +1069,8 @@ def tasks_payload(limit: int = 200) -> dict:
         "SELECT request_id, count(*) AS n FROM trigger_action GROUP BY request_id")}
     tasks = []
     for req in rows:
+        if _needs_estimate(req):
+            req = _backfill_cost(con, req)
         t = _task_row(req)
         t["actions"] = n_actions.get(req["id"], 0)
         if req["status"] == "running":
@@ -1015,6 +1078,24 @@ def tasks_payload(limit: int = 200) -> dict:
         tasks.append(t)
     return {"ok": True, "tasks": tasks, "counts": counts, "total": sum(counts.values()),
             "limit": limit, "truncated": sum(counts.values()) > len(tasks), "now": now_iso()}
+
+
+def _needs_estimate(req: dict) -> bool:
+    return (req.get("cost_usd") is None and not req.get("cost_estimated")
+            and req["status"] in ("failed", "timeout")
+            and bool(req.get("session_id"))
+            and ((req.get("meta") or {}).get("action") or {}).get("type") in (None, "", "claude"))
+
+
+def _backfill_cost(con, req: dict) -> dict:
+    """A run that failed before its cost was estimated at the finish: work it
+    out once from the transcript and keep it."""
+    cost = estimate_cost(transcript_path(req))
+    if cost is None:
+        _set_request(con, req["id"], cost_estimated=-1)   # do not look again every poll
+        return req
+    _set_request(con, req["id"], cost_usd=cost, cost_estimated=1)
+    return {**req, "cost_usd": cost, "cost_estimated": 1}
 
 
 def task_detail(request_id: str) -> dict:
@@ -1479,9 +1560,12 @@ def run_request(request_id: str, cfg: dict | None = None) -> dict:
         pr = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
                             env=env, cwd=cwd, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
+        cost = estimate_cost(transcript_path(get_request(con, request_id) or req))
         _set_request(con, request_id, status="timeout", finished_at=now_iso(),
-                     reason=f"killed after {timeout}s")
-        log.warning("task %s timeout  killed after %ss", request_id, timeout)
+                     reason=f"killed after {timeout}s", cost_usd=cost,
+                     cost_estimated=int(cost is not None))
+        log.warning("task %s timeout  killed after %ss%s", request_id, timeout,
+                    f", ~${cost:.2f}" if cost is not None else "")
         return {"ok": False, "request_id": request_id, "status": "timeout"}
     except OSError as e:
         _set_request(con, request_id, status="failed", finished_at=now_iso(),
@@ -1499,16 +1583,19 @@ def run_request(request_id: str, cfg: dict | None = None) -> dict:
         pass
     if is_error and not result:
         result = (pr.stderr or "").strip()
+    estimated = not isinstance(cost, (int, float))
+    if estimated:
+        cost = estimate_cost(transcript_path(get_request(con, request_id) or req))
     status = "failed" if is_error else "done"
     if not is_error and (get_request(con, request_id) or {}).get("status") == "declined":
         status = "declined"            # the session declined it; keep its verdict
     _set_request(con, request_id, status=status, finished_at=now_iso(),
                  exit_code=pr.returncode, result=result[-8000:],
                  stderr=(pr.stderr or "").strip()[-8000:],
-                 cost_usd=cost if isinstance(cost, (int, float)) else None)
+                 cost_usd=cost, cost_estimated=int(estimated and cost is not None))
     (log.warning if is_error else log.info)(
         "task %s %s  in %s, exit %s%s%s", request_id, status, took(), pr.returncode,
-        f", ${cost:.2f}" if isinstance(cost, (int, float)) else "",
+        f", {'~' if estimated else ''}${cost:.2f}" if cost is not None else "",
         f": {_brief(result, 160)}" if is_error else "")
     return {"ok": not is_error, "request_id": request_id, "status": status,
             "exit_code": pr.returncode}

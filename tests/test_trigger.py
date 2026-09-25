@@ -1556,6 +1556,29 @@ def test_tasks(cfg):
            trigger.task_detail(old)["transcript"]["found"]
            and trigger.get_request(con, old)["session_id"] == "legacy-session")
         ck("an unknown task is refused", trigger.task_detail("nope")["ok"] is False)
+
+        # A run killed before claude printed its total: priced from the transcript.
+        u = {"input_tokens": 1000, "output_tokens": 1000, "cache_read_input_tokens": 1_000_000,
+             "cache_creation_input_tokens": 1000,
+             "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 1000}}
+        m = {"type": "assistant", "message": {"id": "msg1", "model": "claude-opus-5", "usage": u}}
+        tp = folder / "priced.jsonl"
+        tp.write_text("\n".join(json.dumps(x) for x in (m, m)) + "\n")   # one message, two blocks
+        (folder / "priced" / "subagents").mkdir(parents=True, exist_ok=True)
+        (folder / "priced" / "subagents" / "agent-1.jsonl").write_text(json.dumps(
+            {"type": "assistant", "message": {"id": "msg2", "model": "claude-haiku-4-5",
+                                              "usage": {"input_tokens": 1_000_000}}}) + "\n")
+        # opus 5: 1k in $0.005 + 1k out $0.025 + 1M read $0.50 + 1k 1h-write $0.01; haiku 1M in $1
+        ck("a session's cost is estimated from its token usage and its subagents', each message once",
+           abs(trigger.estimate_cost(tp) - 1.54) < 1e-9, str(trigger.estimate_cost(tp)))
+        ck("no transcript, no estimate", trigger.estimate_cost(folder / "missing.jsonl") is None)
+        with (folder / f"{req['session_id']}.jsonl").open("a") as f:
+            f.write(json.dumps(m) + "\n")
+        trigger._set_request(con, rid, status="timeout", cost_usd=None, cost_estimated=0)
+        row = next(x for x in trigger.tasks_payload(50)["tasks"] if x["id"] == rid)
+        ck("a timed-out task without a cost gets one estimated, and it is kept",
+           row["cost_estimated"] is True and row["cost_usd"] is not None
+           and trigger.get_request(con, rid)["cost_estimated"] == 1)
     finally:
         os.environ.pop("CLAUDE_CONFIG_DIR", None)
 

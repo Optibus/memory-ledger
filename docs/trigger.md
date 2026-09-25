@@ -567,6 +567,14 @@ python3 scripts/trigger.py show --id <request-id>
 or `GET /api/trigger` and `GET /api/trigger-request?id=` on a running server, or
 `GET /api/tasks` and `GET /api/task?id=` for what the Tasks section shows.
 
+Each task keeps its cost, `cost_usd`, as claude reports it at the end of the
+session. A session killed by the timeout, or one that crashed, never reports
+one, so its cost is estimated from the token usage in its transcript and its
+subagents' transcripts, at the list prices in `MODEL_PRICES` in
+`scripts/trigger.py`, and flagged `cost_estimated`. The Tasks card shows it as
+`~$1.23`. A failed or timed-out task from before the estimate existed gets one
+the first time the Tasks section lists it.
+
 ### The server log
 
 The audit log is the record. The server log is what you watch: one line per
