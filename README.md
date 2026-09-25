@@ -482,6 +482,11 @@ hamburger menu on the left (`m` toggles it):
     writes both the `assignee` prop every query filters on and the `assigned-to`
     edge the map draws.
 
+  The toolbar's **+ idea** records an alternative without leaving the graph: a
+  title, an optional detail and a realm become an `idea` node, `proposed`, through
+  `POST /api/propose-idea` (the same write as `graph.py idea-propose`). The map
+  re-reads at once and opens the new idea's card, centred on it.
+
   All of it is hidden on a `--no-write` server.
 - **Dashboard** — the `brain_query.py` views (agenda / open / today / tomorrow /
   week / closed / range) as cards, over the same store. It is also a **full

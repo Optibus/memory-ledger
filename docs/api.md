@@ -192,6 +192,7 @@ since the dashboard lists tasks and a kind with none would be dead UI.
 | `/api/update-node` | `{id, title?, body?, props?}` | empty `title` is rejected |
 | `/api/link` | `{src, dst, rel}` | |
 | `/api/unlink` | `{src, dst, rel}` | |
+| `/api/propose-idea` | `{title, detail?, realm?}` | an `idea` node, `proposed`, with its first transition logged — the write `graph.py idea-propose` makes (CONVENTIONS §2k). `realm` must be a slug and defaults to the server's current one. The map's **+ idea** button |
 | `/api/settings` | `{tz?, realm?, owner?, backend?, autosync?, consolidate?, ui_sync?, map_poll_seconds?, dash_refresh_seconds?}` | writes `<home>/settings.json`; only these keys, each validated. `""` **removes** a key (back to env/system default). A boolean key takes `true`/`false`; `false` is a value, not an absence |
 | `/api/capture` | `{enabled}` | writes (or removes) `<home>/.disabled` — the same switch `graph.py disable` throws. **Refused** while `$MEMORY_LEDGER_OFF` is set in the server's environment, because that outranks the marker |
 | `/api/add-alias` | `{id, alias}` | pins another spelling onto a person, through the engine's `api_add_alias`. A spelling they already answer to is a no-op |
@@ -399,7 +400,10 @@ Two tabs over one dataset:
   and a double-click on the background resets to the ring layout. Legend chips filter by **node type** and by
   **realm** and **kind**, independently, each with its own `all` reset; clicking a node shows
   its neighbourhood. High-volume types (`channel`, `capture`) are worth hiding to
-  make the rest legible.
+  make the rest legible. On a writable server the toolbar's **+ idea** posts to
+  `/api/propose-idea`, then refreshes and selects the new node once a read of
+  `/api/graph` carries it — not when the write answers, since the canvas can only
+  centre on a node it has placed.
 - **Dashboard** — the date views, with a "Mine · needs action" toggle, one chip
   per assignee, one per realm, one per kind that has open tasks, and `blocked_by` / `blocks` / `related` badges from
   the edges. Cards expand on click (`/api/node`), and the date chip opens a picker

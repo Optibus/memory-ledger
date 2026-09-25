@@ -1,4 +1,4 @@
-import { Dropdown, FacetDropdown, LiveDot, Panel, SearchInput, Checkbox } from "@/components";
+import { Button, Dropdown, FacetDropdown, LiveDot, Panel, SearchInput, Checkbox } from "@/components";
 import type { FacetOption } from "@/components";
 import type { FilterState } from "@/lib/graphFilter";
 import "./MapToolbar.css";
@@ -15,6 +15,8 @@ export interface MapToolbarProps {
   cascadeCount: number;
   stats: string;
   live: boolean;
+  /** Opens the new-idea dialog. Absent on a read-only server, and so is the button. */
+  onAddIdea?: () => void;
 }
 
 /** Search, the three facets, the display toggles, and what the map is showing. */
@@ -29,6 +31,7 @@ export function MapToolbar({
   cascadeCount,
   stats,
   live,
+  onAddIdea,
 }: MapToolbarProps) {
   // A facet holds what is OFF; the menus speak in what is ON, so an option the
   // brain grows tomorrow is visible by default rather than silently filtered.
@@ -95,6 +98,11 @@ export function MapToolbar({
           />
         </Dropdown>
       </div>
+      {onAddIdea ? (
+        <Button size="sm" onClick={onAddIdea} title="record an alternative as an idea node">
+          + idea
+        </Button>
+      ) : null}
       <span className="ml-toolbar__stats">{stats}</span>
       <LiveDot ok={live} label={live ? "live" : "offline"} />
     </Panel>

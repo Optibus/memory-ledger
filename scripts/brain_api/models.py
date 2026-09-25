@@ -79,6 +79,12 @@ class AddTask(Body):
                     "unknown relation is reported under `rejected`, not applied.")
 
 
+class ProposeIdea(Body):
+    title: Text = T("Required.")
+    detail: Text = T("The alternative in full: what it is and why it came up.")
+    realm: Text = T("Lowercase letters, digits, dashes. Default: the configured one.")
+
+
 class Complete(Body):
     id: Text = T("The node id.")
     note: Text = T("Kept on the node as the completion note.")
