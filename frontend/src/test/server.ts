@@ -45,14 +45,17 @@ export const handlers = [
   http.get("/api/views", () =>
     ok({ views: ["agenda", "open", "today", "tomorrow", "week", "closed", "range"] }),
   ),
-  http.get("/api/assignees", () => ok({ assignees: { gabriel: 3, unassigned: 1 } })),
-  http.get("/api/realms", () => ok({ realms: metaFixture.realms, default: "optibus" })),
+  http.get("/api/assignees", () => ok({ assignees: { alex: 3, unassigned: 1 } })),
+  write("/api/rename-realm", (b: { old: string; new: string }) =>
+    ok({ from: b.old, to: b.new, moved: 42, merged_into_existing: b.new === "personal", default: b.new }),
+  ),
+  http.get("/api/realms", () => ok({ realms: metaFixture.realms, default: "work" })),
   http.get("/api/kinds", () => ok({ kinds: metaFixture.kinds, none_token: "(none)" })),
   http.get("/api/people", () =>
     ok({
       people: [
-        { id: "person_gabriel", title: "Gabriel", aliases: ["gabe"], realm: "optibus" },
-        { id: "person_isadora", title: "Isadora", aliases: ["isa"], realm: "optibus" },
+        { id: "person_alex", title: "Alex", aliases: ["gabe"], realm: "work" },
+        { id: "person_maria", title: "Maria", aliases: ["mari"], realm: "work" },
       ],
     }),
   ),
@@ -104,14 +107,14 @@ export const handlers = [
   }),
   http.get("/api/suggest-links", ({ request }) => {
     const text = (new URL(request.url).searchParams.get("text") || "").toLowerCase();
-    const suggestions = text.includes("gabriel")
+    const suggestions = text.includes("alex")
       ? [
           {
-            id: "person_gabriel",
-            title: "Gabriel",
+            id: "person_alex",
+            title: "Alex",
             type: "person",
             rel: "mentions",
-            cue: "gabriel",
+            cue: "alex",
           },
         ]
       : [];
@@ -136,7 +139,7 @@ export const handlers = [
     ok({
       node: {
         id: "idea_new_0001", type: "idea", title: body.title, body: body.detail ?? "",
-        status: "proposed", realm: body.realm || "optibus",
+        status: "proposed", realm: body.realm || "work",
       },
     }),
   ),
@@ -162,7 +165,7 @@ export const handlers = [
   write("/api/create-rule"),
   write("/api/create-skill"),
   write("/api/create-process", () =>
-    ok({ node: { id: "process_new_0001", realm: "optibus" }, action: "created" }),
+    ok({ node: { id: "process_new_0001", realm: "work" }, action: "created" }),
   ),
   write("/api/export-skills", () => ok({ dir: "/home/brain/learned_skills", skills: 2, rules: 1 })),
   write("/api/ingest-skills", () => ok({ count: 2, ingested: [], rules: [] })),

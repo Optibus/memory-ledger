@@ -81,7 +81,7 @@ See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTION
 
 The next commitment, bolded, then the count of what else is in the window.
 
-> Next: **CORD planning, 14:00, 45 min.** Three more things after it today.
+> Next: **Team planning, 14:00, 45 min.** Three more things after it today.
 
 For pure alarms and nudges rather than agenda blocks, hand to `remind`. If Google
 Calendar is unavailable, say so and offer `remind` as the fallback.

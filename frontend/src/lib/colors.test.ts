@@ -30,9 +30,9 @@ describe("hueOf", () => {
 
 describe("realmPalette", () => {
   it("spaces realms evenly rather than hashing them together", () => {
-    const paint = realmPalette(["optibus", "personal"]);
-    expect(paint("optibus")).not.toBe(paint("personal"));
-    const hues = ["optibus", "personal"].map((k) => Number(/hsl\((\d+)/.exec(paint(k))![1]));
+    const paint = realmPalette(["work", "personal"]);
+    expect(paint("work")).not.toBe(paint("personal"));
+    const hues = ["work", "personal"].map((k) => Number(/hsl\((\d+)/.exec(paint(k))![1]));
     expect(Math.abs(hues[0]! - hues[1]!)).toBe(180);
   });
 

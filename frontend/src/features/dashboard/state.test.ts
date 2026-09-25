@@ -18,11 +18,11 @@ describe("toQuery", () => {
   });
 
   it("joins multi-select facets as the comma lists the server expects", () => {
-    const s = { ...initialState(), realms: ["optibus", "shared"], kinds: ["postmortem"], assignees: ["gabriel"] };
+    const s = { ...initialState(), realms: ["work", "shared"], kinds: ["postmortem"], assignees: ["alex"] };
     expect(toQuery(s)).toEqual({
-      realm: "optibus,shared",
+      realm: "work,shared",
       kind: "postmortem",
-      assignee: "gabriel",
+      assignee: "alex",
     });
   });
 

@@ -74,7 +74,7 @@ searchable regardless of language (search is character-based).
 When **writing to someone else** (a Slack DM/message, an email): use **that
 recipient's language**, not English by default — a Slack message may absolutely
 be in the language the person speaks. Read it from their `person` node's
-`props.lang` (e.g. Isadora/Yuri/Ryllari/Vini/Alencar = pt-BR, Ravid = en). If a
+`props.lang` (e.g. `pt-BR` for a colleague who writes in Portuguese, `en`). If a
 recipient's language can't be inferred from context or their node, **ask the
 user which language to use and store it** on that person
 (`update-node --id <person> --props '{"lang":"..."}'`). Tone is always **direct
@@ -348,9 +348,11 @@ Node `type` is a property in the mirror, not a label, so changing a node's type
 needs no label surgery — re-emitting the node through the API is enough.
 
 **Sections (realms):** every node has a `realm` — the section it belongs to:
-`optibus` (work; the default), `shared`, and `personal` (add others as needed).
+`default` out of the box, plus whatever you add (`work`, `personal`, `shared`, …).
 Set with `add-node --realm <section>` or `$SECOND_BRAIN_REALM`; `sections` lists
-the counts.
+the counts. Adding a realm is just writing a node into it; `rename-realm --from
+<old> --to <new>` renames one (merging when `<new>` exists) and follows it in the
+default realm setting.
 
 ## 2e. Areas — one hub per domain
 
@@ -372,8 +374,8 @@ the known areas rather than leaving a node outside every domain.
 
 | Area | Domain | Realm | Holds |
 |---|---|---|---|
-| `hub_process` | process | optibus | Gabriel's ways of working — `process` nodes for standing methods and norms, `decision`s for one-off calls |
-| `hub_quote` | quote | shared | Quotes he keeps, with `attributed_to` / `source_work` in props |
+| `hub_process` | process | default | The owner's ways of working — `process` nodes for standing methods and norms, `decision`s for one-off calls |
+| `hub_quote` | quote | shared | Quotes the owner keeps, with `attributed_to` / `source_work` in props |
 | `hub_health` | health | personal | Symptoms, episodes, energy, appointments — anything affecting capacity |
 
 **Realm and area are orthogonal.** The realm is *which section of life* (work /
@@ -409,7 +411,7 @@ setting in `<home>/settings.json` (§2g) — in that order. The dashboard tab of
 **`--mine` — only what the owner must act on.** Any view takes `--mine` (the
 dashboard's "🙋 Mine · needs action" toggle → `?mine=1`) to keep ONLY the owner's
 live action: **strictly `assignee == owner`** (`$SECOND_BRAIN_OWNER`, default
-`Gabriel`), NOT `unassigned` and NOT someone else's, and never `delegated` or
+`Owner`), NOT `unassigned` and NOT someone else's, and never `delegated` or
 parked `waiting`/`blocked`. Selecting the **`me`** assignee chip applies the same
 strict actionable rule (not "every task tagged me").
 
@@ -424,8 +426,8 @@ bucket rather than being unfilterable. Open vocabulary like realms — read it f
 `/api/kinds` or `brain_query.kinds()`, never hardcode it.
 
 **`--realm <r>[,…]`** — scope any view to one or more sections of life
-(`?realm=optibus,shared` on the dashboard). Omit it for every realm. A node with
-no realm counts as `$SECOND_BRAIN_REALM` (default `optibus`), the same default the
+(`?realm=work,shared` on the dashboard). Omit it for every realm. A node with
+no realm counts as `$SECOND_BRAIN_REALM` (default `default`), the same default the
 engine writes with, so filtering never silently drops untagged nodes. **Realms are
 open vocabulary** — never hardcode the list. Read it from `/api/realms` (which also
 returns the server default) or `brain_query.realms()`; `graph.py sections` is the
@@ -468,6 +470,7 @@ guarantee as the read layer.
 | Check the install | `GET /api/doctor` | The same report `doctor` prints. `ok` is "the call worked"; `healthy` is the verdict. |
 | Preview consolidation | `GET /api/consolidate-preview` | What a run **would** change, computed by the same function the run uses. Writes nothing. |
 | Snapshot / list snapshots | `POST /api/backup` / `GET /api/backups` | Point-in-time copies of the graph, kept 5 days. |
+| Rename a realm | `POST /api/rename-realm` | Moves every node in one realm to another, merging if it exists, and follows it in the default realm setting. Asks first; snapshots before the first write. |
 | Remember a view preference | `GET`/`POST /api/ui-prefs` | The browser's own state, stored here only when `ui_sync` is on — see below. |
 | Point at the master | `POST /api/neo4j-config` / `/api/neo4j-test` | Writes `<home>/neo4j.json` (mode 600) and probes it. Empty url = sqlite only, and resets `backend` to `sqlite`. The **default read backend** select (§2d) sits in this card. |
 | Drain the queue | `POST /api/flush` | Pushes the outbox to neo4j. |
@@ -475,7 +478,7 @@ guarantee as the read layer.
 
 **Link recognition — the brain guesses the relation, you confirm it.** As you
 type a task title the composer calls `suggest-links`, which scans the text for
-mentions of nodes you already have (whole titles, ticket keys like `OS-84566`,
+mentions of nodes you already have (whole titles, ticket keys like `ABC-4521`,
 PR numbers like `#7366`, `#channel` handles, a person's name) and reads the
 wording around each mention to pick the relation: *"blocked by PR #7366"* →
 `blocked-by`, *"caused by …"* → `caused-by`, *"needs X first"* → `blocked-by`,
@@ -1040,7 +1043,7 @@ turning "tomorrow 9am" into an ISO time.
   **Ingestion may use the model** to judge the assignee (tokens OK when capturing
   notes/emails/threads); **querying stays token-free** — the hook heuristic above
   is the no-model fallback.
-- **`delegated`** — set (e.g. `ai-delegator:pr-review`) when the work is handed off;
+- **`delegated`** — set (e.g. `another-plugin:review`) when the work is handed off;
   also excluded from `--mine`. Pair with `waiting_on`.
 
 ---

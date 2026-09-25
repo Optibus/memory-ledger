@@ -275,9 +275,9 @@ VARIABLES = {
     "trigger_scope": (SOURCES, "The conversation's gate key.", "github:o/r#5"),
     "request_id": (SOURCES, "This run's request id, for `trigger.py show`.",
                    "0a255d52-6c1e-4f0b-9a57-2f3e8d41c9b0"),
-    "owner": (SOURCES, "Your name, as the brain knows it.", "Gabriel"),
+    "owner": (SOURCES, "Your name, as the brain knows it.", "Alex"),
     "signature": (SOURCES, "The signature line the brain ends its replies with.",
-                  "_sent by Gabriel's second brain_"),
+                  "_sent by Alex's second brain_"),
     "slack_channel": (("slack",), "The channel id.", "C0123ABCD"),
     "slack_thread": (("slack",), "The thread's timestamp.", "1700000000.000100"),
     "slack_channel_name": (("slack",), "The channel's name, without the #, when the bot may "
@@ -295,7 +295,7 @@ VARIABLES = {
     "jira_assignee_id": (("jira",), "Their account id.", "712020:abcd"),
     "jira_previous_assignee": (("jira",), "An assignment: who had it before; empty when "
                                           "nobody did.", "Bo Chen"),
-    "github_repo": (("github",), "owner/name.", "Optibus/memory-ledger"),
+    "github_repo": (("github",), "owner/name.", "acme/widgets"),
     "github_number": (("github",), "The PR or issue number.", "5"),
     "github_item": (("github",), "pull request or issue.", "pull request"),
 }

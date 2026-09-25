@@ -157,16 +157,16 @@ describe("recording a process from the + button", () => {
     await user.click(await screen.findByRole("button", { name: /create a process, a skill or a rule/ }));
     await user.click(await screen.findByRole("button", { name: /A process/ }));
     const realm = await screen.findByRole("combobox", { name: /Realm/ });
-    await waitFor(() => expect(realm).toHaveValue("optibus"));
-    expect(realm).toHaveTextContent("optibus (current)");
+    await waitFor(() => expect(realm).toHaveValue("work"));
+    expect(realm).toHaveTextContent("work (current)");
     await user.type(screen.getByRole("textbox", { name: /Title/ }), "Ship a hotfix");
     await user.click(screen.getByRole("button", { name: "Save process" }));
     await waitFor(() =>
       expect(writes.find((w) => w.path === "/api/create-process")?.body).toMatchObject({
         title: "Ship a hotfix",
-        realm: "optibus",
+        realm: "work",
       }),
     );
-    expect(seen).toEqual([{ kind: "process", id: "process_new_0001", realm: "optibus" }]);
+    expect(seen).toEqual([{ kind: "process", id: "process_new_0001", realm: "work" }]);
   });
 });

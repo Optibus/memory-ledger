@@ -51,7 +51,7 @@ POST_ROUTES = [
     "/api/set-assignee", "/api/assign", "/api/merge-person", "/api/add-alias",
     "/api/update-node", "/api/link", "/api/unlink", "/api/propose-idea", "/api/settings",
     "/api/neo4j-config", "/api/neo4j-test", "/api/flush", "/api/prune",
-    "/api/capture", "/api/consolidate", "/api/ui-prefs", "/api/backup",
+    "/api/capture", "/api/consolidate", "/api/ui-prefs", "/api/backup", "/api/rename-realm",
     "/api/create-rule", "/api/create-skill", "/api/create-process",
     "/api/export-skills", "/api/ingest-skills", "/api/export-bundle",
     "/api/upload-bundle", "/api/import-bundle", "/api/delete-contracts",
@@ -588,6 +588,28 @@ def test_settings_writes(s: Server):
     ck("and to an idea proposed from the map",
        s.post("/api/propose-idea", {"title": "realm probe"}).json()["node"]["realm"]
        == "personal")
+
+    ck("a rename needs both names", refused(s.post("/api/rename-realm", {"old": "personal"}),
+                                            400, "both the old and the new realm name"))
+    ck("a rename refuses a name that is not a slug", refused(
+        s.post("/api/rename-realm", {"old": "personal", "new": "Big Realm"}), 400,
+        "realm must be lowercase"))
+    ck("a rename refuses a realm that does not exist", refused(
+        s.post("/api/rename-realm", {"old": "nope", "new": "x"}), 400, "no realm named"))
+    r = s.post("/api/rename-realm", {"old": "personal", "new": "life"})
+    j = r.json()
+    ck("renaming the default realm moves its nodes and follows it in the settings",
+       r.status == 200 and j.get("moved", 0) >= 2 and j.get("default") == "life"
+       and j.get("backup", {}).get("ok") and not j.get("merged_into_existing"), r.raw[:200])
+    ck("and new work lands under the new name",
+       s.post("/api/add-task", {"title": "renamed probe"}).json()["node"]["realm"] == "life")
+    ck("and nothing is left under the old one", "personal" not in s.get("/api/realms").json()["realms"])
+    s.post("/api/add-task", {"title": "other realm", "realm": "scratch"})
+    j = s.post("/api/rename-realm", {"old": "scratch", "new": "life"}).json()
+    ck("renaming onto an existing realm merges, and says so",
+       j.get("ok") and j.get("merged_into_existing") is True and "default" not in j, str(j)[:200])
+    ck("and put back", s.post("/api/rename-realm", {"old": "life", "new": "personal"}).json()
+       .get("default") == "personal")
 
     ck("the ui prefs are stored", s.post("/api/ui-prefs", {"prefs": {"tab": "map"}})
        .json().get("synced") is True)

@@ -72,7 +72,7 @@ skill offers, not a precondition it waits on.
 - `delegate` reaches the owner through `send-slack` and sets the check-back through `remind`.
 - `follow-up` reaches a stalled owner through `send-slack`.
 - `read-email`, `slack-inbox` and `read-jira` hand ingestible content to `ingest-context`.
-- `ingest-context` hands Gabriel's own action items to `add-task`.
+- `ingest-context` hands the owner's own action items to `add-task`.
 - `remind` fires a routine that reaches the person through `send-slack`.
 - `respond` enriches its answer through `recall`; it is started by the trigger engine (`scripts/trigger.py`), never by another skill.
 - `send-slack` drafts through `writing-style`.

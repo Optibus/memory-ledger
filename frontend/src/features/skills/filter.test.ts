@@ -107,7 +107,7 @@ describe("countSkills", () => {
 
 describe("keepProcess", () => {
   const [mine, theirs] = skillsFixture.processes!;
-  const cur = effectiveRealms(emptySkillFilter(), "optibus");
+  const cur = effectiveRealms(emptySkillFilter(), "work");
 
   it("follows the current realm until the realm facet is touched", () => {
     expect(keepProcess(mine!, f(), cur)).toBe(true);
@@ -116,8 +116,8 @@ describe("keepProcess", () => {
 
   it("reads another realm once it is picked", () => {
     const picked = f({ realms: new Set(["personal"]) });
-    expect(keepProcess(theirs!, picked, effectiveRealms(picked, "optibus"))).toBe(true);
-    expect(keepProcess(mine!, picked, effectiveRealms(picked, "optibus"))).toBe(false);
+    expect(keepProcess(theirs!, picked, effectiveRealms(picked, "work"))).toBe(true);
+    expect(keepProcess(mine!, picked, effectiveRealms(picked, "work"))).toBe(false);
   });
 
   it("matches words in the steps and the trigger", () => {

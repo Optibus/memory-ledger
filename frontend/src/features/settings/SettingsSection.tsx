@@ -19,6 +19,7 @@ import { UpkeepCard } from "./UpkeepCard";
 import { DoctorCard } from "./DoctorCard";
 import { BrowserCard } from "./BrowserCard";
 import { TriggerCard } from "./TriggerCard";
+import { RealmsCard } from "./RealmsCard";
 import type { RealmCount, Settings, Status, StoredSettings, Timezones } from "@/api/types";
 import "./SettingsSection.css";
 
@@ -61,6 +62,15 @@ export function SettingsSection() {
             zones={zones.data?.zones ?? []}
             realms={Object.keys(realms.data?.realms ?? {})}
             onSaved={() => settings.reload()}
+          />
+          <RealmsCard
+            realms={realms.data?.realms ?? {}}
+            current={settings.data.effective.realm}
+            writable={settings.data.writable}
+            onChanged={() => {
+              settings.reload();
+              realms.reload();
+            }}
           />
           <CaptureCard
             capture={settings.data.capture}

@@ -46,28 +46,28 @@ describe("the new-task composer", () => {
 
   it("recognises what the title mentions and shows why", async () => {
     const user = await openComposer();
-    await user.type(screen.getByLabelText(/^title/i), "pair with gabriel on the map");
+    await user.type(screen.getByLabelText(/^title/i), "pair with alex on the map");
     expect(await screen.findByText(/recognised 1 connection/)).toBeInTheDocument();
-    expect(screen.getByText(/matched “gabriel”/)).toBeInTheDocument();
+    expect(screen.getByText(/matched “alex”/)).toBeInTheDocument();
   });
 
   it("sends the recognised links, each with its relation", async () => {
     const user = await openComposer();
-    await user.type(screen.getByLabelText(/^title/i), "pair with gabriel");
+    await user.type(screen.getByLabelText(/^title/i), "pair with alex");
     await screen.findByText(/recognised 1 connection/);
     await user.click(screen.getByRole("button", { name: "Create task" }));
     await waitFor(() =>
       expect(writes.find((w) => w.path === "/api/add-task")?.body).toMatchObject({
-        links: [{ id: "person_gabriel", rel: "mentions" }],
+        links: [{ id: "person_alex", rel: "mentions" }],
       }),
     );
   });
 
   it("drops a suggestion that was unchecked", async () => {
     const user = await openComposer();
-    await user.type(screen.getByLabelText(/^title/i), "pair with gabriel");
+    await user.type(screen.getByLabelText(/^title/i), "pair with alex");
     await screen.findByText(/recognised 1 connection/);
-    await user.click(screen.getByRole("checkbox", { name: /Gabriel/ }));
+    await user.click(screen.getByRole("checkbox", { name: /Alex/ }));
     await user.click(screen.getByRole("button", { name: "Create task" }));
     await waitFor(() =>
       expect(writes.find((w) => w.path === "/api/add-task")?.body).toMatchObject({ links: [] }),
@@ -77,19 +77,19 @@ describe("the new-task composer", () => {
   it("keeps a relation the person re-pointed, even as they keep typing", async () => {
     const user = await openComposer();
     const title = screen.getByLabelText(/^title/i);
-    await user.type(title, "pair with gabriel");
+    await user.type(title, "pair with alex");
     await screen.findByText(/recognised 1 connection/);
-    await user.selectOptions(screen.getByRole("combobox", { name: /relation to Gabriel/ }), "blocked-by");
+    await user.selectOptions(screen.getByRole("combobox", { name: /relation to Alex/ }), "blocked-by");
     await user.type(title, " tomorrow");
     await waitFor(() =>
-      expect(screen.getByRole("combobox", { name: /relation to Gabriel/ })).toHaveValue("blocked-by"),
+      expect(screen.getByRole("combobox", { name: /relation to Alex/ })).toHaveValue("blocked-by"),
     );
   });
 
   it("offers the relations the engine enforces, never a list of its own", async () => {
     const user = await openComposer();
-    await user.type(screen.getByLabelText(/^title/i), "pair with gabriel");
-    const select = (await screen.findByRole("combobox", { name: /relation to Gabriel/ })) as HTMLSelectElement;
+    await user.type(screen.getByLabelText(/^title/i), "pair with alex");
+    const select = (await screen.findByRole("combobox", { name: /relation to Alex/ })) as HTMLSelectElement;
     expect([...select.options].map((o) => o.value)).toEqual([
       "relates-to",
       "blocked-by",
@@ -111,7 +111,7 @@ describe("the new-task composer", () => {
   it("does not take the form down when recognition fails", async () => {
     server.use(http.get("/api/suggest-links", () => HttpResponse.json({ ok: false, error: "boom" }, { status: 500 })));
     const user = await openComposer();
-    await user.type(screen.getByLabelText(/^title/i), "pair with gabriel");
+    await user.type(screen.getByLabelText(/^title/i), "pair with alex");
     expect(screen.getByRole("button", { name: "Create task" })).toBeEnabled();
   });
 

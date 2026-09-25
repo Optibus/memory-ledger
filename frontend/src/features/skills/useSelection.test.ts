@@ -5,7 +5,7 @@ import { kindOf, useSelection } from "./useSelection";
 describe("kindOf", () => {
   it("reads the corpus off the id", () => {
     expect(kindOf("skill_recall")).toBe("skills");
-    expect(kindOf("rule_user_no-emoji")).toBe("rules");
+    expect(kindOf("rule_user_plain-text-only")).toBe("rules");
     expect(kindOf("process_refine-an-epic_0693")).toBe("processes");
     // a process retyped from a decision keeps its id
     expect(kindOf("decision_use-jira-flags", new Set(["decision_use-jira-flags"]))).toBe("processes");

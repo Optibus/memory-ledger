@@ -20,7 +20,7 @@ describe("Map", () => {
     await screen.findByText("4/4 nodes · 3 edges");
     await user.click(screen.getByRole("button", { name: /realms/ }));
     // The fixture's realms, with the counts the server sent.
-    expect(screen.getByRole("checkbox", { name: /optibus/ })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /work/ })).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: /personal/ })).toBeInTheDocument();
   });
 
@@ -48,7 +48,7 @@ describe("Map", () => {
     await user.click(screen.getByRole("button", { name: /types/ }));
     await user.click(screen.getByRole("button", { name: /Display/ }));
     await user.click(screen.getByRole("checkbox", { name: /drop unsupported/ }));
-    // Gabriel supported both tasks; dropping him unwinds them and the note under them.
+    // Alex supported both tasks; dropping him unwinds them and the note under them.
     expect(await screen.findByText("+3")).toBeInTheDocument();
   });
 
@@ -192,8 +192,8 @@ describe("the node card", () => {
   it("jumps to the node on the other end of a connection", async () => {
     let focused = "";
     const { user } = renderApp(card({ onFocus: (id) => (focused = id) }));
-    await user.click(await screen.findByRole("button", { name: /Gabriel/ }));
-    expect(focused).toBe("person_gabriel");
+    await user.click(await screen.findByRole("button", { name: /Alex/ }));
+    expect(focused).toBe("person_alex");
   });
 
   it("completes from the map, so finishing something never means leaving the graph", async () => {
@@ -206,7 +206,7 @@ describe("the node card", () => {
 
   it("offers no complete on a type that has no meaningful done", async () => {
     renderApp(card({ node: graphFixture.nodes[1]! }));
-    await screen.findByRole("heading", { name: "Gabriel" });
+    await screen.findByRole("heading", { name: "Alex" });
     expect(screen.queryByRole("button", { name: /Complete/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Edit/ })).toBeInTheDocument();
   });

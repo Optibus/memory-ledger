@@ -18,7 +18,7 @@ remembers.
 - **The Gmail MCP tools** (`mcp__claude_ai_Gmail__*`). If not authenticated, the
   authenticate flow runs first and the person is told what they are approving.
 - **The scope asked about**: unread, a sender, a subject, a time window.
-- **Unread state is Gabriel's own queue**, not a display detail. Treat it as data
+- **Unread state is the owner's own queue**, not a display detail. Treat it as data
   you may read and may not change.
 
 ## Rules honored
@@ -69,14 +69,14 @@ See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTION
 ## Guardrails — must not
 
 - **Must not mark read, archive, move or relabel anything without asking.**
-  Gabriel works from unread state, and clearing it silently destroys his queue.
-- **Must not send a reply without an explicit yes.** It goes out under his name.
+  The owner works from unread state, and clearing it silently destroys their queue.
+- **Must not send a reply without an explicit yes.** It goes out under their name.
 - **Must not summarize the whole inbox.** That is the anxiety this skill exists to
   reduce, restated as a wall of text.
 
 ## Reply (focus contract)
 
-The one that needs him, bolded, then the count.
+The one that needs them, bolded, then the count.
 
-> **Alessandro is waiting on your acceptance test for OS-82316**, sent Tuesday.
+> **Marco is waiting on your acceptance test for ABC-2316**, sent Tuesday.
 > 11 other unread, nothing else time-sensitive. Want to go through them?

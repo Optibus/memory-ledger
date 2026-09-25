@@ -66,8 +66,8 @@ describe("the named surface", () => {
         return HttpResponse.json({ ok: true, view: "agenda", title: "Agenda", count: 0, results: [] });
       }),
     );
-    await api.view("agenda", { mine: "1", realm: "optibus,shared" });
-    expect(seen).toBe("?mine=1&realm=optibus%2Cshared");
+    await api.view("agenda", { mine: "1", realm: "work,shared" });
+    expect(seen).toBe("?mine=1&realm=work%2Cshared");
   });
 
   it("sends writes as JSON POST", async () => {

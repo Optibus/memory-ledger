@@ -102,7 +102,7 @@ Both read paths build prefix queries, but differently:
 | `recall "a b"` | `"a"* OR "b"*` | wide — any term seeds, ranking sorts it out |
 
 Each term is quoted so punctuation and partial words are tolerated —
-`OS-83101` survives, `ops_driver` survives.
+`ABC-3101` survives, `ops_driver` survives.
 
 `recall` additionally drops terms shorter than 3 characters and strips a bilingual
 stop-list (English + pt-BR) before building the cue. `search` does not: it
@@ -116,7 +116,7 @@ words**. Two or three distinctive terms outperform a sentence:
 ```bash
 # good — distinctive, few
 recall "ops_driver depot"
-recall "OS-83101 region_name"
+recall "ABC-3101 region_name"
 
 # worse — the stop-list eats most of it, the rest is generic
 recall "what did we decide about the thing with the driver"

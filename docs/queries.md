@@ -31,7 +31,7 @@ python3 scripts/brain_query.py range --from 2026-07-20 --to 2026-07-31 --status 
 ### Ownership filters
 
 `--mine` is **strict** — only tasks whose `assignee` is the owner
-(`$SECOND_BRAIN_OWNER`, default `Gabriel`), never unassigned, never someone
+(`$SECOND_BRAIN_OWNER`, default `Owner`), never unassigned, never someone
 else's, and never delegated or parked waiting/blocked. It answers "what must *I*
 act on", which is a different question from "what is open".
 
@@ -48,11 +48,11 @@ what you can filter by, so nothing has a fixed list of them, including the web U
 
 ```bash
 python3 scripts/brain_query.py agenda --realm personal
-python3 scripts/brain_query.py open --realm optibus,shared --mine
+python3 scripts/brain_query.py open --realm work,shared --mine
 ```
 
 A node with no realm counts as the configured default (`$SECOND_BRAIN_REALM`,
-`optibus` out of the box) — the same convention the engine applies on write, so
+`default` out of the box) — the same convention the engine applies on write, so
 filtering never silently drops untagged nodes.
 
 ### Kind filter
@@ -126,9 +126,9 @@ bypass trimming entirely.
 ```bash
 python3 scripts/graph.py add-node --type task --title "..." \
   --body "..." --props '{"priority":"P1"}' --status open \
-  --due 2026-08-04T18:00:00-03:00 --realm optibus --area hub_process
+  --due 2026-08-04T18:00:00-03:00 --realm work --area hub_process
 
-python3 scripts/graph.py update-node --id <id> --props '{"assignee":"Gabriel"}'
+python3 scripts/graph.py update-node --id <id> --props '{"assignee":"Alex"}'
 python3 scripts/graph.py add-edge --src <a> --dst <b> --rel blocked-by
 python3 scripts/graph.py complete --id <id>          # -> archive, never deleted
 python3 scripts/graph.py set-state --id <id> --status blocked

@@ -16,9 +16,9 @@
   "tuned": {
     "rules": [
       { "query": "this is a two minute job, I will do it Friday",
-        "expect": "rule_user_urgency-on-quick-tasks" },
+        "expect": "rule_user_do-quick-tasks-now" },
       { "query": "log that I am blocked waiting on someone",
-        "expect": "rule_user_verify-before-waiting" }
+        "expect": "rule_user_confirm-before-waiting" }
     ],
     "skills": [
       { "query": "what should I work on today",
@@ -31,9 +31,9 @@
   "fresh": {
     "rules": [
       { "query": "trivial change, I'll batch it with the rest on Monday",
-        "expect": "rule_user_urgency-on-quick-tasks" },
+        "expect": "rule_user_do-quick-tasks-now" },
       { "query": "mark this blocked, she owes me an answer",
-        "expect": "rule_user_verify-before-waiting" }
+        "expect": "rule_user_confirm-before-waiting" }
     ],
     "skills": [
       { "query": "organise my morning",

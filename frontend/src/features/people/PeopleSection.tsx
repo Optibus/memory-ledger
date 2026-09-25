@@ -16,7 +16,7 @@ import "./PeopleSection.css";
  * `person_duplicates`, `api_merge_person` and `api_add_alias` have been there
  * the whole time, reachable only from the CLI. That is the wrong place for
  * them, because people are the node type whose quality decays on its own —
- * every capture that says "Isa" instead of "Isadora" is a new node until
+ * every capture that says "Mari" instead of "Maria" is a new node until
  * somebody says otherwise.
  *
  * NO MODEL CALL anywhere on this page. Duplicate detection is name matching
@@ -39,8 +39,8 @@ export function PeopleSection() {
     const all = people.data?.people ?? [];
     const needle = q.trim().toLowerCase();
     if (!needle) return all;
-    // Aliases are part of the name, not metadata: searching "Isa" has to find
-    // the node titled "Isadora" that answers to it.
+    // Aliases are part of the name, not metadata: searching "Mari" has to find
+    // the node titled "Maria" that answers to it.
     return all.filter(
       (p) =>
         p.title.toLowerCase().includes(needle) ||
@@ -75,7 +75,7 @@ export function PeopleSection() {
             Matched by name across every alias each node answers to — no model call. Merging moves
             the edges onto the canonical node, pins the other spelling as an alias, and leaves the
             duplicate in place pointing at its replacement, so an old capture that said
-            &ldquo;Isa&rdquo; still says Isa and still resolves to the right human.
+            &ldquo;Mari&rdquo; still says Mari and still resolves to the right human.
           </p>
           {groups.map((g) => (
             <DuplicateGroup key={g.canonical.id} group={g} onMerged={reload} />

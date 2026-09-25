@@ -29,12 +29,12 @@ incidental.
 | Interface | plugin: hooks + skills + CLI + local dashboard | ~19 MCP tools + hooks |
 
 The one-line difference: **MemPalace can tell you what was decided; it cannot tell
-you that Isadora is waiting on you.** memory-ledger tracks *state* — status, due
+you that Maria is waiting on you.** memory-ledger tracks *state* — status, due
 dates, who owes what, what is stale. MemPalace tracks *history*, and searches it by
 meaning rather than by keyword, which is something this project deliberately
 cannot do.
 
-They are complements, and Ilan's own onboarding kit says as much ("you can run more
+They are complements, and MemPalace's own onboarding material says as much ("you can run more
 than one — just don't duplicate the same facts across both"). If you want one
 sentence of advice: **run MemPalace if your pain is "we solved this before and I
 can't find it"; run memory-ledger if your pain is "I've lost track of what I owe
@@ -72,7 +72,7 @@ Reading that table honestly:
 - **The ChromaDB figure is a lower bound.** That measurement used precomputed
   random vectors, so it excludes the embedding model a real MemPalace loads
   (~80–90 MB of ONNX weights plus its runtime) and the CPU spent embedding every
-  document. Ilan's note that mining a long history "takes real time (minutes to
+  document. Its authors' note that mining a long history "takes real time (minutes to
   much longer)" is that cost showing up.
 - **Vector search itself is fast.** ~1 ms at 50k documents is perfectly good — the
   cost of MemPalace is resident memory and write time, not query speed. Be fair
@@ -83,10 +83,10 @@ Reading that table honestly:
 
 ### Extrapolating to a real palace
 
-Ilan reports **~252,000 drawers / ~2.5 GB**. Two checks against that:
+One real-world palace reports **~252,000 drawers / ~2.5 GB**. Two checks against that:
 
-- My synthetic corpus extrapolates to ~1.43 GiB at 252k documents. He reports
-  2.5 GB, so his drawers are roughly 1.7× my synthetic ones — the same order,
+- My synthetic corpus extrapolates to ~1.43 GiB at 252k documents. That one is
+  2.5 GB, so its drawers are roughly 1.7× my synthetic ones — the same order,
   which means the measurement is a reasonable stand-in.
 - The HNSW index alone, by construction: 252,000 vectors × 384 dims × 4 bytes =
   **369 MiB raw**, and an HNSW graph typically costs 1.5–2× that on top, so

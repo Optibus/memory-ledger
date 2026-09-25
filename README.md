@@ -58,8 +58,10 @@ linked so the brain can learn from what worked.
 **One local file, and sections.** The brain is a single SQLite file on your
 machine — durable, offline, portable. Nothing about it needs a network, and it
 connects to nothing unless you ask it to. Every node carries a **`realm` /
-section** (`optibus`, `personal`, `shared`, …) so one graph holds work + personal
-life, filterable (`sections`, `add-node --realm`).
+section** (`default`, `work`, `personal`, …) so one graph holds work + personal
+life, filterable (`sections`, `add-node --realm`). A fresh brain writes into one
+called `default`; `rename-realm --from default --to work` renames it, and writing a
+node with `--realm <new>` adds another. Settings has both.
 
 **Optional graph mirror.** If you want one brain across several machines, point it
 at a graph server you control and every write mirrors there too. Lose the
@@ -297,7 +299,7 @@ latency. Full rules in `CONVENTIONS.md` §2k.
 
 The same colleague arrives through many doors: a Slack display name, an email local
 part, a first name in a meeting transcript, a surname in a Jira comment. Left alone
-that yields `Isa`, `Isadora` and `Isadora Martini` as three people, and quietly
+that yields `Mari`, `Maria` and `Maria Castillo` as three people, and quietly
 splits their work three ways.
 
 So person creation goes through an identity guard. A name is matched on its
@@ -308,9 +310,9 @@ silently reassigns work. So:
 
 | | example | what happens |
 |---|---|---|
-| **certain** | `isadora.martini@optibus.com`, `Martini, Isadora`, `Isadora Souza Martini` | resolves to the existing node |
-| **likely** | `Isa`, `Isadora`, `Martini` | resolves **only if exactly one** person fits |
-| **no match** | `Gabriel Nori` vs `Gabriela Nori` | stays a separate person |
+| **certain** | `maria.castillo@example.com`, `Castillo, Maria`, `Maria Luisa Castillo` | resolves to the existing node |
+| **likely** | `Mari`, `Maria`, `Castillo` | resolves **only if exactly one** person fits |
+| **no match** | `Daniel Reyes` vs `Daniela Reyes` | stays a separate person |
 
 Two names that both carry a surname and disagree on it are different people, however
 much the first name matches. An ambiguous name is **refused with its candidates**
@@ -318,7 +320,7 @@ rather than resolved by coin flip.
 
 ```bash
 python3 scripts/graph.py people                        # the roster, one entry per human
-python3 scripts/graph.py who "Isa"                     # which node does this spelling mean?
+python3 scripts/graph.py who "Mari"                     # which node does this spelling mean?
 python3 scripts/graph.py person-dupes                  # report duplicates already in the graph
 python3 scripts/graph.py merge-person --into <keep> --from <dup>
 python3 scripts/graph.py add-alias --id <person> --alias "Bebel"   # what the heuristic can't infer
@@ -328,7 +330,7 @@ python3 scripts/graph.py add-node --type person --title "..." --force-new   # tw
 A merge **never deletes and never rewrites a name that was already written down**.
 Edges move to the canonical node, the duplicate's spelling is pinned there as an
 alias, and the duplicate stays in the graph as a resolver (`superseded_by` plus an
-edge to follow). A capture that said "Isa" still says "Isa" — and still resolves to
+edge to follow). A capture that said "Mari" still says "Mari" — and still resolves to
 the right human, because identity is resolved when **read**.
 
 All of that is also a page: **People** in the web UI lists the roster, expands any
@@ -370,7 +372,7 @@ python3 scripts/brain_query.py agenda --mine   # only what YOU must act on
 
 Add **`--mine`** to any view (dashboard: the "🙋 Mine · needs action" toggle) to
 drop tasks assigned to someone else, delegated away, or parked waiting/blocked —
-leaving only the owner's live actions (`$SECOND_BRAIN_OWNER`, default `Gabriel`;
+leaving only the owner's live actions (`$SECOND_BRAIN_OWNER`, default `Owner`;
 unassigned counts as the owner's). Or filter by exact owner with
 **`--assignee me|unassigned|<name>`** (dashboard: one toggle chip per assignee).
 `--mine` is **strict**: only tasks whose `assignee` is the owner (not unassigned,
@@ -497,7 +499,7 @@ hamburger menu on the left (`m` toggles it):
   twice**. Detection is name matching across every alias a node answers to, with
   **no model call**; merging moves the edges onto the node you keep, pins the
   other spelling as an alias, and leaves the duplicate pointing at its
-  replacement, so a capture that said "Isa" still resolves to Isadora. The engine
+  replacement, so a capture that said "Mari" still resolves to Maria. The engine
   proposes the most connected node as canonical — a radio overrules it, because
   only a human can say which spelling is the real person.
 - **Capabilities** — skills, rules, processes and scripts, in that order. The
@@ -538,11 +540,11 @@ one. Click **＋ New task** and type; as you write, memory-ledger scans your tit
 for things it already knows and proposes how they connect:
 
 ```
-"Rerun the export once PR #7366 lands, needs the migration first, with Yuri"
+"Rerun the export once PR #7366 lands, needs the migration first, with Kenji"
                         └ follows-up      └ blocked-by          └ mentions
 ```
 
-Ticket keys (`OS-84566`), PR numbers (`#7366`), `#channels` and people are all
+Ticket keys (`ABC-4521`), PR numbers (`#7366`), `#channels` and people are all
 recognised, and the wording picks the relation — `blocked by` → `blocked-by`,
 `caused by` → `caused-by`, `part of` → `part-of`, `depends on` → `depends-on`.
 Every suggestion is a row you can re-point or uncheck before saving. Expand any
