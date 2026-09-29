@@ -77,7 +77,7 @@ claude --plugin-dir ~/dev/memory-ledger
 | `scripts/graph.py` | the engine — schema, commands, recall, consolidation (~2.6k lines) |
 | `scripts/brain_query.py` | read-only date views, no writes |
 | `scripts/trigger.py` | the Slack/Jira trigger engine — gate, audit log, checkpoints, Jira poll, `claude -p` dispatch ([triggers](docs/trigger.md)) |
-| `scripts/brain_sync.py` | one-shot backfill into neo4j |
+| `scripts/brain_sync.py` | full push into neo4j, `--verify` against it, `--pull` restore from it |
 | `hooks/` | the three always-on hooks + `_capture.py` shared helpers |
 | `hooks/hooks.json` | which hook binds to which Claude Code event |
 | `scripts/serve.py` | the one command: builds the server's venv, the UI, and runs the app |

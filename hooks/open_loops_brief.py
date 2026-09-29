@@ -113,6 +113,44 @@ def consolidate_daily():
 
 consolidate_daily()
 
+
+def _detached(*argv):
+    subprocess.Popen([sys.executable, *argv], stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                     start_new_session=True)
+
+
+def mirror_sync():
+    """Sync with the neo4j master, detached, when one is configured.
+
+    Every session start: a two-way `--sync`, so this session opens on what the
+    other machines wrote and they get what this one did. Once a day on top: a
+    full reconcile, which re-sends anything a failed push left behind."""
+    if not (os.path.exists(os.path.join(home, "neo4j.json"))
+            or _switch._env("NEO4J_URL")):
+        return
+    script = os.path.join(root, "scripts", "brain_sync.py")
+    try:
+        stamp = os.path.join(home, ".last_mirror")
+        today = datetime.date.today().isoformat()
+        try:
+            with open(stamp) as f:
+                full = f.read().strip() != today
+        except OSError:
+            full = True
+        if full:
+            with open(stamp, "w") as f:
+                f.write(today)
+        # the full push after the pull, never beside it: one process, in order
+        _detached("-c", "import subprocess,sys;"
+                  f"subprocess.run([sys.executable,{script!r},'--sync','--quiet']);"
+                  + (f"subprocess.run([sys.executable,{script!r},'--quiet'])" if full else ""))
+    except Exception:
+        pass                                # a session start must never break
+
+
+mirror_sync()
+
 try:
     raw = subprocess.run([sys.executable, graph, "open-loops", "--limit", "6"],
                          capture_output=True, text=True, timeout=8).stdout

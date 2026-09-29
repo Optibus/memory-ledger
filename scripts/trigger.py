@@ -511,6 +511,8 @@ def db():
     for col, decl in LATE_COLUMNS.items():
         if col not in have:
             con.execute(f"ALTER TABLE trigger_request ADD COLUMN {col} {decl}")
+    # connect() ran before these tables existed on a fresh brain; mirror them now
+    graph._ensure_mirror_triggers(con)
     con.commit()
     return con
 

@@ -14,7 +14,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
-from . import errors, reads, state, trigger_runtime, writes
+from . import errors, reads, state, sync_runtime, trigger_runtime, writes
 
 TAGS = [
     {"name": "graph", "description": "Nodes, edges, and what connects to what."},
@@ -40,13 +40,17 @@ TAGS = [
 
 @asynccontextmanager
 async def lifespan(_app):
-    """The trigger watchers live as long as the server does, and only when
-    serve.py asked for them."""
+    """The trigger watchers and the master sync live as long as the server
+    does, and only when serve.py asked for them."""
     if state.TRIGGERS:
         trigger_runtime.start()
+    if state.SYNC:
+        sync_runtime.start()
     try:
         yield
     finally:
+        if state.SYNC:
+            sync_runtime.stop()
         if state.TRIGGERS:
             trigger_runtime.stop()
 

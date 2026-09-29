@@ -105,7 +105,12 @@ def _fetch_neo4j() -> list[dict]:
         node = {k: p.get(k, "") for k in
                 ("id", "type", "title", "body", "status", "due", "realm",
                  "created", "updated")}
-        node["props"] = {k: v for k, v in p.items() if k not in node}
+        # `_props` is the verbatim copy; nodes pushed before it existed lack it
+        try:
+            node["props"] = json.loads(p["_props"])
+        except (KeyError, TypeError, ValueError):
+            node["props"] = {k: v for k, v in p.items()
+                             if k not in node and not k.startswith("_")}
         nodes.append(node)
     return nodes
 

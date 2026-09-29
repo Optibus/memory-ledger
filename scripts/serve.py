@@ -438,6 +438,8 @@ def main():
     state.WRITABLE = not args.no_write
     # A read-only server must not be acting on its owner's behalf.
     state.TRIGGERS = not (args.no_trigger or args.no_write)
+    # nor pulling into, or pushing from, a brain it was told not to write
+    state.SYNC = not args.no_write
     graph.connect().close()  # ensure the brain exists
 
     # Refresh BEFORE binding, so the browser opens on the page it will keep.

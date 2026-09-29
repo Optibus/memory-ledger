@@ -67,7 +67,11 @@ node with `--realm <new>` adds another. Settings has both.
 at a graph server you control and every write mirrors there too. Lose the
 connection and writes queue in an offline outbox, draining automatically when it
 returns (`neo4j-status`, `flush`, `scripts/brain_sync.py`) — the local file is
-always authoritative for reads, so the mirror can never block you.
+always authoritative for reads, so the mirror can never block you. The mirror is a
+complete copy that syncs **both ways** (`graph.py sync`, automatic every minute in
+the server and at session start), and a lost file is restored from it with
+`brain_sync.py --pull --replace`. It is the first step to retiring SQLite and
+running on neo4j alone ([the road off SQLite](docs/neo4j.md#the-road-off-sqlite)).
 
 **Areas — nothing durable floats loose.** Every keeper belongs to a **domain
 area** (`hub_quote`, `hub_health`, `hub_process`, …), so a domain is one edge walk

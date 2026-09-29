@@ -504,13 +504,19 @@ def _ensure_schema(con) -> None:
     con.execute(
         "CREATE TABLE IF NOT EXISTS outbox ("
         "seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, ref TEXT, created TEXT)")
-    # Hebbian tally: how often two nodes have co-activated in recall. Local only —
-    # it never syncs, and an EDGE is only created once a pair repeats (see
+    # Hebbian tally: how often two nodes have co-activated in recall. Mirrored to
+    # the master as rows, like every table a restore needs (see MIRROR_TABLES);
+    # an EDGE is only created once a pair repeats (see
     # HEBBIAN_THRESHOLD), so a single lexical coincidence cannot wire the graph.
     con.execute(
         "CREATE TABLE IF NOT EXISTS coactivation ("
         "a TEXT, b TEXT, n INTEGER DEFAULT 0, last TEXT, PRIMARY KEY(a,b))")
     _ensure_blocked_index(con)
+    # two-way sync bookkeeping, local to this file and never mirrored: who this
+    # machine is, how far it has pulled, the file shas it last agreed on
+    con.execute("CREATE TABLE IF NOT EXISTS sync_state (key TEXT PRIMARY KEY, value TEXT)")
+    con.execute("CREATE TABLE IF NOT EXISTS mirror_mute (on_ INTEGER)")
+    _ensure_mirror_triggers(con)
     con.commit()
 
 
@@ -596,20 +602,55 @@ def _neo4j_call(statements, timeout=30):
         return False, str(e)
 
 
+def _neo4j_query(statement, params=None, timeout=60):
+    """Run one read statement. Returns (rows, error_or_None); each row is the list
+    of returned columns. `_neo4j_call` only reports ok — restore needs the data."""
+    cfg = _neo4j_cfg()
+    if not cfg["url"] or not cfg["password"]:
+        return [], "neo4j not configured"
+    endpoint = cfg["url"].rstrip("/") + f"/db/{cfg['db']}/tx/commit"
+    auth = base64.b64encode(f"{cfg['user']}:{cfg['password']}".encode()).decode()
+    req = urllib.request.Request(
+        endpoint, data=json.dumps({"statements": [
+            {"statement": statement, "parameters": params or {}}]}).encode(),
+        headers={"Content-Type": "application/json", "Accept": "application/json",
+                 "Authorization": f"Basic {auth}"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = json.loads(resp.read())
+    except Exception as e:
+        return [], str(e)
+    if body.get("errors"):
+        return [], body["errors"][0].get("message")
+    return [r["row"] for r in body["results"][0]["data"]], None
+
+
 _NODE_ID_CONSTRAINT = (
     "CREATE CONSTRAINT node_id_unique IF NOT EXISTS "
     "FOR (n:Node) REQUIRE n.id IS UNIQUE")
+_MIRROR_ROW_CONSTRAINT = (
+    "CREATE CONSTRAINT mirror_row_uid IF NOT EXISTS "
+    "FOR (x:MirrorRow) REQUIRE x.uid IS UNIQUE")
+_MIRROR_FILE_CONSTRAINT = (
+    "CREATE CONSTRAINT mirror_file_path IF NOT EXISTS "
+    "FOR (x:MirrorFile) REQUIRE x.path IS UNIQUE")
+_TOMBSTONE_CONSTRAINT = (
+    "CREATE CONSTRAINT tombstone_uid IF NOT EXISTS "
+    "FOR (t:Tombstone) REQUIRE t.uid IS UNIQUE")
 
 
 def _ensure_neo4j_schema() -> tuple:
-    """Make :Node(id) unique on the master.
+    """Make every mirrored key unique on the master.
 
     Without this, `MERGE (x:Node {id:...})` is not safe under concurrency: two
     flushes racing on the same id each fail to find it and each create one. That
     is how 22 ids ended up duplicated (one of them three times). The constraint
     makes MERGE actually idempotent, which the whole sync design assumes.
     Cheap and idempotent, so callers can just run it."""
-    return _neo4j_call([{"statement": _NODE_ID_CONSTRAINT}], timeout=30)
+    return _neo4j_call([{"statement": s} for s in (
+        _NODE_ID_CONSTRAINT, _MIRROR_ROW_CONSTRAINT, _MIRROR_FILE_CONSTRAINT,
+        _TOMBSTONE_CONSTRAINT)],
+        timeout=30)
 
 
 def _neo4j_up() -> bool:
@@ -624,11 +665,14 @@ def _neo4j_up() -> bool:
 
 
 def _clean_props(props: dict) -> dict:
+    """neo4j props must be primitives or arrays of ONE primitive type (a mixed
+    list fails the whole transaction) — JSON-encode anything else."""
     out = {}
     for k, v in (props or {}).items():
         if isinstance(v, (str, int, float, bool)) or v is None:
             out[k] = v
-        elif isinstance(v, list) and all(isinstance(x, (str, int, float, bool)) for x in v):
+        elif (isinstance(v, list) and all(isinstance(x, (str, int, float, bool)) for x in v)
+              and len({type(x) for x in v}) <= 1):
             out[k] = v
         else:
             out[k] = json.dumps(v, ensure_ascii=False)
@@ -637,19 +681,133 @@ def _clean_props(props: dict) -> dict:
 
 EDGE_SEP = "\x1f"
 
-_NODE_UPSERT = (
-    "UNWIND $nodes AS n MERGE (x:Node {id:n.id}) "
-    "SET x += n.props, x.realm=n.realm, x.type=n.type, x.title=n.title, "
-    "x.body=n.body, x.status=n.status, x.due=n.due, x.created=n.created, x.updated=n.updated")
-_EDGE_UPSERT = ("UNWIND $edges AS e MATCH (a:Node {id:e.src}),(b:Node {id:e.dst}) "
-                "MERGE (a)-[r:REL {rel:e.rel}]->(b)")
-_NODE_DEL = "UNWIND $ids AS i MATCH (x:Node {id:i}) DETACH DELETE x"
-_EDGE_DEL = ("UNWIND $edges AS e MATCH (a:Node {id:e.src})-[r:REL {rel:e.rel}]->"
-             "(b:Node {id:e.dst}) DELETE r")
+# The columns a node carries itself. A prop with one of these names used to be
+# overwritten on the master by the column of the same name (113 nodes had one),
+# so props now travel twice: flattened for queries, and verbatim in `_props` so
+# a restore gets back exactly what was written.
+NODE_FIELDS = ("id", "type", "title", "body", "status", "due", "realm",
+               "created", "updated")
+
+# Tables mirrored beside nodes and edges, each with its primary key. They reach
+# the master as :MirrorRow {uid, table, key, data} — the row as JSON — because
+# the master is a copy to restore from, not a second schema to keep in step.
+# `blocked_item` is left out on purpose: it is a projection of the transition
+# nodes, rebuilt by `recheck --rebuild`.
+MIRROR_TABLES = {
+    "coactivation": ("a", "b"),
+    "trigger_request": ("id",),
+    "trigger_action": ("id",),
+    "trigger_gate": ("scope",),
+    "trigger_channel": ("channel_id",),
+    "trigger_checkpoint": ("source",),
+}
+
+# Every statement that changes the master takes the next number from one clock
+# node and stamps it (`_seq`) with the machine that wrote it (`_origin`). The
+# clock is write-locked until its transaction commits, so numbers commit in
+# order, and "everything after N" is exactly what another machine has not pulled
+# yet. Deletes leave a :Tombstone with the same stamp, so a delete can be pulled
+# too — a node that is simply gone cannot be told from one never pushed.
+_CLOCK = ("MERGE (c:SyncClock {id:'main'}) SET c.seq = coalesce(c.seq, 0) + 1 "
+          "WITH c.seq AS seq ")
+# Never overwrite a newer copy: another machine may have pushed a later version
+# of the node than this one holds, and a whole-node SET would erase it.
+_NODE_UPSERT = (_CLOCK + "UNWIND $nodes AS n MERGE (x:Node {id:n.id}) "
+                "WITH x, n, seq WHERE x.updated IS NULL OR x.updated <= n.updated "
+                "SET x = n, x._seq = seq, x._origin = $origin")
+_EDGE_UPSERT = (_CLOCK + "UNWIND $edges AS e MATCH (a:Node {id:e.src}),(b:Node {id:e.dst}) "
+                "MERGE (a)-[r:REL {rel:e.rel}]->(b) "
+                "SET r = e.p, r._seq = seq, r._origin = $origin")
+_NODE_DEL = (_CLOCK + "UNWIND $ids AS i OPTIONAL MATCH (x:Node {id:i}) DETACH DELETE x "
+             "WITH DISTINCT i, seq MERGE (t:Tombstone {uid:'node' + $sep + i}) "
+             "SET t.kind='node', t.ref=i, t._seq=seq, t._origin=$origin")
+_EDGE_DEL = (_CLOCK + "UNWIND $edges AS e "
+             "OPTIONAL MATCH (:Node {id:e.src})-[r:REL {rel:e.rel}]->(:Node {id:e.dst}) "
+             "DELETE r WITH DISTINCT e, seq MERGE (t:Tombstone {uid:'edge' + $sep + e.ref}) "
+             "SET t.kind='edge', t.ref=e.ref, t._seq=seq, t._origin=$origin")
+_ROW_UPSERT = (_CLOCK + "UNWIND $rows AS w MERGE (x:MirrorRow {uid:w.uid}) "
+               "SET x.table=w.table, x.key=w.key, x.data=w.data, "
+               "x._seq = seq, x._origin = $origin")
+_ROW_DEL = (_CLOCK + "UNWIND $uids AS u OPTIONAL MATCH (x:MirrorRow {uid:u}) DELETE x "
+            "WITH DISTINCT u, seq MERGE (t:Tombstone {uid:'row' + $sep + u}) "
+            "SET t.kind='row', t.ref=u, t._seq=seq, t._origin=$origin")
+_FILE_UPSERT = (_CLOCK + "UNWIND $files AS f MERGE (x:MirrorFile {path:f.path}) "
+                "SET x.content=f.content, x.sha=f.sha, x._seq = seq, x._origin = $origin")
+
+# Stamps the master adds; not part of what was pushed.
+MIRROR_STAMPS = ("_seq", "_origin")
+
+
+def _ensure_mirror_triggers(con) -> None:
+    """Queue every change to a mirrored table in the outbox, whoever makes it.
+
+    `_after_write` only sees writes that go through it, and several paths write
+    SQL directly (rule ingest, bulk imports, `_touch`, the trigger engine's own
+    tables). A trigger catches all of them, so nothing reaches the local file
+    without also being on its way to the master. Only the key is queued; the
+    flush reads the row's state at push time, so a burst of changes to one row
+    costs one push. `_touch` now queues too, but it still never pushes: the
+    reinforcement rides along with the next real write's flush.
+
+    A row in `mirror_mute` silences them: a pull writes what came FROM the
+    master, and queueing it would send every pulled change straight back."""
+    ts = "strftime('%Y-%m-%dT%H:%M:%S+00:00','now')"
+    sep = "char(31)"
+    when = "WHEN NOT EXISTS (SELECT 1 FROM mirror_mute)"
+    # triggers from before the mute existed are replaced, not kept beside it
+    old = [r[0] for r in con.execute(
+        "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'mirror\\_%' "
+        "ESCAPE '\\' AND sql NOT LIKE '%mirror_mute%'")]
+    for name in old:
+        con.execute(f"DROP TRIGGER IF EXISTS {name}")
+    stmts = []
+    for op in ("insert", "update", "delete"):
+        refs = {"insert": ["new"], "update": ["old", "new"], "delete": ["old"]}[op]
+        node_vals = ", ".join(f"('node', {r}.id, {ts})" for r in refs)
+        edge_vals = ", ".join(
+            f"('edge', {r}.src || {sep} || {r}.dst || {sep} || {r}.rel, {ts})"
+            for r in refs)
+        stmts.append(f"CREATE TRIGGER IF NOT EXISTS mirror_nodes_{op} AFTER {op.upper()} "
+                     f"ON nodes {when} BEGIN INSERT INTO outbox(kind,ref,created) "
+                     f"VALUES {node_vals}; END")
+        stmts.append(f"CREATE TRIGGER IF NOT EXISTS mirror_edges_{op} AFTER {op.upper()} "
+                     f"ON edges {when} BEGIN INSERT INTO outbox(kind,ref,created) "
+                     f"VALUES {edge_vals}; END")
+    have = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    for table, pk in MIRROR_TABLES.items():
+        if table not in have:
+            continue          # created later by its owner, who calls this again
+        for op in ("insert", "update", "delete"):
+            refs = {"insert": ["new"], "update": ["old", "new"], "delete": ["old"]}[op]
+            vals = ", ".join(
+                f"('row', '{table}' || {sep} || json_array({', '.join(f'{r}.{c}' for c in pk)}), {ts})"
+                for r in refs)
+            stmts.append(f"CREATE TRIGGER IF NOT EXISTS mirror_{table}_{op} AFTER "
+                         f"{op.upper()} ON {table} {when} BEGIN "
+                         f"INSERT INTO outbox(kind,ref,created) VALUES {vals}; END")
+    for s in stmts:
+        con.execute(s)
 
 
 def _enqueue(con, kind, ref):
     con.execute("INSERT INTO outbox(kind,ref,created) VALUES(?,?,?)", (kind, ref, now()))
+
+
+def _mirror_map(raw_props, fixed: dict) -> dict:
+    """The property map a node or edge is written with: props flattened (for
+    queries) where they don't clash with a fixed field, the fixed fields, and the
+    props verbatim in `_props` (for restore)."""
+    try:
+        props = json.loads(raw_props or "{}")
+    except (json.JSONDecodeError, TypeError):
+        props = {}
+    if not isinstance(props, dict):
+        props = {}
+    m = {k: v for k, v in _clean_props(props).items()
+         if k not in fixed and k not in NODE_FIELDS and not k.startswith("_")}
+    m.update(fixed)
+    m["_props"] = raw_props if raw_props is not None else "{}"
+    return m
 
 
 def _node_payload(con, nid):
@@ -657,13 +815,43 @@ def _node_payload(con, nid):
     if not r:
         return None
     d = dict(r)
+    m = _mirror_map(d.get("props"), {
+        "id": d["id"], "type": d["type"], "title": d["title"], "body": d["body"],
+        "status": d["status"], "due": d["due"], "created": d["created"],
+        "updated": d["updated"], "realm": d.get("realm") or DEFAULT_REALM})
+    if d.get("realm") != m["realm"]:
+        m["_realm"] = d.get("realm")      # the stored value, when it isn't the one shown
+    return m
+
+
+def _edge_payload(con, src, dst, rel):
+    r = con.execute("SELECT props, created FROM edges WHERE src=? AND dst=? AND rel=?",
+                    (src, dst, rel)).fetchone()
+    if not r:
+        return None
+    return {"src": src, "dst": dst, "rel": rel,
+            "p": _mirror_map(r["props"], {"rel": rel, "created": r["created"]})}
+
+
+def _row_payload(con, table, key):
+    """One mirrored row, or None if it is gone. `key` is the JSON array the
+    trigger wrote, which is also the row's identity on the master."""
+    pk = MIRROR_TABLES.get(table)
+    if not pk:
+        return None
     try:
-        props = _clean_props(json.loads(d.get("props") or "{}"))
+        vals = json.loads(key)
+    except json.JSONDecodeError:
+        return None
+    where = " AND ".join(f"{c}=?" for c in pk)
+    try:
+        r = con.execute(f"SELECT * FROM {table} WHERE {where}", vals).fetchone()
     except Exception:
-        props = {}
-    return {"id": d["id"], "type": d["type"], "title": d["title"], "body": d["body"],
-            "status": d["status"], "due": d["due"], "created": d["created"],
-            "updated": d["updated"], "realm": d.get("realm") or DEFAULT_REALM, "props": props}
+        return None
+    if not r:
+        return None
+    return {"uid": table + EDGE_SEP + key, "table": table, "key": key,
+            "data": json.dumps(dict(r), ensure_ascii=False)}
 
 
 FLUSH_BATCH = 300      # ops per transaction; ~2s against the master at this size
@@ -671,26 +859,49 @@ FLUSH_TIMEOUT = 120    # generous: a timeout here wedges the queue, see _flush
 
 
 def _flush_batch(con, rows):
-    """Push one batch of outbox rows. Returns (ok, error, counts)."""
-    node_ids, edge_refs, del_ids, del_edges = set(), set(), set(), set()
+    """Push one batch of outbox rows. Returns (ok, error, counts).
+
+    Each queued ref is pushed as its CURRENT local state: present locally means
+    upsert, gone means delete, whatever kind the op was queued as. Reading the
+    kind instead got delete-then-recreate backwards (the upsert went first and
+    the delete won), and the local file is the truth the master mirrors."""
+    node_ids, edge_refs, row_refs = set(), set(), set()
     for r in rows:
-        if r["kind"] == "node":
+        kind = r["kind"]
+        if kind in ("node", "del_node"):
             node_ids.add(r["ref"])
-        elif r["kind"] == "edge":
+        elif kind in ("edge", "del_edge"):
             edge_refs.add(r["ref"])
-        elif r["kind"] == "del_node":
-            del_ids.add(r["ref"])
-        elif r["kind"] == "del_edge":
-            del_edges.add(r["ref"])
-    nodes = [n for n in (_node_payload(con, i) for i in node_ids) if n]
-    edges = []
+        elif kind in ("row", "del_row"):
+            row_refs.add(r["ref"])
+    nodes, del_ids = [], []
+    for i in node_ids:
+        p = _node_payload(con, i)
+        if p:
+            nodes.append(p)
+        else:
+            del_ids.append(i)
+    edges, dedges = [], []
     for ref in edge_refs:
-        s, d, rel = ref.split(EDGE_SEP)
-        if con.execute("SELECT 1 FROM edges WHERE src=? AND dst=? AND rel=?", (s, d, rel)).fetchone():
-            edges.append({"src": s, "dst": d, "rel": rel})
-    dedges = [dict(zip(("src", "dst", "rel"), ref.split(EDGE_SEP))) for ref in del_edges]
+        parts = ref.split(EDGE_SEP)
+        if len(parts) != 3:
+            continue
+        p = _edge_payload(con, *parts)
+        if p:
+            edges.append(p)
+        else:
+            dedges.append({**dict(zip(("src", "dst", "rel"), parts)), "ref": ref})
+    up_rows, del_rows = [], []
+    for ref in row_refs:
+        table, _, key = ref.partition(EDGE_SEP)
+        p = _row_payload(con, table, key)
+        if p:
+            up_rows.append(p)
+        elif table in MIRROR_TABLES:
+            del_rows.append(ref)
     counts = {"nodes": len(nodes), "edges": len(edges),
-              "del_nodes": len(del_ids), "del_edges": len(dedges)}
+              "del_nodes": len(del_ids), "del_edges": len(dedges),
+              "rows": len(up_rows), "del_rows": len(del_rows)}
     stmts = []
     if nodes:
         stmts.append({"statement": _NODE_UPSERT, "parameters": {"nodes": nodes}})
@@ -699,11 +910,60 @@ def _flush_batch(con, rows):
     if dedges:
         stmts.append({"statement": _EDGE_DEL, "parameters": {"edges": dedges}})
     if del_ids:
-        stmts.append({"statement": _NODE_DEL, "parameters": {"ids": list(del_ids)}})
+        stmts.append({"statement": _NODE_DEL, "parameters": {"ids": del_ids}})
+    if up_rows:
+        stmts.append({"statement": _ROW_UPSERT, "parameters": {"rows": up_rows}})
+    if del_rows:
+        stmts.append({"statement": _ROW_DEL, "parameters": {"uids": del_rows}})
     if not stmts:
         return True, None, counts          # nothing left to push; safe to dequeue
-    ok, err = _neo4j_call(stmts, timeout=FLUSH_TIMEOUT)
+    _ensure_schema_once()
+    ok, err = _neo4j_call(_stamped(con, stmts), timeout=FLUSH_TIMEOUT)
     return ok, err, counts
+
+
+def _stamped(con, stmts):
+    """Give every write the parameters its stamp needs."""
+    origin = machine_id(con)
+    for s in stmts:
+        s.setdefault("parameters", {}).update(origin=origin, sep=EDGE_SEP)
+    return stmts
+
+
+def _sync_get(con, key, default=""):
+    r = con.execute("SELECT value FROM sync_state WHERE key=?", (key,)).fetchone()
+    return r[0] if r else default
+
+
+def _sync_set(con, key, value) -> None:
+    con.execute("INSERT INTO sync_state(key,value) VALUES(?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, str(value)))
+
+
+def machine_id(con) -> str:
+    """Who this brain file is on the master, made once. A pull skips changes it
+    wrote itself: it already holds them, and applying its own echo could only
+    ever roll something back."""
+    mid = _sync_get(con, "machine_id")
+    if not mid:
+        import socket
+        host = slugify(socket.gethostname().split(".")[0])[:24] or "machine"
+        mid = f"{host}-{secrets.token_hex(3)}"
+        _sync_set(con, "machine_id", mid)
+        con.commit()
+    return mid
+
+
+_SCHEMA_CHECKED = False
+
+
+def _ensure_schema_once() -> None:
+    """The constraints, once per process, before the first push. Best effort: a
+    failure here is retried by the next process, and the push itself reports."""
+    global _SCHEMA_CHECKED
+    if not _SCHEMA_CHECKED:
+        ok, _ = _ensure_neo4j_schema()
+        _SCHEMA_CHECKED = ok
 
 
 def _flush(con):
@@ -720,7 +980,8 @@ def _flush(con):
     Each batch is deleted from the queue only after its push succeeds, so an
     interruption costs at most a replay of one batch (every statement is an
     idempotent MERGE/DELETE, so replay is safe)."""
-    pushed = {"nodes": 0, "edges": 0, "del_nodes": 0, "del_edges": 0}
+    pushed = {"nodes": 0, "edges": 0, "del_nodes": 0, "del_edges": 0,
+              "rows": 0, "del_rows": 0}
     batches = 0
     while True:
         rows = con.execute(
@@ -4145,9 +4406,9 @@ def _strength(props: dict) -> float:
 
 
 def _touch(con, ids) -> None:
-    """Reinforce on READ — reading is what strengthens a memory. Deliberately
-    local-only: it does NOT enqueue a neo4j sync, because a read storm must not
-    become a write storm. Strength rides along on the node's next real write."""
+    """Reinforce on READ — reading is what strengthens a memory. It never PUSHES
+    to neo4j, because a read storm must not become a write storm; the mirror
+    trigger queues the node, and it rides along with the next real write's flush."""
     ts = now()
     for nid in set(i for i in ids if i):
         row = con.execute("SELECT props FROM nodes WHERE id=?", (nid,)).fetchone()
@@ -4900,7 +5161,10 @@ def cmd_neo4j_status(args):
     cfg = _neo4j_cfg()
     pending = con.execute("SELECT COUNT(*) c FROM outbox").fetchone()["c"]
     res = {"ok": True, "configured": bool(cfg["url"] and cfg["password"]),
-           "url": cfg["url"], "up": _neo4j_up(), "pending_ops": pending}
+           "url": cfg["url"], "up": _neo4j_up(), "pending_ops": pending,
+           "machine": _sync_get(con, "machine_id"),
+           "pulled_to": int(_sync_get(con, "pull_seq", "0") or 0),
+           "last_sync": _sync_get(con, "last_sync")}
     # `up` only proves the root URL answers a GET. It stayed true for a whole day
     # while every flush timed out, so report whether the tx endpoint actually
     # works too — that is the thing sync depends on.
@@ -4910,6 +5174,12 @@ def cmd_neo4j_status(args):
         if not ok:
             res["error"] = err
     out(res)
+
+
+def cmd_sync(args):
+    """Two-way sync with the master: pull what other machines wrote, then push."""
+    import brain_sync
+    out(brain_sync.sync_now())
 
 
 def cmd_sections(args):
@@ -5148,7 +5418,14 @@ and the whole graph cross the network on every write.
 
 - `neo4j-status` — configured / reachable / pending op count.
 - `flush` — drain the outbox.
-- `scripts/brain_sync.py` — full bulk reconcile.
+- `scripts/brain_sync.py` — full bulk reconcile; `--verify` compares local and
+  master, `--pull [--replace]` rebuilds the brain from the master.
+- The mirror is complete: SQLite triggers queue every change to nodes, edges and
+  `MIRROR_TABLES` (as :MirrorRow), and the home's own files go as :MirrorFile.
+- `sync` — two-way: pull what any other writer put on the master (stamped
+  `_seq`/`_origin`, deletes as :Tombstone), then push. The server runs it every
+  minute. This is the road to retiring SQLite: once neo4j is fed directly, SQLite
+  becomes a cache of it. Every direct write to neo4j must carry the same stamp.
 - `$MEMORY_LEDGER_NO_AUTOSYNC=1`, or the `autosync` setting turned off — queue
   without per-op push (bulk loads), then flush. The env var is the negative and
   outranks the file, like every other switch in the engine.
@@ -6192,6 +6469,9 @@ def build_parser():
 
     a = sub.add_parser("flush").set_defaults(func=cmd_flush)
     sub.add_parser("neo4j-status").set_defaults(func=cmd_neo4j_status)
+    sub.add_parser("sync", description="Two-way sync with the neo4j master: pull "
+                   "other machines' changes, then push this one's."
+                   ).set_defaults(func=cmd_sync)
     sub.add_parser("sections").set_defaults(func=cmd_sections)
     a = sub.add_parser("rename-realm", help="move every node in one realm to another "
                                             "(merges if the new one exists)")

@@ -323,7 +323,18 @@ unless you configure it. When the mirror is unreachable the change is queued in 
 `flush`, so losing the mirror never blocks or loses a write.
 - `neo4j-status` — configured / reachable / pending-ops · `flush` — drain the queue.
 - `$SECOND_BRAIN_NO_AUTOSYNC=1` queues without per-op push (for heavy batch loads;
-  `flush` afterwards) · `scripts/brain_sync.py` does a full bulk reconcile.
+  `flush` afterwards) · `scripts/brain_sync.py` does a full bulk reconcile,
+  `--verify` proves the master holds everything, `--pull` restores from it.
+- The mirror is COMPLETE: SQLite triggers queue every change to `nodes`, `edges` and
+  `graph.MIRROR_TABLES` into the outbox, whatever code path made it. A new table a
+  restore would need goes in `MIRROR_TABLES`; a derived one stays out.
+- Sync is two-way: `graph.py sync` pulls every master change stamped after this
+  file's `pull_seq` by another writer, then pushes. It is the road to retiring
+  SQLite (docs/neo4j.md#the-road-off-sqlite), so two rules hold now:
+  **every write to neo4j is stamped** (`_seq` from `:SyncClock`, `_origin`, deletes
+  as `:Tombstone` — reuse `graph._NODE_UPSERT` and friends), or `sync` never sees
+  it; and **pulled data is written with the triggers muted** (`mirror_mute`), or it
+  echoes straight back up.
 - The visualizer (`scripts/serve.py`) reads the mirror when one is reachable, else the
   local file.
 

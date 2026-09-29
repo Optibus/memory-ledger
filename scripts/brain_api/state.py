@@ -21,3 +21,7 @@ UI_PROBLEM = ""
 # (brain_api/trigger_runtime.py). Off unless serve.py turns it on, so a server
 # built by a test never reaches out to Slack.
 TRIGGERS = False
+
+# Whether the lifespan runs the two-way neo4j sync loop (brain_api/sync_runtime.py).
+# Off unless serve.py turns it on, for the same reason.
+SYNC = False

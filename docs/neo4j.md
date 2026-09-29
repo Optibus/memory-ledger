@@ -159,12 +159,98 @@ UI's **Settings › Database connection** writes.)
 ```bash
 python3 scripts/brain_sync.py --dry-run    # show what would be sent
 python3 scripts/brain_sync.py              # push everything
+python3 scripts/brain_sync.py --verify     # does the master hold ALL of it? exit 1 on a gap
 python3 scripts/graph.py neo4j-status      # reachable? outbox depth?
 python3 scripts/graph.py flush             # drain pending writes
 ```
 
 `brain_sync.py` is idempotent — it `MERGE`s on `id`, so re-running updates rather
-than duplicating.
+than duplicating. It never overwrites a node the master holds a NEWER `updated`
+for, so a stale machine cannot roll back another one's edit.
+
+### The road off SQLite
+
+SQLite is still the source of truth today, and the plan is to retire it: neo4j
+becomes the only store. Everything below exists to make that switch a small step
+instead of a migration:
+
+1. **neo4j holds everything SQLite holds**, losslessly — nothing lives only in
+   the local file (*What the master holds*).
+2. **Every write reaches neo4j**, whichever code path makes it (SQLite triggers).
+3. **SQLite can be fed FROM neo4j** — incrementally (`sync`) or from nothing
+   (`--pull`). Once a write made directly in neo4j flows down, the engine can
+   start writing to neo4j first and SQLite becomes a cache, then goes away.
+4. **`--verify` proves the two agree**, so each step can be checked, not trusted.
+
+Still to do before SQLite can go: the engine's reads and writes are SQL
+(`graph.py`), full-text search is SQLite FTS5, and the side tables travel as
+`:MirrorRow` JSON rather than labels of their own.
+
+### What the master holds
+
+The master is a **complete copy** of the local file — enough to rebuild the
+brain from nothing.
+
+| on the master | what |
+|---|---|
+| `:Node` | every node. Props flattened for queries, and verbatim in `_props` for restore (a prop named like a column, e.g. `status`, survives only there) |
+| `:REL` | every edge, with its props (`_props`) and `created` |
+| `:MirrorRow {uid, table, key, data}` | every row of `graph.MIRROR_TABLES`: trigger requests/actions/gates/channels/checkpoints and the co-activation tally, as JSON |
+| `:MirrorFile {path, content, sha}` | the home's own files: `settings.json`, `ui_prefs.json`, `eval_cases.json`, `README.md`, `scripts/`, `references/`, `learned_skills/` |
+
+Not mirrored: secrets (`neo4j.json`, `trigger.json` — keep those in a password
+manager), `blocked_item` (a projection, rebuilt on restore), and derived folders
+(`exports/`, `bundles/`, `backups/`, `logs/`).
+
+Every change reaches the outbox through **SQLite triggers** on those tables, so a
+write that bypasses the engine's API (direct SQL, bulk ingest, the trigger engine)
+is still mirrored. The session-start hook also runs a full `brain_sync.py` once a
+day, which is what carries the files.
+
+### Two-way sync
+
+SQLite syncs **up and down** with the master:
+
+```bash
+python3 scripts/brain_sync.py --sync     # or: python3 scripts/graph.py sync
+```
+
+Pull first, then push. It runs by itself **every 60 s in the brain server**
+(`$MEMORY_LEDGER_SYNC_SECONDS`; off for a `--no-write` server) and, detached,
+**at every session start**.
+
+How it knows what is new: every write to the master takes the next number from
+one `:SyncClock` node and stamps it (`_seq`) with the writer that made it
+(`_origin`); a delete leaves a `:Tombstone` with the same stamp. A local file
+pulls everything after the last number it saw, skipping its own writes. Pulled
+changes are applied with the mirror triggers muted, so they are never sent back.
+
+**The write contract.** Anything that writes to neo4j directly — the engine once
+it writes there first, a script, a person in the browser — must stamp the write
+the same way (take `_seq` from `:SyncClock`, set `_origin`, delete through a
+`:Tombstone`). The statements in `graph.py` (`_NODE_UPSERT`, `_NODE_DEL`, …) are
+the reference. An unstamped write is invisible to `sync` and only reaches SQLite
+through a full `--pull`.
+
+| conflict | who wins |
+|---|---|
+| a node changed on both sides | the newer `updated`, on both |
+| an edge or row with a change still queued here | the local one (they carry no time) |
+| a delete against an edit | the edit — nothing is lost to a race |
+| a file edited on both sides | the local file stays; the other copy lands beside it as `<name>.conflict-<writer>` (never mirrored itself) |
+
+`neo4j-status` shows this file's writer id, how far it has pulled, and the last sync.
+
+### Restore from it
+
+```bash
+python3 scripts/brain_sync.py --pull              # rebuild into graph.db.restored-<ts>, touch nothing
+python3 scripts/brain_sync.py --pull --replace    # ...and swap it in; the old file goes to backups/
+```
+
+The restore refuses an empty master, integrity-checks the new file before any
+swap, and writes home files only where none exist (`--overwrite-files` to
+replace them).
 
 ### Read from it
 
