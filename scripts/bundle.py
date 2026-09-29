@@ -21,6 +21,15 @@ current directory.
 repo, and this only packs tracked repo files — the recipient gets the engine and
 the skills, and starts with an empty brain of their own.
 
+`--with-brain` is the one exception, and only when asked: it adds the person's
+own brain under `memory-ledger/brain/` — a consistent snapshot of `graph.db`
+(SQLite's backup API, safe while the brain is in use) and the home files the
+neo4j mirror carries (settings, user scripts, references, learned skills). Never
+secrets (`neo4j.json`, `trigger.json`). That zip is PRIVATE, so it defaults to
+`<home>/exports/` instead of `dist/`:
+
+    python3 scripts/bundle.py --with-brain    # ~/.second_brain/exports/memory-ledger-<v>-with-brain.zip
+
 `--include <path>` rides an extra file along that is deliberately NOT in the
 repo. The plugin is company-agnostic, so anything company-specific — an exported
 set of team rules, an internal runbook — lives outside it (`~/.second_brain/…`)
@@ -37,9 +46,11 @@ import subprocess
 import sys
 import zipfile
 from datetime import datetime, timezone
+import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO / "scripts"))
 PLUGIN_JSON = REPO / ".claude-plugin" / "plugin.json"
 
 # Docs a person reads first, in the order they need them. Named so a missing one
@@ -125,7 +136,7 @@ mkdir -p ~/.second_brain
 python3 ~/dev/memory-ledger/scripts/graph.py init
 ```
 
-Set your timezone once (Settings in the UI, or `export SECOND_BRAIN_TZ=...`), and
+{brain_note}Set your timezone once (Settings in the UI, or `export SECOND_BRAIN_TZ=...`), and
 you are done. Your data is one SQLite file at `~/.second_brain/graph.db` — local,
 offline, connected to nothing.
 
@@ -160,6 +171,55 @@ brain survives either way.)
 """
 
 
+BRAIN_NOTE = """**This zip carries a brain** (`memory-ledger/brain/`, snapshot of {taken}).
+Restore it INSTEAD of running `init`, straight from the zip:
+
+```
+python3 ~/dev/memory-ledger/scripts/restore.py memory-ledger-{version}-with-brain.zip
+```
+
+It integrity-checks the backup before touching anything, refuses to overwrite a
+brain that is already there (`--replace` snapshots that one first), and keeps any
+home file that already exists (`--overwrite-files` saves each one it replaces).
+`--dry-run` shows what it would do.
+
+Secrets are not in the zip: re-enter the neo4j connection (Settings › Database
+connection, or `~/.second_brain/neo4j.json`) and the trigger tokens
+(`~/.second_brain/trigger.json`) on the new machine.
+
+"""
+
+
+def brain_snapshot(tmp: Path) -> tuple[Path, list[dict]]:
+    """A consistent copy of the live graph.db, plus the home files to carry.
+
+    The backup API copies a page-consistent snapshot even while the server or a
+    hook is writing, where a plain file copy can catch a half-written page. The
+    snapshot forgets which sync writer it was (`machine_id`): two brains restored
+    from one zip must not both skip each other's writes as their own."""
+    import sqlite3
+    import brain_sync
+    import graph
+    src = graph.db_path()
+    if not src.is_file():
+        raise SystemExit(f"--with-brain: no brain at {src}")
+    dest = tmp / "graph.db"
+    live = sqlite3.connect(str(src))
+    snap = sqlite3.connect(str(dest))
+    try:
+        live.backup(snap)
+        if snap.execute("SELECT 1 FROM sqlite_master WHERE name='sync_state'").fetchone():
+            snap.execute("DELETE FROM sync_state WHERE key='machine_id'")
+            snap.commit()
+        check = snap.execute("PRAGMA integrity_check").fetchone()[0]
+    finally:
+        snap.close()
+        live.close()
+    if check != "ok":
+        raise SystemExit(f"--with-brain: the snapshot failed its integrity check ({check})")
+    return dest, brain_sync.local_files(graph.home_dir())
+
+
 def extras_note(extras: list[str]) -> str:
     """The INSTALL-FROM-ZIP bullet for `--include`d files. Empty when there are
     none, because the plugin itself ships nothing company-specific."""
@@ -171,8 +231,10 @@ def extras_note(extras: list[str]) -> str:
     return "\n".join(lines)
 
 
-def manifest(files: list[str], info: dict, ver: str, extras: list[str] | None = None) -> str:
+def manifest(files: list[str], info: dict, ver: str, extras: list[str] | None = None,
+             brain: list[str] | None = None) -> str:
     extras = extras or []
+    brain = brain or []
     lines = [
         "Memory Ledger (memory-ledger) — offline bundle",
         f"version      {ver}",
@@ -182,11 +244,14 @@ def manifest(files: list[str], info: dict, ver: str, extras: list[str] | None = 
         f"head date    {info.get('date', 'unknown')}",
         f"head subject {info.get('subject', 'unknown')}",
         f"files        {len(files)} tracked + this manifest + INSTALL-FROM-ZIP.md"
-        + (f" + {len(extras)} attached" if extras else ""),
+        + (f" + {len(extras)} attached" if extras else "")
+        + (f" + brain ({len(brain)} files)" if brain else ""),
         "",
         "START HERE   INSTALL-FROM-ZIP.md",
         "",
-        "Contains no brain data: the graph lives in ~/.second_brain, outside the repo.",
+        ("CONTAINS A BRAIN under brain/ (--with-brain): personal data — share it only "
+         "with its owner. Secrets are never included." if brain else
+         "Contains no brain data: the graph lives in ~/.second_brain, outside the repo."),
         "The plugin is company-agnostic; anything under 'Attached' below was added "
         "with --include and is not part of it.",
         "",
@@ -195,19 +260,26 @@ def manifest(files: list[str], info: dict, ver: str, extras: list[str] | None = 
     lines += [f"  {f}" for f in files]
     if extras:
         lines += ["", "Attached (--include):"] + [f"  {n}" for n in extras]
+    if brain:
+        lines += ["", "Brain (--with-brain):"] + [f"  brain/{n}" for n in brain]
     return "\n".join(lines) + "\n"
 
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--out", default=str(REPO / "dist"),
-                   help="output directory (default dist/)")
+    p.add_argument("--out", default=None,
+                   help="output directory (default dist/, or <home>/exports/ with "
+                        "--with-brain)")
     p.add_argument("--name", help="archive filename (default memory-ledger-<version>.zip)")
     p.add_argument("--include", action="append", default=[], metavar="PATH",
                    help="attach a file that is NOT in the repo (repeatable) — e.g. an "
                         "exported set of team rules from ~/.second_brain. It lands at "
                         "the archive root and is listed as 'attached', never as part "
                         "of the plugin.")
+    p.add_argument("--with-brain", action="store_true",
+                   help="also pack your brain under brain/: a consistent snapshot of "
+                        "graph.db and the non-secret home files. PRIVATE — defaults "
+                        "to <home>/exports/ instead of dist/.")
     p.add_argument("--list", action="store_true", dest="list_only",
                    help="print what would be packed and exit")
     args = p.parse_args(argv)
@@ -238,18 +310,41 @@ def main(argv=None) -> int:
         attached.append(src)
     extras = [s.name for s in attached]
 
+    # the snapshot is personal data: whatever happens, it never outlives the run
+    tmp = Path(tempfile.mkdtemp(prefix="memory-ledger-bundle-"))
+    try:
+        return _build(args, files, info, ver, extras, attached, tmp)
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _build(args, files, info, ver, extras, attached, tmp: Path) -> int:
+    db_snap, home_files = (brain_snapshot(tmp) if args.with_brain else (None, []))
+    brain = (["graph.db"] + [f["path"] for f in home_files]) if args.with_brain else []
+
     if args.list_only:
-        print(manifest(files, info, ver, extras))
+        print(manifest(files, info, ver, extras, brain))
         return 0
 
-    out_dir = Path(args.out).expanduser()
+    if args.out:
+        out_dir = Path(args.out).expanduser()
+    elif args.with_brain:
+        import graph
+        out_dir = graph.home_dir() / "exports"
+    else:
+        out_dir = REPO / "dist"
     out_dir.mkdir(parents=True, exist_ok=True)
-    target = out_dir / (args.name or f"memory-ledger-{ver}.zip")
+    suffix = "-with-brain" if args.with_brain else ""
+    target = out_dir / (args.name or f"memory-ledger-{ver}{suffix}.zip")
     root = "memory-ledger"         # single top-level dir: unzip never spills
 
+    taken = datetime.now(timezone.utc).isoformat(timespec="seconds")
     install = INSTALL_FROM_ZIP.format(version=ver, commit=info.get("commit", "unknown"),
                                       date=(info.get("date") or "unknown")[:10],
-                                      extras_note=extras_note(extras))
+                                      extras_note=extras_note(extras),
+                                      brain_note=(BRAIN_NOTE.format(taken=taken, version=ver)
+                                                  if args.with_brain else ""))
     with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as z:
         for rel in files:
             src = REPO / rel
@@ -258,11 +353,23 @@ def main(argv=None) -> int:
             z.write(src, f"{root}/{rel}")
         for src in attached:
             z.write(src, f"{root}/{src.name}")
+        if db_snap:
+            z.write(db_snap, f"{root}/brain/graph.db")
+            import graph
+            home = graph.home_dir()
+            for f in home_files:       # write(), not writestr(): keeps the +x bit
+                z.write(home / f["path"], f"{root}/brain/{f['path']}")
         z.writestr(f"{root}/INSTALL-FROM-ZIP.md", install)
-        z.writestr(f"{root}/BUNDLE.txt", manifest(files, info, ver, extras))
+        z.writestr(f"{root}/BUNDLE.txt", manifest(files, info, ver, extras, brain))
+    if args.with_brain:
+        target.chmod(0o600)            # personal data: owner-only, like neo4j.json
 
     size = target.stat().st_size / 1024
-    print(f"{target}  ({size:.0f} KiB, {len(files) + len(attached) + 2} files)")
+    print(f"{target}  ({size:.0f} KiB, "
+          f"{len(files) + len(attached) + len(brain) + 2} files)")
+    if brain:
+        print(f"  brain: graph.db + {len(home_files)} home files — PRIVATE, share only "
+              "with its owner (secrets not included)")
     for name in extras:
         print(f"  attached: {name}  (not part of the plugin)")
     if info.get("dirty"):

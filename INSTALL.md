@@ -368,6 +368,7 @@ python3 scripts/bundle.py                  # dist/memory-ledger-<version>.zip
 python3 scripts/bundle.py --list           # what would go in
 python3 scripts/bundle.py --out ~/Desktop
 python3 scripts/bundle.py --include ~/.second_brain/exports/<your-doc>.md
+python3 scripts/bundle.py --with-brain     # engine + YOUR brain, into ~/.second_brain/exports/
 ```
 
 It packs **git-tracked files only** — so `.gitignore` decides what is excluded and
@@ -376,6 +377,36 @@ top-level `memory-ledger/` directory, and generates two files into the archive:
 `INSTALL-FROM-ZIP.md` (the recipient's whole procedure) and `BUNDLE.txt` (version,
 commit, file list). Anything untracked is reported as a warning and left out, so
 `git add` new files before building.
+
+**`--with-brain` to move or back up the whole thing.** The one way brain data gets
+into a bundle, and only when asked: it adds `memory-ledger/brain/` with a
+consistent snapshot of `graph.db` (SQLite's backup API, safe while the server is
+writing) and the home files the neo4j mirror carries — settings, your scripts
+(executable bits kept), references, learned skills. Secrets (`neo4j.json`,
+`trigger.json`) are never packed; the snapshot forgets its sync writer id, so a
+copy restored elsewhere is a new writer. The zip is personal data: it defaults to
+`~/.second_brain/exports/` (never `dist/`), is written owner-only (`0600`), and its
+`INSTALL-FROM-ZIP.md` says how to put the brain in place without overwriting one.
+
+**Restoring a backup: `scripts/restore.py`.** One script for both kinds of backup
+— a `--with-brain` zip or a `.db` snapshot from `~/.second_brain/backups/`:
+
+```
+python3 scripts/restore.py --list                 # the backups it can find
+python3 scripts/restore.py BACKUP --dry-run       # what it would do
+python3 scripts/restore.py BACKUP                 # onto a home with no brain yet
+python3 scripts/restore.py BACKUP --replace       # over the current brain
+```
+
+The backup is unpacked to a temp dir and integrity-checked before anything is
+touched, so a bad backup restores nothing. An existing brain is never overwritten
+without `--replace`, and with it the current one is first kept as
+`backups/graph.db.pre-restore-<stamp>` (never pruned). Existing home files are
+kept unless `--overwrite-files`, which saves each one it replaces. The database is
+written in place through SQLite's backup API, so a running server sees the
+restored brain without a restart. With a neo4j master configured, the next sync
+brings down what was written there after the backup — right for a lost machine,
+worth knowing before a rollback.
 
 **`--include` for anything company-specific.** The plugin is agnostic — it holds no
 company's rules, runbooks or names. Material like that belongs outside the repo (in

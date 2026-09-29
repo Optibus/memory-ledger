@@ -160,7 +160,8 @@ def db_path() -> Path:
 # reversible — undoing a run means unpicking a digest and a props key from every
 # capture it touched, which is exactly the kind of work nobody wants to do at
 # the moment they realise they want it. So a run takes a snapshot of the whole
-# file first and you restore by copying one file back.
+# file first, and `scripts/restore.py <snapshot>` puts it back (checked first,
+# and the brain it replaces is kept).
 #
 # Snapshots expire after BACKUP_KEEP_DAYS. That IS a delete, and it is not the
 # delete §2a forbids: §2a is about the graph's own content — a task is archived,

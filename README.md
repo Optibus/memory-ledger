@@ -679,7 +679,9 @@ persistent location.
 
 **No repo access** — `python3 scripts/bundle.py` builds
 `dist/memory-ledger-<version>.zip` from the git-tracked files (no brain data), with
-an `INSTALL-FROM-ZIP.md` inside. Unzipping is the install: a plugin loads from a
+an `INSTALL-FROM-ZIP.md` inside. Add `--with-brain` for engine **and** brain in one
+private zip (a consistent `graph.db` snapshot plus your non-secret home files);
+`scripts/restore.py <zip>` puts it back ([details](INSTALL.md)). Unzipping is the install: a plugin loads from a
 directory, so `/plugin marketplace add ~/dev/memory-ledger` works on a local copy
 with no marketplace or GitHub permission.
 
