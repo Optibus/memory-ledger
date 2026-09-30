@@ -299,6 +299,7 @@ export const settingsFixture: Settings = {
     "map_poll_seconds",
     "dash_refresh_seconds",
     "ui_sync",
+    "learned_rules",
   ],
   settings: { tz: "America/Sao_Paulo", realm: "work" },
   env: {},
@@ -319,6 +320,8 @@ export const settingsFixture: Settings = {
     consolidate_source: "default",
     ui_sync: false,
     ui_sync_source: "default",
+    learned_rules: false,
+    learned_rules_source: "default",
     map_poll_seconds: 2,
     dash_refresh_seconds: 120,
   },
@@ -716,3 +719,26 @@ export function usageReportFixture(from = "", to = ""): import("@/api/types").Us
     html: `<!doctype html><html><body><h1>Where the Quota Went</h1><p>${selected.join(",")}</p></body></html>`,
   };
 }
+
+export const ruleProposalsFixture = {
+  ok: true,
+  enabled: true,
+  status: "proposed",
+  count: 1,
+  of: 1,
+  budget: 2600,
+  chars: 300,
+  truncated: false,
+  hint: "",
+  proposals: [
+    {
+      id: "proposal_0123456789",
+      status: "proposed",
+      title: "Learned: no, never use emojis in commit messages",
+      text: "no, never use emojis in commit messages",
+      count: 3,
+      sessions: 3,
+      evidence: [{ id: "capture_a", snippet: "No, never use emojis in commit messages" }],
+    },
+  ],
+};

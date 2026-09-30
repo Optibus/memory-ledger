@@ -73,6 +73,9 @@ NODE_TYPES = [
     # usage (scripts/usage_report.py): one ISO week of Claude Code usage metrics,
     # written by the person's own ingest and drawn by the Usage section.
     "usage-week",
+    # learned rules: a detector's finding, awaiting accept/reject. Never a `rule`,
+    # so match-rules cannot return it before a person says yes.
+    "rule-proposal",
 ]
 
 # Default character budget for read paths that would otherwise return whole
@@ -256,7 +259,8 @@ def learned_skills_dir() -> Path:
 # Precedence everywhere: explicit flag > env var > this file > built-in default.
 # ---------------------------------------------------------------------------
 SETTING_KEYS = ["tz", "realm", "owner", "backend", "autosync", "consolidate",
-                "map_poll_seconds", "dash_refresh_seconds", "ui_sync"]
+                "map_poll_seconds", "dash_refresh_seconds", "ui_sync",
+                "learned_rules"]
 
 # `backend` is where READS come from by default (writes always hit SQLite first
 # and mirror onward, whatever this says). `auto` is the honest setting for a
@@ -3770,6 +3774,328 @@ def cmd_match_rules(args):
          "hint": "read a full rule with get-node --id", "results": slim})
 
 
+# ---------------------------------------------------------------------------
+# learned rules — a detector that PROPOSES, never applies
+#
+# The `learned` tier (precedence 50) existed with nothing to fill it. This fills
+# it, under three constraints the rest of the brain already lives by:
+#
+#   token-free   the pass is regex + token sets over `capture` nodes the hooks
+#                already wrote. No model, so it can run unattended.
+#   opt-in       `learned_rules` is OFF until the person turns it on. Off, the
+#                detector does nothing and nothing runs automatically.
+#   proposes     a finding is a `rule-proposal` node, NOT a `rule`, so match-rules
+#                cannot return it (same trick as `rule-snapshot`, §5b.3). Only
+#                `accept-rule` turns one into a rule. Nothing is deleted: a
+#                rejected proposal stays, and is what stops its cluster coming
+#                back.
+# ---------------------------------------------------------------------------
+PROPOSAL_TYPE = "rule-proposal"
+LEARNED_RULES_SETTING = "learned_rules"
+LR_MIN_COUNT = 2            # times a correction must recur ...
+LR_MIN_SESSIONS = 2         # ... across at least this many distinct sessions
+LR_WINDOW_DAYS = 30         # how far back the pass reads
+LR_MAX_PROMPT = 400         # a correction is short; a long prompt is a task
+LR_MIN_TOKENS = 3           # fewer content words than this is too vague to cluster
+LR_SIMILARITY = 0.6         # Jaccard over content tokens
+LR_MAX_EVIDENCE = 8
+LR_OFF_HINT = ("learned rules are OFF. Turn them on with "
+               "`graph.py learned-rules on` (or the Settings page); "
+               "set it back with `learned-rules off`.")
+
+# A correction opens a clause with one of these. Matched on the accent-stripped,
+# lower-cased text, at the START of a sentence/clause only: "no" inside a
+# sentence is almost never a correction, and precision beats recall here.
+_LR_NEG = (r"no\b(?=[\s,.!:;-])|nope\b|don'?t\b|do not\b|dont\b|never\b|stop\b|"
+           r"please don'?t\b|not like (?:that|this)\b|nao\b|nunca\b|pare de\b|"
+           r"para de\b|jamais\b")
+_LR_POS = r"always\b|sempre\b"
+_LR_ANY = (r"i (?:said|told you|asked)\b|instead\b|rather than\b|"
+           r"eu (?:disse|falei|pedi)\b|em vez\b|ao inves\b")
+_LR_CUE = re.compile(r"^(?:(?P<neg>%s)|(?P<pos>%s)|(?P<any>%s))" % (_LR_NEG, _LR_POS, _LR_ANY))
+_LR_LEAD = re.compile(r"^(?:ok|okay|hey|hi|oi|ola|well|so|but|mas|and|e|entao|please|por favor)\b[\s,]*")
+_LR_SPLIT = re.compile(r"(?<=[.!?;\n])\s+|\n+")
+_LR_STOP = frozenset((
+    "the a an and or to of in on for with that this it is are be as at by from "
+    "you your me my i we do does did not no dont never always stop instead said "
+    "just please again should would could can will when then than so if but "
+    "use using used make made let get got have has had was were been its "
+    "um uma uns umas o os as de do da dos das em no na nos nas para por com que "
+    "se eu voce vc meu minha nao nunca sempre pare isso isto esse essa ele ela "
+    "mas ou e ja so mais muito faz fazer faca usa usar").split())
+
+
+def _lr_fold(text: str) -> str:
+    """Lower-case and strip accents, so `não` and `nao` are one cue."""
+    t = unicodedata.normalize("NFKD", (text or "").lower().replace("’", "'"))
+    return "".join(c for c in t if not unicodedata.combining(c))
+
+
+def learned_rules_enabled() -> bool:
+    return flag(LEARNED_RULES_SETTING)
+
+
+def correction_of(prompt: str):
+    """The correction a prompt makes, or None.
+
+    Returns `{"clause", "tokens", "polarity"}`. `tokens` is a frozenset of
+    content words plus a polarity marker, so `never use X` and `always use X`
+    do not cluster. Conservative by construction: a prompt that is long, a
+    question, or holds a code fence is not a correction; the cue must open a
+    clause; and a clause with too few content words is too vague to be a rule."""
+    text = (prompt or "").strip()
+    if not text or len(text) > LR_MAX_PROMPT or "```" in text:
+        return None
+    for clause in _LR_SPLIT.split(text):
+        clause = clause.strip()
+        if not clause or clause.endswith("?"):
+            continue
+        folded = _LR_LEAD.sub("", _lr_fold(clause))
+        m = _LR_CUE.match(folded)
+        if not m:
+            continue
+        polarity = "neg" if m.group("neg") else "pos" if m.group("pos") else "any"
+        words = re.findall(r"[a-z0-9_]{3,}", folded[m.end():])
+        toks = {w for w in words if w not in _LR_STOP}
+        if len(toks) < LR_MIN_TOKENS:
+            continue
+        if polarity != "any":
+            toks.add("__" + polarity)
+        return {"clause": clause[:240], "tokens": frozenset(toks), "polarity": polarity}
+    return None
+
+
+def _lr_jaccard(a, b) -> float:
+    a, b = set(a), set(b)
+    # opposite polarity is never the same rule, however many words they share
+    if "__neg" in a and "__pos" in b or "__pos" in a and "__neg" in b:
+        return 0.0
+    return len(a & b) / len(a | b) if a and b else 0.0
+
+
+def detect_corrections(con, *, days: int = LR_WINDOW_DAYS, min_count: int = LR_MIN_COUNT,
+                       min_sessions: int = LR_MIN_SESSIONS) -> dict:
+    """Cluster the corrections in the recent user prompts. READ-ONLY.
+
+    Greedy single pass in creation order (deterministic): a correction joins the
+    first cluster whose founding member it resembles (Jaccard >= LR_SIMILARITY),
+    else founds one. A cluster qualifies at `min_count` occurrences across
+    `min_sessions` sessions."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=int(days))).isoformat()
+    rows = con.execute(
+        "SELECT id,body,props,created FROM nodes WHERE type='capture' AND created>=?"
+        " AND json_extract(props,'$.role')='user' ORDER BY created,id", (cutoff,)).fetchall()
+    clusters, scanned = [], 0
+    for r in rows:
+        scanned += 1
+        c = correction_of(r["body"])
+        if not c:
+            continue
+        props = json.loads(r["props"] or "{}")
+        item = {"id": r["id"], "session": props.get("session_id") or "",
+                "clause": c["clause"], "tokens": c["tokens"], "created": r["created"]}
+        for cl in clusters:
+            if _lr_jaccard(cl["tokens"], c["tokens"]) >= LR_SIMILARITY:
+                cl["items"].append(item)
+                break
+        else:
+            clusters.append({"tokens": c["tokens"], "items": [item]})
+    found = []
+    for cl in clusters:
+        items = cl["items"]
+        sessions = sorted({i["session"] for i in items if i["session"]})
+        if len(items) < min_count or len(sessions) < min_sessions:
+            continue
+        best = min(items, key=lambda i: (len(i["clause"]), i["created"]))
+        found.append({"tokens": sorted(cl["tokens"]), "text": best["clause"],
+                      "count": len(items), "sessions": sessions, "items": items})
+    found.sort(key=lambda f: (-f["count"], f["text"]))
+    return {"scanned": scanned, "days": int(days), "clusters": found}
+
+
+def _lr_proposals(con, status: str = "") -> list:
+    sql, params = "SELECT * FROM nodes WHERE type=?", [PROPOSAL_TYPE]
+    if status:
+        sql += " AND status=?"; params.append(status)
+    return [_node_dict(r) for r in con.execute(sql + " ORDER BY created,id", params).fetchall()]
+
+
+def _lr_link_evidence(con, src: str, evidence: list) -> None:
+    for e in evidence:
+        api_link(con, src, e["id"], "learned-from")
+
+
+def api_propose_rules(con, *, dry_run: bool = False, days: int = LR_WINDOW_DAYS,
+                      min_count: int = LR_MIN_COUNT,
+                      min_sessions: int = LR_MIN_SESSIONS) -> dict:
+    """Run the detector. A no-op, said out loud, while the setting is off."""
+    if not learned_rules_enabled():
+        return {"ok": True, "enabled": False, "ran": False, "hint": LR_OFF_HINT}
+    det = detect_corrections(con, days=days, min_count=min_count, min_sessions=min_sessions)
+    known = _lr_proposals(con)
+    created, refreshed, skipped = [], [], []
+    for cl in det["clusters"]:
+        # An existing proposal in ANY state claims the cluster, by similarity
+        # rather than by id: a rejected cluster must not come back because one
+        # more prompt nudged its wording.
+        twin = next((p for p in known
+                     if _lr_jaccard(p["props"].get("tokens") or [], cl["tokens"])
+                     >= LR_SIMILARITY), None)
+        evidence = [{"id": i["id"], "session": i["session"], "snippet": i["clause"][:120]}
+                    for i in cl["items"][-LR_MAX_EVIDENCE:]]
+        if twin:
+            if twin["status"] != "proposed":
+                skipped.append({"id": twin["id"], "status": twin["status"]})
+                continue
+            if twin["props"].get("count") == cl["count"]:
+                continue
+            refreshed.append(twin["id"])
+            if not dry_run:
+                api_update_node(con, twin["id"], props_patch={
+                    "count": cl["count"], "sessions": cl["sessions"],
+                    "evidence": evidence, "refreshed_at": now()})
+                _lr_link_evidence(con, twin["id"], evidence)
+            continue
+        pid = "proposal_" + hashlib.sha1(" ".join(cl["tokens"]).encode()).hexdigest()[:10]
+        entry = {"id": pid, "text": cl["text"], "count": cl["count"],
+                 "sessions": len(cl["sessions"]), "evidence": evidence}
+        created.append(entry)
+        if dry_run:
+            continue
+        res = api_create_node(
+            con, PROPOSAL_TYPE, "Learned: " + cl["text"][:70], cl["text"],
+            {"tokens": cl["tokens"], "count": cl["count"], "sessions": cl["sessions"],
+             "evidence": evidence, "detected_at": now(), "source": "learned"},
+            "proposed", "", "shared", pid)
+        if res.get("ok"):
+            _lr_link_evidence(con, pid, evidence)
+            known.append(res["node"])
+        else:
+            entry["error"] = res.get("error")
+    return {"ok": True, "enabled": True, "ran": True, "dry_run": bool(dry_run),
+            "scanned_prompts": det["scanned"], "window_days": det["days"],
+            "min_count": min_count, "min_sessions": min_sessions,
+            "proposed": created, "refreshed": refreshed, "skipped": skipped,
+            "hint": "review with `rule-proposals`; apply with `accept-rule --id`"}
+
+
+def api_rule_proposals(con, *, status: str = "proposed", budget: int = READ_BUDGET,
+                       limit: int = 50) -> dict:
+    """List proposals, budgeted (CONTRIBUTING rule 4). Works while the setting is
+    off: reviewing what is already there is not running the detector."""
+    rows = _lr_proposals(con, "" if status == "all" else status)
+    rows.sort(key=lambda p: (-(p["props"].get("count") or 0), p["id"]))
+    slim, used = [], 0
+    for p in rows[:limit]:
+        pr = p["props"]
+        entry = {"id": p["id"], "status": p["status"], "title": p["title"],
+                 "text": p["body"][:300], "count": pr.get("count", 0),
+                 "sessions": len(pr.get("sessions") or []),
+                 "evidence": [{"id": e["id"], "snippet": e["snippet"]}
+                              for e in (pr.get("evidence") or [])[:3]]}
+        size = len(json.dumps(entry))
+        if slim and used + size > budget:
+            break
+        used += size
+        slim.append(entry)
+    return {"ok": True, "enabled": learned_rules_enabled(), "status": status,
+            "count": len(slim), "of": len(rows), "budget": budget, "chars": used,
+            "truncated": len(slim) < len(rows),
+            "hint": "accept-rule --id X [--title T --text T] | reject-rule --id X; "
+                    "get-node --id X for the whole evidence",
+            "proposals": slim}
+
+
+def api_accept_rule(con, pid: str, *, title: str = "", text: str = "") -> dict:
+    """Turn a proposal into an ACTIVE rule: source `learned`, precedence 50,
+    linked to the proposal and to the prompts that taught it."""
+    row = con.execute("SELECT * FROM nodes WHERE id=? AND type=?", (pid, PROPOSAL_TYPE)).fetchone()
+    if not row:
+        return {"ok": False, "error": f"no rule proposal {pid}"}
+    p = _node_dict(row)
+    if p["status"] != "proposed":
+        return {"ok": False, "error": f"{pid} is already {p['status']}"}
+    pr = p["props"]
+    rule_text = (text or p["body"]).strip()
+    rule_title = (title or p["title"]).strip()
+    if not rule_text or not rule_title:
+        return {"ok": False, "error": "a rule needs a title and a text"}
+    n, s = pr.get("count", 0), len(pr.get("sessions") or [])
+    res = api_add_rule(
+        con, title=rule_title, source="learned", realm="shared",
+        scenario=" ".join(t for t in pr.get("tokens", []) if not t.startswith("__"))
+                 + " " + rule_title,
+        sections={"the_rule": rule_text,
+                  "why": f"Corrected {n} times across {s} sessions, then accepted "
+                         f"from proposal {pid}.",
+                  "judged_against": "The same correction is not needed again in a "
+                                    "later session."},
+        node_id=f"rule_learned_{slugify(rule_title)[:40]}_{pid[-4:]}")
+    if not res.get("ok"):
+        return res
+    rid = res["node"]["id"]
+    api_update_node(con, rid, props_patch={"proposal": pid, "evidence_count": n})
+    api_link(con, rid, pid, "learned-from")
+    _lr_link_evidence(con, rid, pr.get("evidence") or [])
+    api_update_node(con, pid, status="accepted",
+                    props_patch={"accepted_rule": rid, "accepted_at": now()})
+    return {"ok": True, "rule": rid, "source": "learned",
+            "precedence": RULE_PRECEDENCE["learned"], "proposal": pid}
+
+
+def api_reject_rule(con, pid: str, *, reason: str = "") -> dict:
+    """Mark a proposal rejected. It is KEPT, and it is what stops the cluster
+    being proposed again."""
+    row = con.execute("SELECT status FROM nodes WHERE id=? AND type=?",
+                      (pid, PROPOSAL_TYPE)).fetchone()
+    if not row:
+        return {"ok": False, "error": f"no rule proposal {pid}"}
+    if row["status"] != "proposed":
+        return {"ok": False, "error": f"{pid} is already {row['status']}"}
+    patch = {"rejected_at": now()}
+    if reason:
+        patch["reject_reason"] = reason
+    api_update_node(con, pid, status="rejected", props_patch=patch)
+    return {"ok": True, "proposal": pid, "status": "rejected", "kept": True}
+
+
+def learned_rules_status(con) -> dict:
+    counts = {}
+    for p in _lr_proposals(con):
+        counts[p["status"]] = counts.get(p["status"], 0) + 1
+    on = learned_rules_enabled()
+    return {"ok": True, "enabled": on,
+            "source": flag_source(LEARNED_RULES_SETTING), "proposals": counts,
+            "min_count": LR_MIN_COUNT, "min_sessions": LR_MIN_SESSIONS,
+            "window_days": LR_WINDOW_DAYS,
+            "automatic": "once a day at SessionStart, detached, only while on",
+            "hint": None if on else LR_OFF_HINT}
+
+
+def cmd_propose_rules(args):
+    out(api_propose_rules(connect(), dry_run=args.dry_run, days=args.days,
+                          min_count=args.min_count, min_sessions=args.min_sessions))
+
+
+def cmd_rule_proposals(args):
+    out(api_rule_proposals(connect(), status=args.status, budget=args.budget,
+                           limit=args.limit))
+
+
+def cmd_accept_rule(args):
+    out(api_accept_rule(connect(), args.id, title=args.title or "", text=args.text or ""))
+
+
+def cmd_reject_rule(args):
+    out(api_reject_rule(connect(), args.id, reason=args.reason or ""))
+
+
+def cmd_learned_rules(args):
+    if args.action in ("on", "off"):
+        save_settings({LEARNED_RULES_SETTING: args.action == "on"})
+    out(learned_rules_status(connect()))
+
+
 def cmd_use_skill(args):
     """Reinforce a skill after it fires — strengthen the pathway (usage_count up,
     confidence nudged toward 1, last_used stamped)."""
@@ -5378,6 +5704,10 @@ Consequences a rebuild must preserve:
   `~/.second_brain/.last_consolidate` stamp. Opt out with the `consolidate`
   setting (Settings in the UI) or `$MEMORY_LEDGER_NO_CONSOLIDATE`. It runs
   `--no-backup`: snapshots are for the runs a person triggers.
+- With the OPT-IN `learned_rules` setting on (default off), `SessionStart` also runs
+  `graph.py propose-rules` once a day, detached and silent (`.last_learned_rules`
+  stamp). It only writes `rule-proposal` nodes; a person accepts them with
+  `accept-rule`. Off, nothing runs.
 """),
     "spec_storage": ("Where the brain lives and how it is addressed", """
 The brain is GLOBAL and lives outside any repo, so every project on the machine
@@ -6522,6 +6852,38 @@ def build_parser():
     a.add_argument("--limit", type=int, default=6)
     a.add_argument("--budget", type=int, default=2600, help="max chars of rule text")
     a.add_argument("--full", action="store_true", help="whole rule bodies, unbudgeted")
+
+    a = sub.add_parser("propose-rules", description=(
+        "Learned-rules detector: spot corrections you repeat across sessions and "
+        "PROPOSE rules. Needs `learned-rules on`; never applies anything. No model call."))
+    a.set_defaults(func=cmd_propose_rules)
+    a.add_argument("--dry-run", action="store_true", help="report, write nothing")
+    a.add_argument("--days", type=int, default=LR_WINDOW_DAYS)
+    a.add_argument("--min-count", type=int, default=LR_MIN_COUNT, dest="min_count")
+    a.add_argument("--min-sessions", type=int, default=LR_MIN_SESSIONS, dest="min_sessions")
+
+    a = sub.add_parser("rule-proposals", description="List learned-rule proposals (budgeted).")
+    a.set_defaults(func=cmd_rule_proposals)
+    a.add_argument("--status", choices=["proposed", "accepted", "rejected", "all"],
+                   default="proposed")
+    a.add_argument("--budget", type=int, default=READ_BUDGET)
+    a.add_argument("--limit", type=int, default=50)
+
+    a = sub.add_parser("accept-rule", description=(
+        "Accept a proposal: it becomes an active rule, source learned, precedence 50."))
+    a.set_defaults(func=cmd_accept_rule)
+    a.add_argument("--id", required=True)
+    a.add_argument("--title"); a.add_argument("--text")
+
+    a = sub.add_parser("reject-rule", description=(
+        "Reject a proposal. It is kept, and its cluster is not proposed again."))
+    a.set_defaults(func=cmd_reject_rule)
+    a.add_argument("--id", required=True); a.add_argument("--reason")
+
+    a = sub.add_parser("learned-rules", description=(
+        "Turn the learned-rules detector on or off (default off), or show its status."))
+    a.set_defaults(func=cmd_learned_rules)
+    a.add_argument("action", nargs="?", choices=["on", "off", "status"], default="status")
 
     a = sub.add_parser("genome", description=(
         "The brain's own build blueprint — how to rebuild the Claude layer from the "

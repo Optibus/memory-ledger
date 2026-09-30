@@ -213,6 +213,8 @@ def settings_payload() -> dict:
             "consolidate_source": graph.flag_source("consolidate"),
             "ui_sync": graph.flag("ui_sync"),
             "ui_sync_source": graph.flag_source("ui_sync"),
+            "learned_rules": graph.flag("learned_rules"),
+            "learned_rules_source": graph.flag_source("learned_rules"),
             "map_poll_seconds": _int_setting("map_poll_seconds", 2),
             "dash_refresh_seconds": _int_setting("dash_refresh_seconds", 120),
         },

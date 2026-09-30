@@ -114,6 +114,40 @@ def consolidate_daily():
 consolidate_daily()
 
 
+def learned_rules_daily():
+    """Once a day, while the person has opted in, look for corrections they keep
+    repeating and PROPOSE rules from them.
+
+    OFF by default: `_switch.flag("learned_rules")` is False until the setting is
+    turned on, so for everyone who has not asked, this is one settings read and a
+    return. On, it is the same shape as consolidate_daily — stamp first, detached,
+    silent, no model — and it only ever writes `rule-proposal` nodes, never a
+    rule; a person accepts those deliberately (`graph.py rule-proposals`)."""
+    if not _switch.flag("learned_rules"):
+        return
+    stamp = os.path.join(home, ".last_learned_rules")
+    today = datetime.date.today().isoformat()
+    try:
+        with open(stamp) as f:
+            if f.read().strip() == today:
+                return
+    except OSError:
+        pass
+    try:
+        with open(stamp, "w") as f:
+            f.write(today)                  # write first: never loop on failure
+        subprocess.Popen(
+            [sys.executable, graph, "propose-rules"],
+            env={**os.environ, "SECOND_BRAIN_NO_AUTOSYNC": "1"},
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL, start_new_session=True)
+    except Exception:
+        pass
+
+
+learned_rules_daily()
+
+
 def _detached(*argv):
     subprocess.Popen([sys.executable, *argv], stdout=subprocess.DEVNULL,
                      stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,

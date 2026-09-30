@@ -164,6 +164,11 @@ Commands:
 | `audit-contracts [--kind K] [--source S]... [--count-only]` | Check the contracts that live in the **DB**, which the file checker cannot see: learned skills (§5.1) and user/learned rules (§5b.1). Reports gaps, **never rewrites** — the missing clause is a judgment call, and filling it mechanically produces exactly the unfalsifiable sentence §5b exists to prevent. |
 | `snapshot-rules [--label L] [--source S]...` | Copy every rule **verbatim** into the `rules-backup` realm before a bulk edit (§5b.3). Stores `rule-snapshot` nodes, never `rule`, so `match-rules` cannot return one; captures body, title and props, because a rule without its `scenario` could not be restored to firing. Idempotent by content: an unchanged rule stores nothing, a changed one stores a new generation, nothing is overwritten. |
 | `add-rule --title T [--body ...] [--scenario CUES] [--section S] [--source user\|learned\|plugin] [--overrides ID] [--non-negotiable] [--id ID] [--realm R]` | Author or override a rule — the mutable half of the genome (§2i). `--overrides` marks the shipped rule `superseded`. **`--scenario` is indexed** — put the words a person would actually type there, including ones the body never uses; that is what `match-rules` fires on. Same for a skill's `triggers`/`description`. The §5b.1 sections also have flags of their own (`--the-rule`, `--why`, `--how-to-apply`, `--exceptions`, `--judged-against`, `--related`) so a rule can be authored structured rather than as one `--body` whose headings you have to remember; `--strict` refuses an incomplete one instead of leaving it for `audit-contracts`. |
+| `learned-rules [on\|off\|status]` | The learned-rules switch (§2i) — stored as the `learned_rules` setting, **OFF by default**, per person. `status` shows it, where the answer came from, and the proposal counts. `$MEMORY_LEDGER_NO_LEARNED_RULES` forces it off. |
+| `propose-rules [--dry-run] [--days N] [--min-count N] [--min-sessions N]` | Run the learned-rules detector (§2i): spot corrections the person keeps repeating in captured prompts ("no, …", "don't …", "never …", "always …", "stop …", "I said …", "instead …", and "não", "nunca", "sempre", "pare de") and **propose** a rule when one recurs >= N times (default 2) across >= 2 sessions. Token-free, deterministic, conservative. **Does nothing while the switch is off** and says how to turn it on. Never creates a `rule`. |
+| `rule-proposals [--status proposed\|accepted\|rejected\|all] [--budget CHARS]` | List proposals with counts and evidence snippets, budgeted. Readable while the switch is off. |
+| `accept-rule --id X [--title T] [--text T]` | Turn a proposal into an active `rule`: `source: learned`, precedence 50, linked `learned-from` to the proposal and the prompts that taught it. The only road from a proposal to a rule. |
+| `reject-rule --id X [--reason R]` | Mark a proposal `rejected`. It is **kept**, and the cluster is not proposed again, even reworded. |
 | `park [--body TEXT] [--title T] [--about ID] [--area A]` | **Move context OUT of the window** (§2j): stores the blob (stdin or `--body`) and returns a tiny receipt, so the model can drop the content. |
 | `unpark --id ID [--offset N] [--chars N]` | Read parked context back, whole or sliced. |
 | `resume [--budget CHARS] [--days N] [--limit N]` | **Rehydrate after `/clear`** (§2j) — the thread that was in play, what's parked, what's open, inside a budget. No model call. |
@@ -740,6 +745,24 @@ user rule edges past an equally-relevant default but a barely-relevant one canno
 outrank a real match. `add-rule --overrides <plugin rule id>` marks the shipped rule
 `superseded` — kept as history (§2a), excluded from matching.
 
+**Learned rules — proposed, never applied.** The `learned` tier is filled by a
+detector, behind a switch that is **OFF by default** (`graph.py learned-rules
+on|off|status`, the `learned_rules` setting, the Settings page;
+`$MEMORY_LEDGER_NO_LEARNED_RULES` forces it off). `propose-rules` reads the
+`capture` prompts of the last 30 days, finds corrections opening a clause
+(English and Portuguese cues), clusters near-duplicates by Jaccard over content
+words (opposite polarity never clusters) and, when a cluster recurs at least N
+times (default 2) across at least 2 sessions, stores a **`rule-proposal`** node
+(`status: proposed`) with its evidence: prompt ids, snippets, counts, sessions.
+It is deliberately conservative: long prompts, questions, code and vague
+one-liners are skipped. No model call. A proposal is **not a `rule`**, so
+`match-rules` cannot return it (the same trick as `rule-snapshot`). `accept-rule`
+creates the rule (`source: learned`, precedence 50, below every user rule);
+`reject-rule` keeps the proposal and stops its cluster returning. Nothing is
+deleted. While the switch is on, SessionStart runs the detector at most once a
+day, detached and silent (`.last_learned_rules` stamp); while off, nothing runs
+automatically and `propose-rules` only says how to turn it on.
+
 **`ingest-conventions` is non-destructive.** Re-run it any time to refresh the base
 layer: it updates `source=plugin` rules and **keeps every user-authored or
 user-edited one**. Restoring the plugin can therefore never undo the user's brain.
@@ -1003,11 +1026,15 @@ answers **as the owner**, through the owner's own MCP servers, using the
 `note`, `project`, `reminder`, `writing-sample`, `association`, `meeting`,
 `jira-issue`, `resource`, `skill` (learned skill), `team`, `channel`,
 `area` (domain hub), `node-type` (one per node type, the skill tree's read/write
-target, §5a), `rule-snapshot` (a verbatim copy of a rule, §5b.3),
+target, §5a), `rule-snapshot` (a verbatim copy of a rule, §5b.3), `rule-proposal` (a learned-rules
+detector's finding awaiting accept/reject, §2i — never a `rule` until accepted),
 `quote`, `parked` (context moved out of the window, §2j),
 `rule` (a convention, §2i), `spec` (a genome
 blueprint, §2i), `process`, the stateful trackables `pr`, `email`, `message`, and
-`request` (one Slack/Jira mention that summoned the brain, §2l).
+`request` (one Slack/Jira mention that summoned the brain, §2l), and `usage-week`
+(one ISO week of Claude Code usage metrics, written by `scripts/usage_ingest.py`
+from the local session logs and drawn by the Usage report — `props.week`, `from`,
+`to`, `metrics`; id `usage-week_<YYYY-Www>`, updated in place, never deleted).
 Traceability (§2k): `conversation`, `agent`, `idea`, `transition` (one immutable
 entry in an idea's history), `gauge` (a measurable thing with a probe — the
 specification's *resource*, renamed because `resource` already means a document
