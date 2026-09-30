@@ -295,3 +295,39 @@ describe("Settings — where the data lives", () => {
     expect(await screen.findByText(/Testing failed: connection refused/)).toBeInTheDocument();
   });
 });
+
+describe("Learned rules", () => {
+  it("is off by default and writes the switch through the settings route", async () => {
+    const { user } = renderApp(<SettingsSection />, { route: "/settings" });
+    const box = await screen.findByRole("checkbox", { name: /Look for repeated corrections/ });
+    expect(box).not.toBeChecked();
+    await user.click(box);
+    await waitFor(() =>
+      expect(writes.find((w) => w.path === "/api/settings")?.body).toMatchObject({
+        learned_rules: true,
+      }),
+    );
+  });
+
+  it("lists what was found and accepts or rejects it, never applying silently", async () => {
+    const { user } = renderApp(<SettingsSection />, { route: "/settings" });
+    expect(await screen.findByText("no, never use emojis in commit messages")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Accept" }));
+    await waitFor(() =>
+      expect(writes.find((w) => w.path === "/api/accept-rule")?.body).toMatchObject({
+        id: "proposal_0123456789",
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Reject" }));
+    await waitFor(() =>
+      expect(writes.find((w) => w.path === "/api/reject-rule")?.body).toMatchObject({
+        id: "proposal_0123456789",
+      }),
+    );
+  });
+
+  it("cannot run the detector while it is off", async () => {
+    renderApp(<SettingsSection />, { route: "/settings" });
+    expect(await screen.findByRole("button", { name: "Look now" })).toBeDisabled();
+  });
+});

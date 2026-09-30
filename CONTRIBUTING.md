@@ -141,6 +141,7 @@ python3 tests/test_api_faults.py      # a handler that raises, a client that han
 python3 tests/test_contracts.py       # contract shapes, bundles, the web routes
 python3 tests/test_traceability.py    # the tree, and hooks that must not block
 python3 tests/test_trigger.py         # the trigger engine, against fake Slack/Jira/claude
+python3 tests/test_learned_rules.py   # the learned-rules detector: off by default, proposes, never applies
 cd frontend && npm test               # the UI: unit + integration
 ```
 

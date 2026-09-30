@@ -12,6 +12,7 @@ import {
   personDetailFixture,
   personDuplicatesFixture,
   settingsFixture,
+  ruleProposalsFixture,
   scriptsFixture,
   skillsFixture,
   statusFixture,
@@ -80,6 +81,7 @@ export const handlers = [
     return ok({ rule: { id, title: "a rule", body: "THE RULE\n\nDo the thing." } });
   }),
   http.get("/api/settings", () => HttpResponse.json(settingsFixture)),
+  http.get("/api/rule-proposals", () => HttpResponse.json(ruleProposalsFixture)),
   http.get("/api/status", () => HttpResponse.json(statusFixture)),
   http.get("/api/trigger", () => HttpResponse.json(triggerFixture)),
   http.get("/api/tasks", () => HttpResponse.json(tasksFixture)),
@@ -163,6 +165,9 @@ export const handlers = [
   write("/api/merge-person", () => ok({ moved: 2, dropped: 0 })),
   write("/api/add-alias", () => ok({ added: true })),
   write("/api/create-rule"),
+  write("/api/propose-rules", () => ok({ enabled: true, ran: true, proposed: [] })),
+  write("/api/accept-rule", () => ok({ rule: "rule_learned_x", source: "learned", precedence: 50 })),
+  write("/api/reject-rule", () => ok({ status: "rejected", kept: true })),
   write("/api/create-skill"),
   write("/api/create-process", () =>
     ok({ node: { id: "process_new_0001", realm: "work" }, action: "created" }),

@@ -42,7 +42,7 @@ GET_ROUTES = [
     "/api/realms", "/api/node", "/api/people", "/api/capture", "/api/ui-prefs",
     "/api/backups", "/api/doctor", "/api/consolidate-preview",
     "/api/person-duplicates", "/api/kinds", "/api/skills", "/api/bundle",
-    "/api/rule", "/api/settings", "/api/timezones", "/api/status", "/api/meta",
+    "/api/rule", "/api/rule-proposals", "/api/settings", "/api/timezones", "/api/status", "/api/meta",
     "/api/suggest-links", "/api/search", "/api/trigger", "/api/trigger-request",
     "/api/scripts", "/api/script", "/api/tasks", "/api/task", "/api/usage-report",
 ]
@@ -52,7 +52,8 @@ POST_ROUTES = [
     "/api/update-node", "/api/link", "/api/unlink", "/api/propose-idea", "/api/settings",
     "/api/neo4j-config", "/api/neo4j-test", "/api/flush", "/api/prune",
     "/api/capture", "/api/consolidate", "/api/ui-prefs", "/api/backup", "/api/rename-realm",
-    "/api/create-rule", "/api/create-skill", "/api/create-process",
+    "/api/create-rule", "/api/propose-rules", "/api/accept-rule", "/api/reject-rule",
+    "/api/create-skill", "/api/create-process",
     "/api/export-skills", "/api/ingest-skills", "/api/export-bundle",
     "/api/upload-bundle", "/api/import-bundle", "/api/delete-contracts",
     "/api/trigger-gate", "/api/trigger-action", "/api/trigger-config", "/api/trigger-check",
@@ -651,6 +652,47 @@ def test_settings_writes(s: Server):
        r.raw[:160])
 
 
+def test_learned_rules(s: Server):
+    print("\n== learned rules: proposals over the API ==")
+    r = s.get("/api/rule-proposals")
+    ck("proposals list empty, with the read budget", r.status == 200 and r.json().get("ok")
+       and r.json()["count"] == 0 and r.json().get("budget"), r.raw[:160])
+    eff = s.get("/api/settings").json()["effective"]
+    ck("the switch is OFF by default and says where that came from",
+       eff["learned_rules"] is False and eff["learned_rules_source"] == "default", str(eff)[:160])
+    r = s.post("/api/propose-rules")
+    ck("running the detector while off does nothing and says so",
+       r.status == 200 and r.json().get("enabled") is False and r.json().get("ran") is False,
+       r.raw[:160])
+    ck("learned_rules must be true or false", refused(
+        s.post("/api/settings", {"learned_rules": "maybe"}), 400, "must be true or false"))
+    for sess in ("api-a", "api-b"):
+        s.cli("add-node", "--type", "capture", "--title", "never mock the database",
+              "--body", "No, never mock the database in integration tests",
+              "--props", json.dumps({"role": "user", "session_id": sess}))
+    r = s.post("/api/settings", {"learned_rules": True})
+    ck("turning it on through the settings route", r.status == 200
+       and r.json()["effective"]["learned_rules"] is True, r.raw[:160])
+    r = s.post("/api/propose-rules")
+    ck("now it proposes the repeated correction", r.status == 200 and len(r.json()["proposed"]) == 1,
+       r.raw[:200])
+    pid = r.json()["proposed"][0]["id"]
+    ck("and lists it", [p["id"] for p in s.get("/api/rule-proposals").json()["proposals"]] == [pid])
+    ck("accept needs a real proposal", refused(s.post("/api/accept-rule", {"id": "nope"}), 400,
+                                               "no rule proposal"))
+    ck("reject needs a real proposal", refused(s.post("/api/reject-rule", {"id": "nope"}), 400,
+                                               "no rule proposal"))
+    r = s.post("/api/accept-rule", {"id": pid, "title": "Do not mock the database"})
+    ck("accept makes a learned rule at 50", r.status == 200 and r.json().get("source") == "learned"
+       and r.json().get("precedence") == 50, r.raw[:160])
+    ck("and it is an ordinary rule to read",
+       s.get("/api/rule", id=r.json()["rule"]).json()["rule"]["props"]["source"] == "learned")
+    ck("accepting twice is refused", refused(s.post("/api/accept-rule", {"id": pid}), 400,
+                                             "already accepted"))
+    ck("rejecting an accepted one is refused", refused(s.post("/api/reject-rule", {"id": pid}),
+                                                       400, "already accepted"))
+
+
 def test_contract_writes(s: Server):
     print("\n== skills, rules, processes, bundles ==")
     ck("a rule needs a title", refused(s.post("/api/create-rule", {}), 400,
@@ -1019,6 +1061,7 @@ def main():
         test_people_writes(s)
         test_settings_writes(s)
         test_contract_writes(s)
+        test_learned_rules(s)
         test_scripts(s)
         test_trigger_routes(s)
         test_usage_report(s)

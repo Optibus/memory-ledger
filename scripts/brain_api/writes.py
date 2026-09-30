@@ -595,6 +595,28 @@ def _rule_args(data: m.CreateRule):
     }, None
 
 
+@router.post("/propose-rules", tags=["contracts"], summary="Run the learned-rules detector",
+             description="Proposes, never applies. Does nothing while the `learned_rules` "
+                         "setting is off, and says so.")
+def propose_rules(data: m.Empty = body(m.Empty)):
+    return reply(graph.api_propose_rules(graph.connect()))
+
+
+@router.post("/accept-rule", tags=["contracts"], summary="Accept a learned-rule proposal",
+             description="Becomes an active rule, source `learned`, precedence 50, linked "
+                         "to the prompts that taught it. `title` and `text` edit it first.")
+def accept_rule(data: m.ProposalDecision = body(m.ProposalDecision)):
+    return reply(graph.api_accept_rule(graph.connect(), clip(data.id, 200),
+                                       title=clip(data.title, 300), text=clip(data.text, 4000)))
+
+
+@router.post("/reject-rule", tags=["contracts"], summary="Reject a learned-rule proposal",
+             description="Kept, marked rejected; its cluster is not proposed again.")
+def reject_rule(data: m.ProposalDecision = body(m.ProposalDecision)):
+    return reply(graph.api_reject_rule(graph.connect(), clip(data.id, 200),
+                                       reason=clip(data.reason, 300)))
+
+
 @router.post("/create-rule", tags=["contracts"], summary="Author a rule (CONVENTIONS §5b)",
              description="Refused unless `sections.the_rule` and "
                          "`sections.judged_against` are filled.")
