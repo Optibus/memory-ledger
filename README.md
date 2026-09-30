@@ -515,13 +515,20 @@ hamburger menu on the left (`m` toggles it):
   button authors a new skill or rule — see
   [Grow the brain from the page](#grow-the-brain-from-the-page).
 - **Usage** — "Where the Quota Went", drawn by `scripts/usage_report.py` from
-  the brain's `usage-week` nodes (one per ISO week of Claude Code usage, written
-  by your own ingest, outside the plugin). **No model call and no clock**: the
-  same weeks give the same page, byte for byte, with static SVG charts. Pick a
-  week range, then **Download HTML** (the exact page) or **Save as PDF** (the
-  print dialog, opened on the report alone). The same page from the CLI:
-  `python3 scripts/usage_report.py render [--weeks N | --from YYYY-Www --to YYYY-Www] [--out file.html]`,
-  or over HTTP at `GET /api/usage-report`.
+  the brain's `usage-week` nodes (one per ISO week of Claude Code usage). The
+  plugin writes them itself: `scripts/usage_ingest.py` reads the session logs
+  Claude Code already keeps (`~/.claude/projects`) and aggregates them per week —
+  cost, sessions, turns, typed prompts, model split, cost composition (cache
+  reads/writes), session-length buckets, repositories edited, zero-write output,
+  rate-limit hits, and cost by hour and weekday. It is a **token-free** report, so
+  a person who is out of Claude Code quota can still see their numbers; the
+  model-written insights stay with `ccalyze`. **No model call and no clock** in
+  the report: the same weeks give the same page, byte for byte, with static SVG
+  charts. Pick a week range, then **Download HTML** (the exact page) or **Save as
+  PDF** (the print dialog, opened on the report alone). From the CLI:
+  `python3 scripts/usage_report.py render [--weeks N | --from YYYY-Www --to YYYY-Www] [--out file.html] [--ingest]`,
+  or over HTTP at `GET /api/usage-report`. See
+  [the usage ingest](docs/usage.md) for how the numbers are made and kept fresh.
 - **Settings** — **your name** (who `--mine` means), timezone (which day "today"
   means), default realm, read backend, poll intervals, and three switches: mirror
   autosync, daily consolidation, and whether this browser's view preferences are

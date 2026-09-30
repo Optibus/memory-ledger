@@ -83,6 +83,8 @@ jobs:
       # SECOND_BRAIN_HOME points at a temp dir so a run can never touch a real
       # brain -- test_contracts builds its own graph, and test_traceability
       # starts servers and asserts the hooks do not block on a slow master.
+      # (every tests/test_*.py, so test_usage_report.py and test_usage_ingest.py
+      # run here too -- the ingest suite writes its own synthetic session logs.)
       - name: Run the test suites
         env:
           SECOND_BRAIN_HOME: ${{ runner.temp }}/brain

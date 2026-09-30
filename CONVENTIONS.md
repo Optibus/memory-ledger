@@ -1007,7 +1007,10 @@ target, §5a), `rule-snapshot` (a verbatim copy of a rule, §5b.3),
 `quote`, `parked` (context moved out of the window, §2j),
 `rule` (a convention, §2i), `spec` (a genome
 blueprint, §2i), `process`, the stateful trackables `pr`, `email`, `message`, and
-`request` (one Slack/Jira mention that summoned the brain, §2l).
+`request` (one Slack/Jira mention that summoned the brain, §2l), and `usage-week`
+(one ISO week of Claude Code usage metrics, written by `scripts/usage_ingest.py`
+from the local session logs and drawn by the Usage report — `props.week`, `from`,
+`to`, `metrics`; id `usage-week_<YYYY-Www>`, updated in place, never deleted).
 Traceability (§2k): `conversation`, `agent`, `idea`, `transition` (one immutable
 entry in an idea's history), `gauge` (a measurable thing with a probe — the
 specification's *resource*, renamed because `resource` already means a document

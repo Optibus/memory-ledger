@@ -5,8 +5,9 @@ A deterministic HTML report over the brain's `usage-week` nodes: one node per
 ISO week of Claude Code usage, whose `props` carry `week`, `from`, `to` and a
 `metrics` dict (cost, sessions, turns, typed prompts, model split, cost
 composition, session-length buckets, repositories edited, zero-write output,
-rate-limit hits). Something outside the plugin writes those nodes — a weekly
-ingest of the person's own usage — and this reads them.
+rate-limit hits, optionally cost by hour and weekday). `scripts/usage_ingest.py`
+writes those nodes from the person's own local session logs — or any other
+ingest that keeps the shape — and this reads them.
 
 **No model call, and no clock.** `render(weeks)` is a pure function: the same
 weeks give the same page, byte for byte. Every number on the page is read or
@@ -19,7 +20,7 @@ it looks. A small script adds hover tooltips when it is allowed to run.
 Stdlib only, like the rest of `scripts/`. The database is opened READ-ONLY.
 
 Usage:
-  usage_report.py render [--weeks N] [--from YYYY-Www --to YYYY-Www] [--out file.html]
+  usage_report.py render [--weeks N] [--from YYYY-Www --to YYYY-Www] [--out file.html] [--ingest]
   usage_report.py weeks                     # the stored weeks, as JSON
 
 DB location follows graph.py ($SECOND_BRAIN_DB / $SECOND_BRAIN_HOME).
@@ -207,7 +208,8 @@ def aggregate(weeks: list[dict]) -> dict:
                "repos": {}, "edits": {}, "totalEdits": 0, "dirs": {}, "noWriteSessions": 0,
                "noWriteCost": 0.0, "outward": {}, "outwardTotal": 0, "productiveSessions": 0,
                "productiveCost": 0.0, "investigationSessions": 0, "investigationCost": 0.0,
-               "tickets": set(), "hits": [], "sources": set()}
+               "tickets": set(), "hits": [], "sources": set(),
+               "hour": [0.0] * 24, "weekday": [0.0] * 7, "rhythm": False}
     for w in weeks:
         m = w["metrics"]
         cost = _num(m.get("costUSD"))
@@ -272,6 +274,12 @@ def aggregate(weeks: list[dict]) -> dict:
         a["productiveCost"] += _num(m.get("noWriteProductiveCostUSD"))
         a["investigationSessions"] += int(_num(m.get("investigationOnlySessions")))
         a["investigationCost"] += _num(m.get("investigationOnlyCostUSD"))
+        for key, size in (("hour", 24), ("weekday", 7)):
+            series = m.get("costBy" + key.capitalize())
+            if isinstance(series, list) and len(series) == size:
+                a["rhythm"] = True
+                for i, v in enumerate(series):
+                    a[key][i] += _num(v)
         a["tickets"].update(str(t) for t in (m.get("tickets") or []))
         a["hits"].extend(m.get("rateLimits") or [])
         if w.get("source"):
@@ -1405,6 +1413,60 @@ def _assertivity(a: dict) -> str:
                    f"{num(a['typed'])} typed prompts drove {num(a['turns'])} turns", parts)
 
 
+def _columns(chart_id: str, aria: str, cols: list[tuple[str, float, list[str]]],
+             foot: str, fill: str = "var(--s1)") -> str:
+    """Vertical columns: (label, value in dollars, tooltip lines)."""
+    W, H, L, R, T, B = 1040, 240, 58, 14, 16, 46
+    pw, ph = W - L - R, H - T - B
+    top, ticks = nice_axis(max((v for _, v, _ in cols), default=0))
+    step = ticks[1] - ticks[0] if len(ticks) > 1 else 1
+    body = []
+    for v in ticks:
+        y = T + ph - v / top * ph
+        body.append(line(L, y, W - R, y))
+        body.append(label(L - 9, y + 4, tick_text(v, step, "$"), "end", 10.5))
+    band = pw / len(cols)
+    bw = min(56, band * 0.66)
+    for i, (name, v, tip) in enumerate(cols):
+        cx = L + band * i + band / 2
+        h = v / top * ph
+        if v > 0:
+            body.append(rect(cx - bw / 2, T + ph - h, bw, max(1, h), fill, tip=tip))
+        body.append(label(cx, H - B + 18, name, "middle", 10.5, "var(--muted)", 500))
+    body.append(line(L, T + ph, W - R, T + ph, "var(--ink-2)", 1.5))
+    body.append(label(L, H - 6, foot, "start", 10))
+    return svg(chart_id, W, H, aria, body)
+
+
+def _rhythm(a: dict) -> str:
+    """When the work happens: cost by hour of day and by weekday, from the
+    weekly nodes' `costByHour` / `costByWeekday` (present when the ingest that
+    wrote them records them; absent, and the section is simply not drawn)."""
+    hour, wd, total = a["hour"], a["weekday"], sum(a["hour"])
+    if not a["rhythm"] or total <= 0:
+        return ""
+    names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    peak_h = max(range(24), key=lambda i: (hour[i], -i))
+    peak_d = max(range(7), key=lambda i: (wd[i], -i))
+    weekend = _div((wd[5] + wd[6]) * 100, sum(wd))
+    late = _div(sum(hour[h] for h in list(range(0, 6)) + list(range(22, 24))) * 100, total)
+    parts = [f'<p class="lead-p">Spend peaks at <strong>{peak_h:02d}:00</strong> and on '
+             f"<strong>{names[peak_d]}s</strong>. {N(pct(weekend))} of it falls on a weekend and "
+             f"{N(pct(late))} between 22:00 and 06:00.</p>"]
+    cols = [(f"{h:02d}", hour[h], [f"{h:02d}:00–{h:02d}:59", f"{usd(hour[h])} · {wshare(_div(hour[h] * 100, total))}"])
+            for h in range(24)]
+    parts.append(figure(_columns("ch-hour", "List-price cost by hour of the day: peak "
+                                 f"{peak_h:02d}:00.", cols, "COST BY HOUR OF DAY, IN THE TIMEZONE THE INGEST USED"),
+                        "Cost by the local hour each turn ran, summed across the window."))
+    cols = [(names[i][:3], wd[i], [names[i], f"{usd(wd[i])} · {wshare(_div(wd[i] * 100, sum(wd)))}"])
+            for i in range(7)]
+    parts.append(figure(_columns("ch-weekday", f"List-price cost by weekday: peak {names[peak_d]}.", cols,
+                                 "COST BY WEEKDAY", "var(--s3)"),
+                        "Cost by weekday, summed across the window."))
+    return section("rhythm", "When it happens", "costByHour · costByWeekday",
+                   f"Most of the spend lands around {peak_h:02d}:00 on {names[peak_d]}s", parts)
+
+
 def _also(a: dict) -> str:
     items = []
     if a["typed"]:
@@ -1473,9 +1535,9 @@ def _empty(selected_range: str) -> str:
             + verdict("How it fills",
                       "This report is drawn from nodes of type <strong>usage-week</strong> — one per ISO week, "
                       "whose props carry <code>week</code>, <code>from</code>, <code>to</code> and a "
-                      "<code>metrics</code> object. Whatever writes them (a weekly ingest of your Claude Code "
-                      "usage) lives outside the plugin; once a week is stored, this page fills in on the next "
-                      "render.")
+                      "<code>metrics</code> object. <code>scripts/usage_ingest.py</code> writes them from your local "
+                      "Claude Code session logs (run it, or render with <code>--ingest</code>); once a week is "
+                      "stored, this page fills in on the next render.")
             + "\n</section>")
     return page("Where the Quota Went", body)
 
@@ -1490,7 +1552,7 @@ def render(weeks: list[dict], selected_range: str = "") -> str:
         return _empty(selected_range)
     a = aggregate(weeks)
     body = "\n\n".join(p for p in [
-        _masthead(a), _usage(a), _model(a), _weekly(a), _compaction(a), _recall(a), _write(a),
+        _masthead(a), _usage(a), _model(a), _weekly(a), _rhythm(a), _compaction(a), _recall(a), _write(a),
         _causes(a), _ceiling(a), _assertivity(a), _also(a), _footer(a)] if p)
     return page("Where the Quota Went", body)
 
@@ -1516,12 +1578,25 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--from", dest="start", help="first ISO week, inclusive (YYYY-Www)")
     r.add_argument("--to", dest="end", help="last ISO week, inclusive (YYYY-Www)")
     r.add_argument("--out", help="write here instead of stdout")
+    r.add_argument("--ingest", action="store_true",
+                   help="first bring the usage-week nodes up to date from the local session logs "
+                        "(scripts/usage_ingest.py; incremental, no model call)")
     sub.add_parser("weeks", help="list the stored weeks as JSON")
     args = ap.parse_args(argv)
 
     if args.cmd == "weeks":
         print(json.dumps({"ok": True, "weeks": available(load_weeks(args.db))}, indent=2))
         return 0
+    if args.ingest:
+        if args.db:
+            print(json.dumps({"ok": False, "error": "--ingest writes to the brain's own graph.db; "
+                              "it cannot be combined with --db"}), file=sys.stderr)
+            return 2
+        try:
+            import usage_ingest  # noqa: PLC0415
+            usage_ingest.ingest(usage_ingest.projects_dir(None))
+        except Exception as e:  # the report is still worth drawing from what is stored
+            print(json.dumps({"ok": False, "warning": f"ingest failed: {e}"}), file=sys.stderr)
     try:
         res = report(args.db, args.weeks, args.start, args.end)
     except ValueError as e:

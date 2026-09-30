@@ -77,9 +77,11 @@ claude --plugin-dir ~/dev/memory-ledger
 | `scripts/graph.py` | the engine — schema, commands, recall, consolidation (~2.6k lines) |
 | `scripts/brain_query.py` | read-only date views, no writes |
 | `scripts/trigger.py` | the Slack/Jira trigger engine — gate, audit log, checkpoints, Jira poll, `claude -p` dispatch ([triggers](docs/trigger.md)) |
+| `scripts/usage_ingest.py` | parses Claude Code's local session logs into one `usage-week` node per ISO week, token-free and incremental (checkpoint under the brain home); the price table lives here |
+| `scripts/usage_report.py` | "Where the Quota Went" — renders those nodes as a deterministic HTML report |
 | `scripts/restore.py` | restore a `--with-brain` zip or a `.db` snapshot, checked first, never over a brain without `--replace` |
 | `scripts/brain_sync.py` | full push into neo4j, `--verify` against it, `--pull` restore from it |
-| `hooks/` | the three always-on hooks + `_capture.py` shared helpers |
+| `hooks/` | the always-on hooks + `_capture.py` shared helpers; `usage_ingest.py` only forks a throttled, detached `scripts/usage_ingest.py run` |
 | `hooks/hooks.json` | which hook binds to which Claude Code event |
 | `scripts/serve.py` | the one command: builds the server's venv, the UI, and runs the app |
 | `scripts/brain_api/` | the FastAPI app — reads, writes, request models, the SPA fallback, and the trigger watchers (`trigger_runtime.py`, the one user of `slack_sdk`) |
@@ -141,6 +143,8 @@ python3 tests/test_api_faults.py      # a handler that raises, a client that han
 python3 tests/test_contracts.py       # contract shapes, bundles, the web routes
 python3 tests/test_traceability.py    # the tree, and hooks that must not block
 python3 tests/test_trigger.py         # the trigger engine, against fake Slack/Jira/claude
+python3 tests/test_usage_report.py    # the usage report: deterministic, true to its nodes
+python3 tests/test_usage_ingest.py    # session logs -> usage-week nodes (synthetic logs), idempotency, hook, end to end
 cd frontend && npm test               # the UI: unit + integration
 ```
 
