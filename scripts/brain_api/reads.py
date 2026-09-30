@@ -168,6 +168,19 @@ def rule(id: str = Query("", description="The rule id.")):
     return {"ok": bool(row), "rule": graph._node_dict(row) if row else None}
 
 
+@router.get("/rule-proposals", tags=["contracts"],
+            summary="Learned-rule proposals awaiting a decision",
+            description="What the learned-rules detector found, never applied: a proposal "
+                        "is not a rule until accepted. Budgeted. Readable while the "
+                        "detector is off.")
+def rule_proposals(status: str = Query("proposed", description="proposed | accepted | "
+                                                               "rejected | all."),
+                   budget: int = Query(graph.READ_BUDGET, ge=200, le=20000)):
+    if status not in ("proposed", "accepted", "rejected", "all"):
+        status = "proposed"
+    return graph.api_rule_proposals(graph.connect(), status=status, budget=budget)
+
+
 @router.get("/settings", tags=["settings"],
             summary="Stored preferences, and what is actually in effect",
             description="They differ whenever an environment variable overrides the "

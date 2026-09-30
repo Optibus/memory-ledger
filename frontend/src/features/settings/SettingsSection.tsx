@@ -20,6 +20,7 @@ import { DoctorCard } from "./DoctorCard";
 import { BrowserCard } from "./BrowserCard";
 import { TriggerCard } from "./TriggerCard";
 import { RealmsCard } from "./RealmsCard";
+import { LearnedRulesCard } from "./LearnedRulesCard";
 import type { RealmCount, Settings, Status, StoredSettings, Timezones } from "@/api/types";
 import "./SettingsSection.css";
 
@@ -74,6 +75,11 @@ export function SettingsSection() {
           />
           <CaptureCard
             capture={settings.data.capture}
+            writable={settings.data.writable}
+            onChanged={() => settings.reload()}
+          />
+          <LearnedRulesCard
+            effective={settings.data.effective}
             writable={settings.data.writable}
             onChanged={() => settings.reload()}
           />

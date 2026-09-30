@@ -141,6 +141,8 @@ export const api = {
       { text, exclude },
       signal,
     ),
+  ruleProposals: (signal?: AbortSignal) =>
+    get<import("./types").RuleProposals>("/api/rule-proposals", undefined, signal),
   settings: (signal?: AbortSignal) => get<Settings>("/api/settings", undefined, signal),
   timezones: (signal?: AbortSignal) => get<Timezones>("/api/timezones", undefined, signal),
   status: (signal?: AbortSignal) => get<Status>("/api/status", undefined, signal),
@@ -214,6 +216,9 @@ export const api = {
    */
   prune: (keep_days: number, confirm: boolean) =>
     post<import("./types").MaintainResult>("/api/prune", { keep_days, confirm }),
+  proposeRules: () => post("/api/propose-rules", {}),
+  acceptRule: (id: string) => post("/api/accept-rule", { id }),
+  rejectRule: (id: string) => post("/api/reject-rule", { id }),
   setCapture: (enabled: boolean) =>
     post<{ ok: boolean; capture: import("./types").CaptureState }>("/api/capture", { enabled }),
   saveUiPrefs: (prefs: import("./types").UiPrefs) =>

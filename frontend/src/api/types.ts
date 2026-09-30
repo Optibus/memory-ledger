@@ -438,6 +438,8 @@ export interface StoredSettings {
   consolidate: boolean;
   /** Keep this browser's view preferences in the brain, not just locally. */
   ui_sync: boolean;
+  /** The learned-rules detector. Off by default; it only ever proposes. */
+  learned_rules: boolean;
   map_poll_seconds: number;
   dash_refresh_seconds: number;
 }
@@ -462,6 +464,8 @@ export interface EffectiveSettings {
   consolidate_source: SettingSource;
   ui_sync: boolean;
   ui_sync_source: SettingSource;
+  learned_rules: boolean;
+  learned_rules_source: SettingSource;
   map_poll_seconds: number;
   dash_refresh_seconds: number;
 }
@@ -1005,4 +1009,23 @@ export interface UsageReportPayload {
   selected: string[];
   /** One self-contained HTML document. */
   html: string;
+}
+
+/** One learned-rule proposal: what the detector found, not yet a rule. */
+export interface RuleProposal {
+  id: string;
+  status: "proposed" | "accepted" | "rejected";
+  title: string;
+  text: string;
+  count: number;
+  sessions: number;
+  evidence: { id: string; snippet: string }[];
+}
+
+export interface RuleProposals extends Envelope {
+  enabled: boolean;
+  count: number;
+  of: number;
+  truncated: boolean;
+  proposals: RuleProposal[];
 }

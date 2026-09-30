@@ -105,6 +105,13 @@ writes the whole kit, so given only `graph.db` any AI can rebuild the interactio
 layer and reconnect to the storage. The plugin becomes replaceable; the brain does
 not.
 
+**Learned rules: opt-in, and only ever proposed.** The `learned` tier is filled by a
+token-free detector that is **off until you turn it on** (`graph.py learned-rules on`,
+or Settings). It spots corrections you repeat across sessions ("no, never…", "não,
+nunca…") and stores a `rule-proposal` — not a rule, so `match-rules` ignores it.
+`accept-rule` makes it a `learned` rule (precedence 50, below yours); `reject-rule`
+keeps it and stops it coming back. Nothing is applied silently and nothing is deleted.
+
 **The brain grows (neuroplasticity).** When a repeatable procedure shows up, it
 `learn`s a new skill — stored **as a node in the graph** (triggers + procedure in
 the DB, synced everywhere; not an isolated file). Next time a matching situation

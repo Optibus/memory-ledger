@@ -215,7 +215,9 @@ def enabled() -> bool:
 #: ("autosync: on") while the matching env var keeps the negative the engine has
 #: always used ($MEMORY_LEDGER_NO_AUTOSYNC): a file you edit should say what you
 #: want, an escape hatch you export for one shell should say what you suppress.
-BOOL_SETTINGS = {"autosync": True, "consolidate": True, "ui_sync": False}
+BOOL_SETTINGS = {"autosync": True, "consolidate": True, "ui_sync": False,
+                 # learned rules (graph.py propose-rules): opt-in, never on by default
+                 "learned_rules": False}
 
 _BOOL_TRUE = {"1", "true", "yes", "on"}
 _BOOL_FALSE = {"0", "false", "no", "off"}

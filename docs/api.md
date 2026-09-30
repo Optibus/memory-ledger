@@ -116,6 +116,7 @@ Every response is `Cache-Control: no-store`.
 | `/api/meta` | the vocabulary — node types, realms, kinds, edge rels, statuses, and the two contract shapes (`skill_sections`, `rule_sections`, `decl_labels`, `node_types`) |
 | `/api/skills` | the two skill trees, the rule catalog, `node_types` (each with its description, how many of it the brain holds, and which skills read or write it), and the area titles the filters label themselves with |
 | `/api/rule?id=<id>` | one rule in full, for the skill drawer |
+| `/api/rule-proposals?status=&budget=` | learned-rule proposals (default `proposed`), budgeted; readable while the detector is off |
 | `/api/scripts` | the local scripts in `<home>/scripts`: `dir`, `exists`, and per script `name`, `bytes`, `executable`, `language`, `summary`, `sha256`, `modified`. Files the listing leaves out for size are in `skipped` |
 | `/api/script?name=<file>` | one script's `text`. `name` must be a bare filename in `<home>/scripts`; anything else is `no such script` |
 | `/api/bundle?name=<file>` | an exported bundle, as a zip attachment. `name` is reduced to a bare filename, so it can only name a file in `<home>/bundles` |
@@ -193,7 +194,7 @@ since the dashboard lists tasks and a kind with none would be dead UI.
 | `/api/link` | `{src, dst, rel}` | |
 | `/api/unlink` | `{src, dst, rel}` | |
 | `/api/propose-idea` | `{title, detail?, realm?}` | an `idea` node, `proposed`, with its first transition logged — the write `graph.py idea-propose` makes (CONVENTIONS §2k). `realm` must be a slug and defaults to the server's current one. The map's **+ idea** button |
-| `/api/settings` | `{tz?, realm?, owner?, backend?, autosync?, consolidate?, ui_sync?, map_poll_seconds?, dash_refresh_seconds?}` | writes `<home>/settings.json`; only these keys, each validated. `""` **removes** a key (back to env/system default). A boolean key takes `true`/`false`; `false` is a value, not an absence |
+| `/api/settings` | `{tz?, realm?, owner?, backend?, autosync?, consolidate?, ui_sync?, learned_rules?, map_poll_seconds?, dash_refresh_seconds?}` | writes `<home>/settings.json`; only these keys, each validated. `""` **removes** a key (back to env/system default). A boolean key takes `true`/`false`; `false` is a value, not an absence |
 | `/api/capture` | `{enabled}` | writes (or removes) `<home>/.disabled` — the same switch `graph.py disable` throws. **Refused** while `$MEMORY_LEDGER_OFF` is set in the server's environment, because that outranks the marker |
 | `/api/add-alias` | `{id, alias}` | pins another spelling onto a person, through the engine's `api_add_alias`. A spelling they already answer to is a no-op |
 | `/api/ui-prefs` | `{prefs}` | **replaces** `<home>/ui_prefs.json` (≤64KB). The browser holds the whole blob; merging would resurrect a preference just cleared |
@@ -205,6 +206,9 @@ since the dashboard lists tasks and a kind with none would be dead UI.
 | `/api/prune` | `{confirm, keep_days?}` | runs `graph.py maintain` (default `2`). Non-destructive — consolidates, never deletes. **Refused without `confirm: true`**: preview with `GET /api/consolidate-preview` first. Takes a snapshot before the first write |
 | `/api/consolidate` | `{confirm, keep_days?}` | the same operation under the name the CLI uses, so a client can run the plan it previewed without renaming it |
 | `/api/create-rule` | `{title, scenario, source?, section?, realm?, non_negotiable?, overrides?, sections{}}` | authors a rule (§5b). **Refused** unless `sections.the_rule` and `sections.judged_against` are filled |
+| `/api/propose-rules` | `{}` | runs the learned-rules detector; proposes, never applies. A no-op that says so while `learned_rules` is off |
+| `/api/accept-rule` | `{id, title?, text?}` | a proposal becomes an active rule: `source: learned`, precedence 50 |
+| `/api/reject-rule` | `{id, reason?}` | marks a proposal rejected; kept, and not proposed again |
 | `/api/create-skill` | `{name, title, description?, realm?, sections{}, requires?, waits_for?, enriched_by?, reads?, writes?, rules[], new_rules[]}` | authors a skill (§5). **Refused** unless the six typed sections of §5.1 are filled. `rules[]` are existing rule ids, `new_rules[]` are whole rule bodies created first in the same call |
 | `/api/export-skills` | `{kind?, dir?}` | `graph.py export-skills` — a `SKILL.md` per skill plus every rule they honor |
 | `/api/ingest-skills` | `{dir?}` | `graph.py ingest-skills` — reads a folder back in; a rule this brain already holds is kept, never overwritten |
@@ -291,6 +295,7 @@ the page that set it, and `localStorage` cannot do that. Nine keys, all optional
 | `backend` | which store a CLI read uses when given no `--backend` (`sqlite`, `neo4j`, `auto`) |
 | `autosync` | push each write to the neo4j mirror, instead of only queueing it (default on) |
 | `consolidate` | let the daily hook fold closed days into digests (default on) |
+| `learned_rules` | the learned-rules detector, which only proposes (default **off**; `$MEMORY_LEDGER_NO_LEARNED_RULES` forces it off) |
 | `ui_sync` | keep the browser's view preferences in the brain as well (default off) |
 | `map_poll_seconds` | how often the map re-reads `/api/graph` (default 2) |
 | `dash_refresh_seconds` | how often the dashboard re-runs its view (default 120) |

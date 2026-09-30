@@ -147,6 +147,8 @@ class Settings(Body):
     autosync: Any = Field(None, description="true | false; null or empty resets it.")
     consolidate: Any = Field(None, description="true | false; null or empty resets it.")
     ui_sync: Any = Field(None, description="true | false; null or empty resets it.")
+    learned_rules: Any = Field(None, description="true | false; the learned-rules detector, "
+                                                  "OFF by default. null or empty resets it.")
     map_poll_seconds: Any = Field(None, description="1–600.")
     dash_refresh_seconds: Any = Field(None, description="5–3600.")
 
@@ -157,6 +159,13 @@ class Neo4jConfig(Body):
     db: Text = T("Default `neo4j`.")
     user: Text = T("Default `neo4j`.")
     password: Text = T("Blank keeps the stored one.")
+
+
+class ProposalDecision(Body):
+    id: Text = T("The rule proposal.")
+    title: Text = T("Accept only: replaces the proposed title. Empty keeps it.")
+    text: Text = T("Accept only: replaces the proposed rule text. Empty keeps it.")
+    reason: Text = T("Reject only: why, kept on the proposal.")
 
 
 class Empty(Body):
