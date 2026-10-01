@@ -1,0 +1,129 @@
+# Agents
+
+The **Agents** tab is a chat with a model from inside the brain UI: Claude
+through the `claude` CLI, or any model on an Ollama host. The code is
+`scripts/agents.py`, the routes are `/api/agent*`, and the UI is
+`frontend/src/features/agents/`.
+
+These are the only routes on the server that start a model call. Every other
+endpoint stays token-free, and so does reading a thread.
+
+## A turn is one stateless call
+
+No session carries over from one turn to the next. Each reply is one fresh call,
+and it is given:
+
+1. **The message.**
+2. **The last N exchanges** of this conversation. N is the conversation's
+   `context_turns`, from 0 to 10, and defaults to 1. With 1, a reply like "yes,
+   do it" still knows what "it" is.
+3. **What `recall` returns for the message.** That is the same spreading-activation
+   ranking as `graph.py recall` (`graph.api_recall`), capped by `recall_limit` and
+   `recall_budget`. Bookkeeping types (conversation, agent, capture, …) are dropped.
+
+Each finished exchange goes back into the graph as a `message` node, linked
+`part-of` the conversation's own `conversation` node. The next turn's recall
+finds earlier turns like any other memory, and so does every other session on
+any machine. The exchanges already carried in step 2 are left out of recall, so
+nothing appears twice.
+
+Because each turn is stateless, switching the **connector or model** mid-conversation
+costs nothing. The next reply is written by whichever one is picked, and every
+reply records its own `connector` and `model`.
+
+## Badges
+
+The list shows what each conversation's latest reply is doing:
+
+| Badge | State | Meaning |
+|---|---|---|
+| spinner | `pending` | queued or running |
+| `?` | `question` | the agent is waiting on you |
+| ✓ | `done` | answered |
+| ✕ | `error` | failed. **Retry** reruns it with the conversation's current connector |
+
+The agent decides `question` itself. The system prompt, and a reminder at the end
+of the prompt, tell it to make the last line of its reply exactly `[[needs-answer]]`
+when it cannot go on without you. The marker is stripped before the text is stored.
+
+## Tools: read-only or on, per conversation
+
+| | Read-only (default) | Tools on |
+|---|---|---|
+| Claude | `--tools=Read,Grep,Glob,WebSearch,WebFetch,Skill`, the same list in `--allowedTools`, `--permission-mode dontAsk`, `--strict-mcp-config`. No Bash, no edits, no MCP | `--dangerously-skip-permissions`, like a trigger session |
+| Ollama | `recall`, `search`, `get_node` | also `add_note`, `add_task` |
+
+Ollama tools run inside the server, against the graph. A model that does not
+support tools (Ollama answers *does not support tools*) is asked again without
+them. The reply then logs a `no tools` note and answers from the recalled context.
+
+The write routes are unauthenticated (see [api.md](api.md)). A server started
+with `--no-write` refuses `agent-send` like any other POST.
+
+## The log, the cost
+
+Each reply logs every tool call, skill, subagent, MCP call and thinking block,
+with input and output clipped to 2,000 characters. The UI folds it shut under
+the reply. Claude's events come from `--output-format stream-json --verbose`,
+and the row is updated about twice a second while the reply runs, so the log
+and the **cost** move live. While a reply runs, its cost is estimated from the
+streamed token usage at list price (`trigger.MODEL_PRICES`), marked `≈`. When it
+finishes, Claude's own `total_cost_usd` replaces the estimate. Ollama is local:
+$0, with tokens counted.
+
+## The chat header
+
+At the top right of a conversation:
+
+- **Search**: filters the thread to the messages whose text, error or tool log
+  match.
+- **Cost**: the conversation's running total. Hover it for the tokens.
+- **Export**: **PDF** opens a print view to save, **Text** is the messages as
+  plain text, and **JSON** is everything, tool logs included. All three are built
+  in the browser.
+- **Hide**: moves the conversation to the folded **Hidden** group under the active
+  list. **Unhide** brings it back. Nothing is deleted.
+
+## Connectors
+
+`<home>/agents.json`, edited in **Settings → Agents**:
+
+```json
+{
+  "default_connector": "claude",
+  "context_turns": 1,
+  "recall_limit": 8,
+  "recall_budget": 2600,
+  "max_concurrent": 2,
+  "connectors": [
+    {"id": "claude", "name": "Claude", "kind": "claude", "enabled": true, "bin": "claude",
+     "models": ["claude-opus-5-5", "claude-sonnet-5-5"], "default_model": "claude-sonnet-5-5", "timeout_s": 900},
+    {"id": "ollama", "name": "Ollama", "kind": "ollama", "enabled": true,
+     "url": "http://127.0.0.1:11434", "default_model": "", "timeout_s": 600, "max_rounds": 8}
+  ]
+}
+```
+
+A connector is one backend. Two Ollama hosts are two connectors. An Ollama
+connector's models are whatever its host has pulled (`/api/tags`), asked for
+each time the tab loads. To add a new `kind` (an OpenAI-compatible API, say),
+add it to `KINDS`, give `_clean_connector` its fields, and register a
+`run_<kind>(con, reply, connector, turn)` in `RUNNERS` that returns
+`{text, events, tokens, cost_usd, cost_estimated}`.
+
+## Running
+
+Replies run on threads in the server process, at most `max_concurrent` at once,
+oldest first. When the server starts, any reply still marked `running` belonged to
+a process that is gone. It becomes an `error` ("interrupted"), one click from
+Retry, and the queue starts again.
+
+```bash
+python3 scripts/agents.py status          # connectors, models, what is running
+python3 scripts/agents.py run <reply-id>  # run one queued reply in this process
+python3 tests/test_agents.py              # fake claude + fake Ollama, no model call
+```
+
+Storage is two tables in the brain's database, `agent_conv` and `agent_msg`. The
+graph holds the memory (`conversation` and `message` nodes). The tables hold the
+UI's view: status, event log, cost, tokens.

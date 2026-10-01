@@ -536,6 +536,14 @@ hamburger menu on the left (`m` toggles it):
   __underline__, ~~strike~~, `code` and links (Markdown, Slack's `<url|text>`,
   or a bare URL), all rendered as text and links only, never as HTML. The
   composer has buttons for each, and ⌘B / ⌘I / ⌘U / ⌘K.
+- **Agents** — [chat with Claude or a local Ollama model](docs/agents.md). Each
+  turn is one stateless call given your message, the last few exchanges and what
+  the brain recalls for it; every exchange is written back to the graph. The list
+  shows a spinner while a reply runs, **?** when the agent is waiting on you and
+  ✓ when it answered. Switch agent or model mid-conversation, keep it read-only
+  or turn tools on, and open the folded log of every tool and skill it used. The
+  chat header searches the thread, shows the live cost, exports PDF / text /
+  JSON, and hides a chat under the active list.
 - **Capabilities** — skills, rules, processes and scripts, in that order. The
   two contract trees (built-in and learned), nested by the
   `requires` edge, beside the rule catalogue, the processes, and your local

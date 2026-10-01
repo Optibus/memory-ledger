@@ -2,7 +2,9 @@
 
 `scripts/serve.py` serves two things over one port: this JSON API, and the
 React single-page app built from `frontend/`. It calls **no model** — it is the
-graph engine behind a socket, so everything it does is token-free.
+graph engine behind a socket, so everything it does is token-free. The one
+exception is by design: `POST /api/agent-send` and `/api/agent-retry` start a
+model call for the [Agents](agents.md) tab.
 
 The API is a FastAPI app in `scripts/brain_api/`, run under uvicorn. `serve.py`
 itself stays stdlib-only and is still the one command you run: on first start it
@@ -138,6 +140,9 @@ Every response is `Cache-Control: no-store`.
 | `/api/trigger-people?q=<name or email>&source=jira` | Jira accounts matching `q` (active humans only), as `{user_id, name, email}`, to allow one. Asks Jira with the stored token; reads only |
 | `/api/b2b-conversations` | every brain this one messaged or heard from, newest first, plus connected peers not talked to yet: name, whether it is connected and allowed, the message count and the last message |
 | `/api/b2b-thread?peer=` | both directions with one peer, oldest first; each message carries `at` (when it was sent), `human` (typed in the Messages chat, rather than by a session or a script), and for a received one its request and status |
+| `/api/agents` | the [Agents](agents.md) config and every connector with the models it offers now (an Ollama host is asked for its own) |
+| `/api/agent-conversations` | every agent conversation, newest first, hidden ones flagged; `state` is its badge (`pending`, `question`, `done`, `error`, `empty`), with the last message and the total cost |
+| `/api/agent-thread?id=` | one conversation, oldest first; each reply carries its status, event log (tools, skills, subagents, thinking), recalled node ids, tokens and cost — live while it runs |
 | `/api/b2b` | the [B2B](b2b.md) config (the user id; whether the private key is set, never the key), the brokers and their sessions, the peers, the messages sent, the received ones by status, and what this process's poller is doing |
 | `/api/tasks?limit=N` | every trigger task, newest first (default 200, max 500), for the Tasks section: who fired it, the source, a `name` (command, title or event kind), the status and timings, `cost_usd` (with `cost_estimated` when it was worked out from the transcript because the run failed or timed out before claude reported it), `counts` by status. A running task carries `progress`: the subagents, actions and latest answer the hooks have written to the database, plus the tool calls from its transcript. `text` and `result` are clipped |
 | `/api/task?id=<uuid>` | one task in full: the request with its `command`, `cwd`, `session_id` and `stderr`, every action, `activity` (the session's conversation, agents and a timeline, read live from the database) and `transcript` (the session's text and tool calls with input and result; the newest 400 events, each field clipped to 4000 characters) |
@@ -228,6 +233,10 @@ since the dashboard lists tasks and a kind with none would be dead UI.
 | `/api/trigger-reprocess` | `{request_id}` | puts a `blocked`, `refused`, `failed`, `timeout` or `interrupted` request back in the queue and runs it now (on the trigger pool, or on its own thread when the watchers are off), with the action it was stamped with. Clears what the last run left; its logged actions stay, and a `reprocess` action is added. Anything else is refused |
 | `/api/trigger-scan` | `{text, title?, link?, where?, at?, key?, me?[], dry_run?}` | scans a meeting's transcript for the wake phrases (`meeting.phrases`) and starts a task for each one said, on the trigger pool: the owner's at once, anyone else's only for a phrase marked `anyone` (the rest are logged `refused`). A line already scanned for the same meeting (`key`, else `link`, else `title`) runs nothing again. `dry_run` returns the `matches` and whether each `runs`, logging nothing. Refused while the master switch or `meeting.enabled` is off ([docs/trigger.md](trigger.md#wake-phrases)) |
 | `/api/trigger-decline` | `{request_id, reason, rule?}` | what the session calls for a request that breaks a rule: marks it `declined`, logs the rule and reason, and returns the policy `notice` (with `{reason}` filled) and the `signature` to post |
+| `/api/agent-send` | `{text, conversation?, connector?, model?, full_tools?, context_turns?}` | stores the message and queues the reply in the background; with no `conversation`, makes one titled from the message. **Starts a model call** |
+| `/api/agent-conversation` | `{id?, title?, connector?, model?, full_tools?, context_turns?, hidden?}` | creates a conversation (no `id`) or changes one; only the keys sent change |
+| `/api/agent-retry` | `{id}` | runs a failed reply again with the conversation's current connector. **Starts a model call** |
+| `/api/agent-config` | `{connectors?[], default_connector?, context_turns?, recall_limit?, recall_budget?, max_concurrent?}` | merges a validated patch into `<home>/agents.json`; `connectors` replaces the list |
 | `/api/b2b-config` | `{enabled?, brokers?[], private_key?, poll_seconds?, do?, action?, http?, script?, clear?[]}` | merges a validated patch into `<home>/b2b.json` (mode 600) and restarts the poller. The private key is write-only: `clear: ["private_key"]` removes it. `brokers` replaces the list. `poll_seconds` is 30 to 86400; an unknown `{variable}` in `do` is refused ([docs/b2b.md](b2b.md)) |
 | `/api/b2b-identity` | `{force?}` | makes this brain's X25519 key pair; the public key is the user id. Refuses to replace one unless `force` |
 | `/api/b2b-broker` | `{id?, url?, name?, enabled?, remove?}` | with no `id`, adds the broker at `url`; with one, changes it, or drops it with `remove` |

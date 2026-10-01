@@ -914,3 +914,67 @@ export const b2bThreadFixture: import("@/api/types").B2BThread = {
     },
   ],
 };
+
+// ------------------------------------------------------------------ agents
+const agentConnectors: import("@/api/types").AgentConnector[] = [
+  {
+    id: "claude", name: "Claude", kind: "claude", enabled: true, bin: "claude", timeout_s: 900,
+    models: ["claude-opus-5-5", "claude-sonnet-5-5"], default_model: "claude-sonnet-5-5",
+    available: true, problem: "",
+  },
+  {
+    id: "ollama", name: "Ollama", kind: "ollama", enabled: true, url: "http://127.0.0.1:11434",
+    timeout_s: 600, max_rounds: 8, models: ["llama3:latest"], default_model: "llama3:latest",
+    available: true, problem: "",
+  },
+];
+
+export const agentsFixture: import("@/api/types").AgentsStatus = {
+  ok: true,
+  config: { default_connector: "claude", context_turns: 1, recall_limit: 8, recall_budget: 2600, max_concurrent: 2 },
+  connectors: agentConnectors,
+  running: 0,
+  question_mark: "[[needs-answer]]",
+};
+
+const conv = (id: string, title: string, extra: Partial<import("@/api/types").AgentConversation> = {}) => ({
+  id, title, created_at: "2026-09-30T10:00:00Z", updated_at: "2026-09-30T10:00:00Z",
+  connector: "claude", model: "claude-sonnet-5-5", full_tools: false, context_turns: 1,
+  hidden: false, node_id: "", messages: 2, cost_usd: 0.0123, cost_estimated: false,
+  tokens_in: 1000, tokens_out: 50, last: null, state: "done" as const, ...extra,
+});
+
+export const agentConversationsFixture: import("@/api/types").AgentConversations = {
+  ok: true,
+  conversations: [
+    conv("c1", "Parking permit", { state: "question", last: { role: "agent", text: "Should I add a task?", at: "2026-09-30T10:01:00Z" } }),
+    conv("c2", "Release notes", { state: "pending" }),
+    conv("c3", "Trip plan", { state: "done" }),
+    conv("c4", "Old idea", { hidden: true }),
+  ],
+};
+
+export const agentThreadFixture: import("@/api/types").AgentThread = {
+  ok: true,
+  conversation: conv("c1", "Parking permit", { state: "question" }),
+  messages: [
+    {
+      id: "u1", conv_id: "c1", role: "user", text: "What do I have to renew?", at: "2026-09-30T10:00:00Z",
+      status: "done", reply_to: "", connector: "", model: "", full_tools: false, events: [], context: [],
+      error: "", session_id: "", cost_usd: null, cost_estimated: false, tokens_in: 0, tokens_out: 0,
+      started_at: "", finished_at: "", node_id: "",
+    },
+    {
+      id: "a1", conv_id: "c1", role: "agent", text: "The parking permit, by Oct 5. Should I add a task?",
+      at: "2026-09-30T10:00:01Z", status: "question", reply_to: "u1", connector: "claude",
+      model: "claude-sonnet-5-5", full_tools: false,
+      events: [
+        { id: "t1", kind: "tool", name: "Grep", tool: "Grep", input: '{"pattern":"permit"}', output: "graph.db: 1 match", error: false },
+        { id: "t2", kind: "skill", name: "recall", tool: "Skill", input: "{}", output: "ok", error: false },
+      ],
+      context: ["task_renew-the-optibus-parking-permit_7ba4"], error: "", session_id: "s1",
+      cost_usd: 0.0123, cost_estimated: false, tokens_in: 1000, tokens_out: 50,
+      started_at: "2026-09-30T10:00:01Z", finished_at: "2026-09-30T10:00:09Z", node_id: "",
+    },
+  ],
+};
