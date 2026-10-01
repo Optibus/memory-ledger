@@ -38,8 +38,9 @@ import "./AgentsSection.css";
  * On the left, the conversations, each with what its last reply is doing: a
  * spinner while it runs, a ? when the agent is waiting on you, a check when it
  * answered. Hidden ones fold away under the active list. On the right, the
- * thread: yours on the right, the agent's on the left, every tool, skill and
- * subagent it used logged under its reply and folded shut.
+ * thread: yours on the right, the agent's on the left. What the agent says
+ * while it works shows as it comes; every tool, skill and subagent it used is
+ * logged between those, folded shut.
  *
  * Every turn is one stateless call, so switching the connector or the model
  * between turns is free: the next reply is written by whichever is picked.
@@ -74,7 +75,7 @@ export function AgentsSection() {
     <Section
       title="Agents"
       lead="Talk to Claude or a local Ollama model. Each turn is a fresh call that gets your message, the last few exchanges, and what the brain recalls for it."
-      width={1180}
+      fill
     >
       {convs.error ? <StatusMessage tone="error">{convs.error}</StatusMessage> : null}
       {status.data?.config._problem ? <StatusMessage tone="error">{status.data.config._problem}</StatusMessage> : null}
@@ -277,11 +278,20 @@ function Thread({ id, summary, connectors, defaults, writable, onCreated, onChan
     );
   }, [messages, needle]);
 
-  const bottom = useRef<HTMLLIElement>(null);
-  const count = messages?.length ?? 0;
+  // Follow the conversation as it grows, unless you scrolled up to read.
+  const list = useRef<HTMLOListElement>(null);
+  const atBottom = useRef(true);
+  const onScroll = () => {
+    const el = list.current;
+    if (el) atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+  };
+  const toBottom = () => {
+    const el = list.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  };
   useEffect(() => {
-    if (!needle) bottom.current?.scrollIntoView?.({ block: "end" });
-  }, [count, needle]);
+    if (!needle && atBottom.current) toBottom();
+  }, [thread.data, needle]);
 
   const local = connectorOf(connectors, conv?.connector ?? "")?.kind === "ollama";
   const doExport = (f: ExportFormat) => {
@@ -336,7 +346,7 @@ function Thread({ id, summary, connectors, defaults, writable, onCreated, onChan
         ) : null}
       </header>
 
-      <ol className="ml-agents__thread" aria-label="agent messages">
+      <ol className="ml-agents__thread" aria-label="agent messages" ref={list} onScroll={onScroll}>
         {thread.error ? <StatusMessage tone="error">{thread.error}</StatusMessage> : null}
         {id && !messages && !thread.error ? <Spinner label="reading messages" /> : null}
         {!id ? <EmptyState title="Start a conversation" hint="Pick an agent and a model below, then write." /> : null}
@@ -348,7 +358,6 @@ function Thread({ id, summary, connectors, defaults, writable, onCreated, onChan
         {shown?.map((m) => (
           <MessageItem key={m.id} m={m} writable={writable} onRetry={() => void api.retryAgent(m.id).then(() => { thread.refresh(); onChanged(); }, (e: Error) => setError(e.message))} />
         ))}
-        <li ref={bottom} aria-hidden="true" className="ml-agents__end" />
       </ol>
 
       <Composer
@@ -361,6 +370,7 @@ function Thread({ id, summary, connectors, defaults, writable, onCreated, onChan
         onError={setError}
         onPick={(p) => void change(p)}
         onSent={(res) => {
+          atBottom.current = true;
           if (!conv) onCreated(res);
           else {
             thread.refresh();
@@ -384,9 +394,20 @@ function initialPick(connectors: AgentConnector[], defaults: { default_connector
 function MessageItem({ m, writable, onRetry }: { m: AgentMessage; writable: boolean; onRetry: () => void }) {
   const side = m.role === "user" ? "out" : "in";
   const running = m.status === "queued" || m.status === "running";
+  const segs = m.role === "agent" ? segments(m.events, !running && !!m.text.trim()) : [];
   return (
     <li className={`ml-agents__item ml-agents__item--${side}`} aria-label={m.role === "user" ? "your message" : "agent reply"}>
-      {m.role === "agent" && m.events.length ? <EventLog events={m.events} running={running} /> : null}
+      {m.role === "agent"
+        ? segs.map((seg, i) =>
+            seg.said ? (
+              <div key={i} className="ml-agents__bubble ml-agents__bubble--said">
+                <RichText text={seg.said} />
+              </div>
+            ) : (
+              <EventLog key={i} events={seg.events} running={running && i === segs.length - 1} />
+            ),
+          )
+        : null}
       {m.role === "agent" && running ? (
         <div className="ml-agents__bubble ml-agents__bubble--wait">
           <Spinner label="the agent is working" /> {m.status === "queued" ? "queued…" : "working…"}
@@ -421,6 +442,28 @@ function MessageItem({ m, writable, onRetry }: { m: AgentMessage; writable: bool
       </div>
     </li>
   );
+}
+
+type Segment = { said: string; events: AgentEvent[] };
+
+/**
+ * The reply's events in order: what the agent said on its own (a top-level
+ * `text` event) as a message, each run of tool calls between those as one
+ * folded log. The last thing said is the reply itself, already shown below,
+ * so it is dropped once the reply has landed.
+ */
+function segments(events: AgentEvent[], landed: boolean): Segment[] {
+  const said = (e: AgentEvent) => e.kind === "text" && !e.parent;
+  let last = -1;
+  if (landed) events.forEach((e, i) => (last = said(e) ? i : last));
+  const out: Segment[] = [];
+  events.forEach((e, i) => {
+    if (i === last) return;
+    if (said(e)) out.push({ said: e.output ?? "", events: [] });
+    else if (out.length && !out[out.length - 1]!.said) out[out.length - 1]!.events.push(e);
+    else out.push({ said: "", events: [e] });
+  });
+  return out;
 }
 
 const KIND_ICON: Record<string, string> = { tool: "🔧", skill: "🧩", agent: "🤖", mcp: "🔌", thinking: "💭", text: "💬", note: "ℹ" };

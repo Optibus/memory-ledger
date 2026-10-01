@@ -13,8 +13,8 @@ html, body, #root {
 /* The map owns the viewport and must not scroll; every other section is a
    normal scrolling document. `data-section` on <body> is the single switch, so
    no component has to know which mode the app is in. */
-body[data-section="map"], body[data-section="api-docs"], body[data-section="usage"] { overflow: hidden; }
-body:not([data-section="map"]):not([data-section="api-docs"]):not([data-section="usage"]) { overflow: auto; }
+body[data-section="map"], body[data-section="api-docs"], body[data-section="usage"], body[data-section="agents"] { overflow: hidden; }
+body:not([data-section="map"]):not([data-section="api-docs"]):not([data-section="usage"]):not([data-section="agents"]) { overflow: auto; }
 
 a { color: var(--accent); }
 code { font-family: var(--font-mono); font-size: 0.92em; }

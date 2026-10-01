@@ -37,6 +37,14 @@ describe("Agents", () => {
     expect(within(reply).getByRole("img", { name: "the agent asked you something" })).toBeInTheDocument();
   });
 
+  it("shows what the agent says while it works, without repeating its reply", async () => {
+    renderApp(<AgentsSection />, { route: "/agents?c=c1" });
+    const reply = await screen.findByRole("listitem", { name: "agent reply" });
+    expect(within(reply).getByText("Let me look for permits.")).toBeInTheDocument();
+    expect(within(reply).getAllByText("The parking permit, by Oct 5. Should I add a task?")).toHaveLength(1);
+    expect(reply.querySelectorAll("details.ml-agents__log")).toHaveLength(1);
+  });
+
   it("shows the conversation's cost at the top right", async () => {
     renderApp(<AgentsSection />, { route: "/agents?c=c1" });
     expect(await screen.findByLabelText("conversation cost")).toHaveTextContent("$0.01");

@@ -1,11 +1,11 @@
 /* Two panes under the heading, like Messages: conversations, then the thread. */
 .ml-agents {
   display: grid; grid-template-columns: 300px 1fr; gap: var(--space-4);
-  height: calc(100vh - 190px); min-height: 420px;
+  flex: 1; min-height: 0;
 }
 @media (max-width: 760px) {
-  .ml-agents { grid-template-columns: 1fr; height: auto; }
-  .ml-agents__main { min-height: 70vh; }
+  .ml-agents { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
+  .ml-agents__side { max-height: 30vh; }
 }
 .ml-agents__side, .ml-agents__main {
   border: 1px solid var(--border); border-radius: var(--radius-lg);
@@ -64,7 +64,6 @@
 }
 .ml-agents__thread > .ml-empty { margin: auto; }
 .ml-agents__found { align-self: center; color: var(--muted); font-size: 12px; }
-.ml-agents__end { height: 1px; }
 .ml-agents__item { display: flex; flex-direction: column; max-width: 76%; gap: 4px; }
 .ml-agents__item--in { align-self: flex-start; }
 .ml-agents__item--out { align-self: flex-end; align-items: flex-end; }

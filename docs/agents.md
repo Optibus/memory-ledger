@@ -66,8 +66,11 @@ with `--no-write` refuses `agent-send` like any other POST.
 ## The log, the cost
 
 Each reply logs every tool call, skill, subagent, MCP call and thinking block,
-with input and output clipped to 2,000 characters. The UI folds it shut under
-the reply. Claude's events come from `--output-format stream-json --verbose`,
+with input and output clipped to 2,000 characters. In the UI, what the agent
+says while it works shows as its own message, as it comes; the tool calls
+between those fold shut. The tab fills the window and the chat scrolls on its
+own: it follows new messages while you are at the bottom, and stays put when
+you scrolled up to read. Claude's events come from `--output-format stream-json --verbose`,
 and the row is updated about twice a second while the reply runs, so the log
 and the **cost** move live. While a reply runs, its cost is estimated from the
 streamed token usage at list price (`trigger.MODEL_PRICES`), marked `≈`. When it

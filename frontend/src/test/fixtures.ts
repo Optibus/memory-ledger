@@ -969,8 +969,10 @@ export const agentThreadFixture: import("@/api/types").AgentThread = {
       at: "2026-09-30T10:00:01Z", status: "question", reply_to: "u1", connector: "claude",
       model: "claude-sonnet-5-5", full_tools: false,
       events: [
+        { id: "x1", kind: "text", name: "said", output: "Let me look for permits.", error: false },
         { id: "t1", kind: "tool", name: "Grep", tool: "Grep", input: '{"pattern":"permit"}', output: "graph.db: 1 match", error: false },
         { id: "t2", kind: "skill", name: "recall", tool: "Skill", input: "{}", output: "ok", error: false },
+        { id: "x2", kind: "text", name: "said", output: "The parking permit, by Oct 5. Should I add a task?", error: false },
       ],
       context: ["task_renew-the-optibus-parking-permit_7ba4"], error: "", session_id: "s1",
       cost_usd: 0.0123, cost_estimated: false, tokens_in: 1000, tokens_out: 50,
