@@ -318,6 +318,14 @@ def save_settings(data: m.Settings = body(m.Settings)):
         # in an assignee field. Validating the SHAPE of a human name is how you
         # refuse to store someone's actual name.
         patch["owner"] = clip(data.owner, 80)
+    if "brain_name" in sent:
+        # Said out loud in a wake phrase and matched word by word, so it must
+        # have a word in it; braces would read as a variable in every template.
+        name = re.sub(r"\s+", " ", clip(data.brain_name, 40)).strip()
+        if name and (not re.search(r"\w", name) or re.search(r"[{}]", name)):
+            return reply({"ok": False, "error": "the brain's name needs a letter or a digit, "
+                                                "and no braces"})
+        patch["brain_name"] = name
     for key in graph.BOOL_SETTINGS:
         if key not in sent:
             continue
@@ -579,6 +587,28 @@ def trigger_reprocess(data: m.TriggerReprocess = body(m.TriggerReprocess)):
     if ran:
         res["runs_on"] = ran["on"]
     return reply(res)
+
+
+@router.post("/trigger-scan", tags=["trigger"], summary="Start the tasks a meeting's wake phrases ask for",
+             description="Reads a transcript for the wake phrases (`meeting.phrases`) and "
+                         "starts a task for each one said, at once: the owner saying one runs "
+                         "it, anyone else only for a phrase marked `anyone`. Each is logged "
+                         "first, and a line already scanned runs nothing again.")
+def trigger_scan(data: m.TriggerScan = body(m.TriggerScan)):
+    cfg = trigger.load_config()
+    text = (data.text or "")[:trigger.SCAN_TEXT_MAX]
+    aliases = [clip(a, 80) for a in (data.me or []) if a][:10]
+    if data.dry_run is True:
+        found = trigger.match_phrases(cfg, text, aliases)
+        return reply({"ok": True, "dry_run": True, "matched": len(found),
+                      "matches": [{"phrase": f["phrase"]["phrase"], "speaker": f["speaker"],
+                                   "said": f["said"][:300], "is_owner": f["is_owner"],
+                                   "runs": f["is_owner"] or f["phrase"]["anyone"]}
+                                  for f in found]})
+    return reply(trigger.scan(cfg, text, where=clip(data.where, 300), link=clip(data.link, 1000),
+                              title=clip(data.title, 200), at=clip(data.at, 40),
+                              key=clip(data.key, 300), aliases=aliases,
+                              dispatch=trigger_runtime.run_soon))
 
 
 @router.post("/trigger-decline", tags=["trigger"], summary="Decline a request that breaks a rule",

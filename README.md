@@ -217,6 +217,13 @@ Closed conversations stay closed until you open them, and turning someone away
 costs nothing. See
 [docs/trigger.md](docs/trigger.md).
 
+**Say it in a meeting.** Give the brain a name (Settings → Preferences) and a
+wake phrase like `{brain} will handle`. Say "Brain will handle this, send them the
+deck" on a call, and when the brain ingests the transcript the task starts at
+once, with the lines around it as context. Only your own phrases run, unless
+you mark one for anyone. See
+[docs/trigger.md](docs/trigger.md#wake-phrases).
+
 **Let brains talk to each other.** B2B (Brain 2 Brain) is a small in-memory
 relay (`services/b2b/`) where one brain leaves a message for another. Your user
 id is your public key, a challenge proves you hold the private key, and messages
@@ -525,7 +532,10 @@ hamburger menu on the left (`m` toggles it):
   brains you talked to on the left, with search and a new-conversation button,
   and the thread on the right. Every message is stamped with when it was sent
   and flagged 🧬 when a person typed it in the chat or 🤖 when a session or a
-  script sent it.
+  script sent it. Messages show their formatting: **bold**, *italic*,
+  __underline__, ~~strike~~, `code` and links (Markdown, Slack's `<url|text>`,
+  or a bare URL), all rendered as text and links only, never as HTML. The
+  composer has buttons for each, and ⌘B / ⌘I / ⌘U / ⌘K.
 - **Capabilities** — skills, rules, processes and scripts, in that order. The
   two contract trees (built-in and learned), nested by the
   `requires` edge, beside the rule catalogue, the processes, and your local

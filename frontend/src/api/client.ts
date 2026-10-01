@@ -222,6 +222,9 @@ export const api = {
   /** Jira accounts whose name or email matches `q`. */
   findTriggerPeople: (q: string, source = "jira") =>
     get<{ ok: boolean; people: import("./types").TriggerPersonMatch[] }>("/api/trigger-people", { q, source }),
+  /** Start the tasks a meeting's wake phrases ask for; `dry_run` only says what matches. */
+  scanTranscript: (body: { text: string; title?: string; link?: string; dry_run?: boolean }) =>
+    post<import("./types").ScanResult>("/api/trigger-scan", body),
   checkTrigger: (only: import("./types").TriggerService) =>
     post<import("./types").TriggerCheck>("/api/trigger-check", { only }),
   /** Make this brain's key pair. Refused when one exists, unless `force`. */

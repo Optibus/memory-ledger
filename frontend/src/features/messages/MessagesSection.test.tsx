@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import { MessagesSection } from "./MessagesSection";
 import { renderApp } from "@/test/utils";
-import { resetWrites, writes } from "@/test/server";
+import { http, HttpResponse } from "msw";
+import { resetWrites, server, writes } from "@/test/server";
+import { b2bThreadFixture } from "@/test/fixtures";
 
 beforeEach(resetWrites);
 
@@ -65,5 +67,50 @@ describe("Messages", () => {
     renderApp(<MessagesSection />, { route: `/messages?peer=${"D".repeat(43)}` });
     expect(await screen.findByText(/Not a connected peer/)).toBeInTheDocument();
     expect(screen.getByLabelText("message")).toBeDisabled();
+  });
+
+  it("shows a message's formatting and links, and never its markup", async () => {
+    server.use(
+      http.get("/api/b2b-thread", () =>
+        HttpResponse.json({
+          ...b2bThreadFixture,
+          messages: [
+            {
+              ...b2bThreadFixture.messages[0]!,
+              text: "**Done**, see [the PR](https://g.example/pr/1) or https://x.example. __really__ <b>hi</b>",
+            },
+          ],
+        }),
+      ),
+    );
+    renderApp(<MessagesSection />, { route: `/messages?peer=${DANA}` });
+    const thread = await screen.findByRole("list", { name: "messages" });
+    expect((await within(thread).findByText("Done")).tagName).toBe("STRONG");
+    expect(within(thread).getByText("really").tagName).toBe("U");
+    const pr = within(thread).getByRole("link", { name: "the PR" });
+    expect(pr).toHaveAttribute("href", "https://g.example/pr/1");
+    expect(pr).toHaveAttribute("rel", "noopener noreferrer");
+    expect(within(thread).getByRole("link", { name: "https://x.example" })).toBeInTheDocument();
+    // HTML in a message is text, not markup.
+    expect(thread.querySelector("b")).toBeNull();
+    expect(within(thread).getByText(/<b>hi<\/b>/)).toBeInTheDocument();
+  });
+
+  it("formats the selection from the toolbar and the keyboard", async () => {
+    const { user } = renderApp(<MessagesSection />, { route: `/messages?peer=${DANA}` });
+    await screen.findByRole("list", { name: "messages" });
+    const box = screen.getByLabelText("message") as HTMLTextAreaElement;
+    await user.type(box, "ship it");
+    box.setSelectionRange(0, 4);
+    await user.click(screen.getByRole("button", { name: "Bold" }));
+    expect(box.value).toBe("**ship** it");
+    expect(box.value.slice(box.selectionStart, box.selectionEnd)).toBe("ship");
+    box.setSelectionRange(9, 11);
+    await user.keyboard("{Control>}u{/Control}");
+    expect(box.value).toBe("**ship** __it__");
+    await user.keyboard("{Enter}");
+    await waitFor(() =>
+      expect(sent("/api/b2b-send")).toEqual([{ to: DANA, text: "**ship** __it__", human: true }]),
+    );
   });
 });

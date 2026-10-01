@@ -323,6 +323,7 @@ def meta():
         # the declarable vocabulary, not just the types in use: a new skill
         # legitimately writes a type this brain has never held
         "node_types": graph.NODE_TYPES,
+        "brain_name": graph.brain_name(), "owner": graph.owner(),
         "writable": state.WRITABLE, "boot": state.BOOT,
     }
 

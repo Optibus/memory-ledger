@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/api/client";
 import { useAsync } from "@/hooks/useAsync";
+import { useMeta } from "@/api/MetaContext";
 import {
   Badge,
   Button,
@@ -131,6 +132,8 @@ function PreferencesCard({
   const [tz, setTz] = useState(settings.settings.tz ?? "");
   const [realm, setRealm] = useState(settings.settings.realm ?? "");
   const [owner, setOwner] = useState(settings.settings.owner ?? "");
+  const [brainName, setBrainName] = useState(settings.settings.brain_name ?? "");
+  const meta = useMeta();
   const [backend, setBackend] = useState(settings.settings.backend ?? "");
   const [mapPoll, setMapPoll] = useState(String(eff.map_poll_seconds));
   const [dashRefresh, setDashRefresh] = useState(String(eff.dash_refresh_seconds));
@@ -141,6 +144,7 @@ function PreferencesCard({
     setTz(settings.settings.tz ?? "");
     setRealm(settings.settings.realm ?? "");
     setOwner(settings.settings.owner ?? "");
+    setBrainName(settings.settings.brain_name ?? "");
     setBackend(settings.settings.backend ?? "");
     setMapPoll(String(eff.map_poll_seconds));
     setDashRefresh(String(eff.dash_refresh_seconds));
@@ -157,6 +161,7 @@ function PreferencesCard({
           tz,
           realm,
           owner,
+          brain_name: brainName,
           backend,
           map_poll_seconds: Number(mapPoll) || 0,
           dash_refresh_seconds: Number(dashRefresh) || 0,
@@ -164,6 +169,8 @@ function PreferencesCard({
       );
       setOut({ text: `Saved to ${settings.path}.`, tone: "success" });
       onSaved();
+      // The name is in the sidebar and the tab, read from the vocabulary.
+      meta.reload();
     } catch (err) {
       setOut({ text: err instanceof Error ? err.message : String(err), tone: "error" });
     } finally {
@@ -198,6 +205,25 @@ function PreferencesCard({
             value={owner}
             placeholder={eff.owner}
             onChange={(e) => setOwner(e.target.value)}
+          />
+        )}
+      </Field>
+
+      <Field
+        label="The brain's name"
+        hint={`What it answers to: {brain} in a wake phrase ("${
+          eff.brain_name
+        } will handle this"), a signature or a run command, and the name at the top of the page. In effect: ${
+          eff.brain_name
+        } (from ${eff.brain_name_source}).`}
+      >
+        {(id) => (
+          <TextInput
+            id={id}
+            value={brainName}
+            maxLength={40}
+            placeholder={eff.brain_name}
+            onChange={(e) => setBrainName(e.target.value)}
           />
         )}
       </Field>

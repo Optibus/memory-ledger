@@ -88,6 +88,9 @@ export interface Meta extends Envelope {
   decl_labels: DeclLabel[];
   rule_sources: string[];
   node_types: string[];
+  /** What the brain is called: the sidebar, the tab, `{brain}` in a wake phrase. */
+  brain_name: string;
+  owner: string;
   writable: boolean;
   boot: string;
 }
@@ -431,6 +434,8 @@ export interface StoredSettings {
   realm: string;
   /** Who "me" is — what `--mine` filters on. */
   owner: string;
+  /** What the brain answers to. */
+  brain_name: string;
   backend: string;
   /** Push each write to the neo4j mirror, instead of only queueing it. */
   autosync: boolean;
@@ -456,6 +461,8 @@ export interface EffectiveSettings {
   realm: string;
   owner: string;
   owner_source: SettingSource;
+  brain_name: string;
+  brain_name_source: SettingSource;
   backend: string;
   backends: string[];
   autosync: boolean;
@@ -632,7 +639,7 @@ export interface UiPrefsPayload extends Envelope {
 // secrets: for those the server only ever says whether one is set, and where
 // from, so a page that shows "one is stored" never holds the token itself.
 
-export type TriggerService = "claude" | "slack" | "jira" | "github";
+export type TriggerService = "claude" | "slack" | "jira" | "github" | "meeting";
 
 /** What a GitHub poll can notice. Each has its own switch and instruction. */
 export type GitHubEventKind =
@@ -693,6 +700,34 @@ export interface SlackCommand extends TriggerEventSetting {
   anyone: boolean;
   pattern: string;
   description: string;
+}
+
+/** "<brain> will handle this", said in a meeting. Matched word by word. */
+export interface WakePhrase extends TriggerEventSetting {
+  /** Words, with `{brain}` and `{owner}` filled in before matching. */
+  phrase: string;
+  /** Anyone in the meeting saying it runs it. Off: only you. */
+  anyone: boolean;
+  description: string;
+}
+
+export interface ScanMatch {
+  phrase: string;
+  speaker: string;
+  said: string;
+  is_owner?: boolean;
+  runs?: boolean;
+  status?: string;
+  request_id?: string;
+}
+
+export interface ScanResult extends Envelope {
+  matched: number;
+  matches: ScanMatch[];
+  dry_run?: boolean;
+  queued?: string[];
+  refused?: string[];
+  seen?: number;
 }
 
 export interface TriggerSecret {
@@ -774,6 +809,14 @@ export interface TriggerConfig {
     refusal_notice: boolean;
     max_catchup_hours: number;
     events: Record<GitHubEventKind, GitHubEventSetting>;
+  };
+  meeting: {
+    enabled: boolean;
+    active: boolean;
+    phrases: WakePhrase[];
+    /** What a phrase does when its own run command is empty. */
+    default_do: string;
+    brain_name: string;
   };
   secrets: Record<string, TriggerSecret>;
   /** What a run command can say in braces. */

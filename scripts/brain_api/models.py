@@ -143,6 +143,8 @@ class Settings(Body):
     tz: Optional[str] = Field(None, description="IANA timezone name.")
     realm: Optional[str] = Field(None, description="Lowercase letters, digits, dashes.")
     owner: Optional[str] = Field(None, description="Who 'me' is.")
+    brain_name: Optional[str] = Field(None, description="What the brain is called: `{brain}` "
+                                                         "in templates and wake phrases.")
     backend: Optional[str] = Field(None, description="sqlite | neo4j | auto.")
     autosync: Any = Field(None, description="true | false; null or empty resets it.")
     consolidate: Any = Field(None, description="true | false; null or empty resets it.")
@@ -235,6 +237,10 @@ class TriggerConfig(Body):
                                          "`owner_account_id`, `marker`, `poll_seconds`, `jql`, "
                                          "`watch_jql`, `max_catchup_hours`, `events`, `prompt`, "
                                          "and the write-only `token`.")
+    meeting: _obj = Field(None, description="`enabled`, and `phrases` (the whole list: "
+                                            "`{phrase, on, anyone, description, do, action, "
+                                            "http, script}`). A phrase may use `{brain}` and "
+                                            "`{owner}`.")
     github: _obj = Field(None, description="`enabled`, `api_url`, `login`, `marker`, "
                                            "`poll_seconds`, `repos`, `trusted_associations`, "
                                            "`refusal_notice`, `max_catchup_hours`, `events` "
@@ -264,6 +270,20 @@ class TriggerDecline(Body):
     request_id: Text = T("The request the session will not do.")
     reason: Text = T("One short line, safe to show the requester.")
     rule: Text = T("The rule or guardrail it breaks.")
+
+
+class TriggerScan(Body):
+    text: Text = T("The meeting's transcript or notes. A line `Name: what they said` "
+                   "names who said it.")
+    where: Text = T("The meeting, in words. Default `Meeting: <title>`.")
+    title: Text = T("The meeting's title.")
+    link: Text = T("A link to its notes or transcript.")
+    at: Text = T("When it happened, ISO 8601.")
+    key: Text = T("What makes this meeting itself, so a second scan runs nothing twice. "
+                  "Default: the link, else the title.")
+    me: Optional[list[LooseStr]] = Field(None, description="Other names the transcript "
+                                                           "calls the owner.")
+    dry_run: Any = Field(None, description="true: say what matches; log and run nothing.")
 
 
 class TriggerReprocess(Body):

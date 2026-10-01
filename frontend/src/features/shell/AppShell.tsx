@@ -16,7 +16,8 @@ import "./AppShell.css";
 export function AppShell() {
   const [navOpen, setNavOpen] = useState(false);
   const location = useLocation();
-  const { error } = useMeta();
+  const { error, meta } = useMeta();
+  const brain = meta?.brain_name;
 
   const section = location.pathname.split("/")[1] || "map";
 
@@ -26,6 +27,11 @@ export function AppShell() {
       delete document.body.dataset.section;
     };
   }, [section]);
+
+  // The tab says whose brain this is once it has a name of its own.
+  useEffect(() => {
+    document.title = brain && brain !== "Brain" ? `${brain} · second-brain` : "second-brain";
+  }, [brain]);
 
   useKeyboardShortcut("m", useCallback(() => setNavOpen((v) => !v), []));
 

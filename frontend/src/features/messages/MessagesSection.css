@@ -66,3 +66,14 @@
 }
 .ml-msg__compose-row { display: flex; gap: var(--space-2); align-items: flex-end; }
 .ml-msg__compose-row .ml-input--area { min-height: 44px; resize: none; }
+
+.ml-msg__format { display: flex; gap: 2px; }
+.ml-msg__fmt {
+  min-width: 28px; height: 26px; padding: 0 6px;
+  border: 1px solid transparent; border-radius: var(--radius); background: none;
+  color: var(--muted); font: inherit; font-size: 13px; cursor: pointer;
+}
+.ml-msg__fmt:hover:not(:disabled) { background: var(--hover); color: var(--fg); border-color: var(--border); }
+.ml-msg__fmt:disabled { opacity: 0.4; cursor: default; }
+.ml-msg__fmt code { font-family: var(--font-mono); font-size: 11px; }
+.ml-msg__bubble .ml-rich__pre { max-width: 100%; }

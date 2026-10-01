@@ -2,10 +2,11 @@ import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { api } from "@/api/client";
 import { useAsync } from "@/hooks/useAsync";
-import { Badge, Button, Card, Checkbox, Field, Spinner, StatusMessage, TextInput } from "@/components";
+import { Badge, Button, Card, Checkbox, Field, Spinner, StatusMessage, TextArea, TextInput } from "@/components";
 import type { BadgeTone } from "@/components";
 import type {
   GitHubEventKind,
+  ScanResult,
   JiraEventKind,
   ScriptsPayload,
   SlackCommand,
@@ -23,8 +24,9 @@ import type {
   TriggerStatus,
   TriggerVariable,
   TriggerWatcher,
+  WakePhrase,
 } from "@/api/types";
-import { CommandsEditor, EventsEditor, FoldButton, useFold } from "./TriggerActions";
+import { CommandsEditor, EventsEditor, FoldButton, PhrasesEditor, spokenPhrase, useFold } from "./TriggerActions";
 import type { EventKindInfo, ScriptsState } from "./TriggerActions";
 import "./SettingsSection.css";
 
@@ -102,6 +104,7 @@ export function TriggerCard({ writable }: { writable: boolean }) {
         scripts={scripts}
       />
       <GitHubPanel config={config} watcher={runtime.github} writable={writable} onSaved={reload} scripts={scripts} />
+      <MeetingPanel config={config} writable={writable} onSaved={reload} scripts={scripts} />
       <ClaudePanel config={config} writable={writable} onSaved={reload} />
       <Recent status={status.data} />
 
@@ -111,7 +114,12 @@ export function TriggerCard({ writable }: { writable: boolean }) {
 }
 
 // ---------------------------------------------------------------- run commands
-const SOURCE_NAME: Record<string, string> = { slack: "Slack", jira: "Jira", github: "GitHub" };
+const SOURCE_NAME: Record<string, string> = {
+  slack: "Slack",
+  jira: "Jira",
+  github: "GitHub",
+  meeting: "Meetings",
+};
 
 /**
  * What a run command can say, at the top of the card: every trigger's command
@@ -226,7 +234,7 @@ function MasterSwitch({
         hint={
           <>
             The last line of every reply, never translated. <code>{"{owner}"}</code> is your
-            name; now it reads <em>{config.signature.replace(/^_|_$/g, "")}</em>. It is also how
+            name and <code>{"{brain}"}</code> the brain&rsquo;s; now it reads <em>{config.signature.replace(/^_|_$/g, "")}</em>. It is also how
             the brain knows its own words, so keep it distinctive.
           </>
         }
@@ -963,6 +971,166 @@ function GitHubPanel({
       </div>
     </Panel>
   );
+}
+
+function MeetingPanel({
+  config,
+  writable,
+  onSaved,
+  scripts,
+}: {
+  config: TriggerConfig;
+  writable: boolean;
+  onSaved: () => void;
+  scripts: ScriptsState;
+}) {
+  const m = config.meeting;
+  const { busy, out, save } = useSave(onSaved);
+  const [phrases, setPhrases] = useState<WakePhrase[]>(m.phrases ?? []);
+  useEffect(() => setPhrases(m.phrases ?? []), [m.phrases]);
+
+  return (
+    <Panel
+      title="Meetings"
+      service="meeting"
+      switchLabel="Listen for wake phrases"
+      switchHint={`When the brain reads a meeting's transcript or notes (ingest-context, or a scan below), every wake phrase said in it starts a task at once. Nothing listens live: it runs on the transcript.`}
+      enabled={m.enabled}
+      writable={writable}
+      busy={busy}
+      onToggle={(v) => save({ meeting: { enabled: v } }, v ? "Wake phrases on." : "Wake phrases off.")}
+      onSave={() => save({ meeting: { phrases } }, "Wake phrases saved.")}
+      out={out}
+      after={
+        <>
+          <PhrasesEditor
+            phrases={phrases}
+            onChange={setPhrases}
+            brainName={m.brain_name}
+            defaultDo={m.default_do}
+            variables={config.variables}
+            writable={writable}
+            busy={busy}
+            scripts={scripts}
+          />
+          <ScanBox active={m.active} writable={writable} brainName={m.brain_name} phrases={m.phrases} />
+        </>
+      }
+    >
+      {null}
+    </Panel>
+  );
+}
+
+/**
+ * Paste a transcript: "Try" says which lines would start a task, and who said
+ * them, without logging anything; "Run" starts them, as a scan from
+ * ingest-context would.
+ */
+function ScanBox({
+  active,
+  writable,
+  brainName,
+  phrases,
+}: {
+  active: boolean;
+  writable: boolean;
+  brainName: string;
+  phrases: WakePhrase[];
+}) {
+  const fold = useFold("meeting.scan", false);
+  const [text, setText] = useState("");
+  const [title, setTitle] = useState("");
+  const [res, setRes] = useState<ScanResult | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const example = spokenPhrase(phrases.find((p) => p.on)?.phrase ?? "{brain} will handle", brainName);
+
+  const go = async (dry: boolean) => {
+    setBusy(true);
+    setErr(null);
+    setRes(null);
+    try {
+      setRes(await api.scanTranscript({ text, title: title || undefined, dry_run: dry }));
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="ml-trigger__events" role="group" aria-label="Scan a transcript">
+      <h4 className="ml-trigger__events-h">
+        <FoldButton open={fold.open} onToggle={fold.toggle}>
+          Scan a transcript
+        </FoldButton>
+      </h4>
+      {fold.open ? (
+        <>
+          <p className="ml-settings__hint">
+            One line per turn, <code>Name: what they said</code>, as Meet writes it. Try it on a saved
+            phrase list; Run starts what it finds.
+          </p>
+          <Field label="Meeting title" hint="Optional. Scanning the same meeting twice runs nothing twice.">
+            {(id) => (
+              <TextInput id={id} value={title} disabled={!writable} onChange={(e) => setTitle(e.target.value)} />
+            )}
+          </Field>
+          <Field label="Transcript">
+            {(id) => (
+              <TextArea
+                id={id}
+                rows={5}
+                value={text}
+                disabled={!writable}
+                placeholder={`Ana: can someone send the deck to Acme?\nYou: ${example} this, send them v2.`}
+                onChange={(e) => setText(e.target.value)}
+              />
+            )}
+          </Field>
+          <div className="ml-settings__foot">
+            <Button disabled={!writable || busy || !text.trim()} onClick={() => void go(true)}>
+              {busy ? "reading…" : "Try"}
+            </Button>
+            <Button
+              variant="primary"
+              disabled={!writable || busy || !text.trim() || !active}
+              title={active ? undefined : "Switch on Triggers and wake phrases first"}
+              onClick={() => void go(false)}
+            >
+              Run
+            </Button>
+          </div>
+          {err ? <StatusMessage tone="error">{err}</StatusMessage> : null}
+          {res ? (
+            res.matches.length ? (
+              <ul className="ml-trigger__scan" aria-label="matches">
+                {res.matches.map((mt, i) => (
+                  <li key={i}>
+                    <Badge tone={scanTone(mt)}>{scanLabel(mt)}</Badge> <b>{mt.speaker || "someone"}</b>:{" "}
+                    {mt.said}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <StatusMessage tone="info">No wake phrase in it.</StatusMessage>
+            )
+          ) : null}
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function scanLabel(m: ScanResult["matches"][number]) {
+  if (m.status) return m.status === "queued" ? "started" : m.status;
+  return m.runs ? "would start" : "would be refused";
+}
+
+function scanTone(m: ScanResult["matches"][number]): BadgeTone {
+  const s = m.status ?? (m.runs ? "queued" : "refused");
+  return s === "queued" ? "success" : s === "refused" ? "warn" : "neutral";
 }
 
 function ClaudePanel({

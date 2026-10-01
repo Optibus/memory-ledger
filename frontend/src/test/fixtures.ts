@@ -36,6 +36,8 @@ export const metaFixture: Meta = {
   },
   no_kind_token: "(none)",
   types: { task: 9, person: 4, note: 6 },
+  brain_name: "Jarvis",
+  owner: "Alex",
   skill_sections: [
     { field: "when_to_use", heading: "## When to use", required: true, generated: false },
     { field: "given", heading: "## Given", required: true, generated: false },
@@ -312,6 +314,8 @@ export const settingsFixture: Settings = {
     realm: "work",
     owner: "Alex",
     owner_source: "default",
+    brain_name: "Jarvis",
+    brain_name_source: "settings",
     backend: "auto",
     backends: ["sqlite", "neo4j", "auto"],
     autosync: true,
@@ -499,6 +503,24 @@ export const triggerFixture: import("@/api/types").TriggerStatus = {
         closed: ev(false, "Note who closed it."),
         assigned: ev(false, "Add a task."),
       },
+    },
+    meeting: {
+      enabled: true,
+      active: true,
+      brain_name: "Jarvis",
+      default_do: "Work out what they put on {brain}, and do it now.",
+      phrases: [
+        {
+          phrase: "{brain} will handle",
+          anyone: false,
+          description: "",
+          on: true,
+          do: "",
+          action: "claude",
+          http: { method: "POST", url: "", headers: {}, body: "" },
+          script: { name: "", args: [] },
+        },
+      ],
     },
     secrets: {
       "slack.app_token": { set: true, stored: true, source: "file", env_var: "MEMORY_LEDGER_SLACK_APP_TOKEN" },

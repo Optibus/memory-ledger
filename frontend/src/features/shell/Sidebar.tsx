@@ -1,4 +1,5 @@
 import { NavLink } from "react-router-dom";
+import { useMeta } from "@/api/MetaContext";
 import { API_DOCS_URL } from "@/features/apidocs/ApiDocsSection";
 import "./Sidebar.css";
 
@@ -33,6 +34,8 @@ export interface SidebarProps {
  * Settings pinned at the bottom.
  */
 export function Sidebar({ open, onClose }: SidebarProps) {
+  const { meta } = useMeta();
+  const brain = meta?.brain_name;
   const main = SECTIONS.filter((s) => !s.foot);
   const foot = SECTIONS.filter((s) => s.foot);
 
@@ -53,7 +56,15 @@ export function Sidebar({ open, onClose }: SidebarProps) {
       {open ? <div className="ml-side__scrim" onClick={onClose} /> : null}
       <aside className={`ml-side${open ? " is-open" : ""}`} aria-label="sections" aria-hidden={!open}>
         <div className="ml-side__head">
-          <span>🧠 second-<b>brain</b></span>
+          {brain && brain !== "Brain" ? (
+            <span title="second-brain">
+              🧠 <b>{brain}</b>
+            </span>
+          ) : (
+            <span>
+              🧠 second-<b>brain</b>
+            </span>
+          )}
           <button type="button" className="ml-side__x" onClick={onClose} aria-label="close sections">✕</button>
         </div>
         <nav className="ml-side__nav">{main.map(item)}</nav>

@@ -457,4 +457,43 @@ describe("Triggers", () => {
     await user.paste("Review {github_repo} for {trigger_usr}");
     expect(events.getByText(/Not a variable: \{trigger_usr\}/)).toBeInTheDocument();
   });
+
+  it("lists the wake phrases as they are said, with the brain's name", async () => {
+    renderApp(<TriggerCard writable />, { route: "/settings" });
+    const meetings = await panel("Meetings");
+    const phrases = within(meetings.getByRole("group", { name: "Wake phrases" }));
+    expect(phrases.getByText("Jarvis will handle")).toBeInTheDocument();
+    expect(phrases.getByText(/only you/)).toBeInTheDocument();
+  });
+
+  it("adds a phrase and saves the whole list", async () => {
+    const { user } = renderApp(<TriggerCard writable />, { route: "/settings" });
+    const meetings = await panel("Meetings");
+    await user.click(meetings.getByRole("button", { name: "Add a phrase" }));
+    const field = meetings.getAllByLabelText("Phrase").at(-1)!;
+    await user.clear(field);
+    await user.type(field, "{{brain} take note");
+    await user.click(meetings.getByRole("checkbox", { name: "Anyone in the meeting may say it" }));
+    await user.click(meetings.getByRole("button", { name: "Save Meetings" }));
+    await waitFor(() => {
+      const body = sent().find((b) => b.meeting) as { meeting: { phrases: { phrase: string; anyone: boolean }[] } };
+      expect(body.meeting.phrases.map((p) => [p.phrase, p.anyone])).toEqual([
+        ["{brain} will handle", false],
+        ["{brain} take note", true],
+      ]);
+    });
+  });
+
+  it("tries a transcript without starting anything, then runs it", async () => {
+    const { user } = renderApp(<TriggerCard writable />, { route: "/settings" });
+    const meetings = await panel("Meetings");
+    await user.click(meetings.getByRole("button", { name: /Scan a transcript/ }));
+    await user.type(meetings.getByLabelText("Transcript"), "Alex: Jarvis will handle this");
+    await user.click(meetings.getByRole("button", { name: "Try" }));
+    expect(await meetings.findByText("would start")).toBeInTheDocument();
+    expect(meetings.getByText("would be refused")).toBeInTheDocument();
+    await user.click(meetings.getByRole("button", { name: "Run" }));
+    expect(await meetings.findByText("started")).toBeInTheDocument();
+    expect(sent("/api/trigger-scan").map((b) => b.dry_run)).toEqual([true, false]);
+  });
 });

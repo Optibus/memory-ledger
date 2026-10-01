@@ -180,6 +180,18 @@ export const handlers = [
     ok({ people: [{ user_id: "62f3dd0ce50f2f2a39573991", name: "Isadora", email: "isa@example.com" },
                   { user_id: "557058:cccc-dddd", name: "Isaac", email: "" }] }),
   ),
+  write("/api/trigger-scan", (body: { dry_run?: boolean }) =>
+    ok({
+      matched: 2,
+      dry_run: !!body.dry_run,
+      matches: [
+        { phrase: "{brain} will handle", speaker: "Alex", said: "Jarvis will handle this", is_owner: true,
+          runs: true, ...(body.dry_run ? {} : { status: "queued", request_id: "r-1" }) },
+        { phrase: "{brain} will handle", speaker: "Bo", said: "jarvis will handle it", is_owner: false,
+          runs: false, ...(body.dry_run ? {} : { status: "refused", request_id: "r-2" }) },
+      ],
+    }),
+  ),
   write("/api/trigger-check", (body: { only?: string }) =>
     ok({ ready: true, target: body.only || "all", problems: [], notes: [`${body.only}: fine`] }),
   ),

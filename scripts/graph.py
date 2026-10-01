@@ -258,7 +258,7 @@ def learned_skills_dir() -> Path:
 # file is the machine-wide answer, and the web UI's Settings page edits it.
 # Precedence everywhere: explicit flag > env var > this file > built-in default.
 # ---------------------------------------------------------------------------
-SETTING_KEYS = ["tz", "realm", "owner", "backend", "autosync", "consolidate",
+SETTING_KEYS = ["tz", "realm", "owner", "brain_name", "backend", "autosync", "consolidate",
                 "map_poll_seconds", "dash_refresh_seconds", "ui_sync",
                 "learned_rules"]
 
@@ -275,6 +275,11 @@ BACKENDS = ("sqlite", "neo4j", "auto")
 # It is a name rather than "" because norm_assignee() has to map SOMETHING to
 # "me", and a blank owner would quietly make every task somebody else's.
 DEFAULT_OWNER = "Owner"
+
+# What the brain answers to: the word a wake phrase starts with ("Brain will
+# handle this"), `{brain}` in a signature or a run command, and the name the
+# page shows. A word people say out loud, so it defaults to one.
+DEFAULT_BRAIN_NAME = "Brain"
 
 
 def settings_path() -> Path:
@@ -374,6 +379,12 @@ def owner() -> str:
     is on YOUR plate — norm_assignee, is_mine_actionable, a new session's
     props.owner — goes through this."""
     return setting("owner", DEFAULT_OWNER)
+
+
+def brain_name() -> str:
+    """What the brain is called: $MEMORY_LEDGER_BRAIN_NAME, then the
+    `brain_name` setting, then DEFAULT_BRAIN_NAME."""
+    return setting("brain_name", DEFAULT_BRAIN_NAME)
 
 
 #: Alias for the handful of api_* helpers that take an `owner=` argument and so

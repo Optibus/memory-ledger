@@ -18,6 +18,7 @@ export { SearchInput } from "./SearchInput";
 export { Card, CardHeader, CardBody, CardActions } from "./Card";
 export { StatusMessage, EmptyState, Spinner, LiveDot } from "./Feedback";
 export { KeyValue } from "./KeyValue";
+export { RichText } from "./RichText";
 export { Menu } from "./Menu";
 export type { MenuGroup, MenuItem } from "./Menu";
 export { Tree } from "./Tree";

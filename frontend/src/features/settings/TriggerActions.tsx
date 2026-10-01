@@ -18,6 +18,7 @@ import type {
   TriggerAction,
   TriggerEventSetting,
   TriggerVariable,
+  WakePhrase,
 } from "@/api/types";
 
 /**
@@ -948,6 +949,207 @@ function CommandRow({
             isCommand
             runHint="What the session does with this command. {args} and {arg_1}… are what was in the braces."
             placeholder="Deploy {arg_1} at version {arg_2} and reply in the thread with the result."
+          />
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- wake phrases
+const blankPhrase = (): WakePhrase => ({
+  phrase: "{brain} ",
+  anyone: false,
+  description: "",
+  on: true,
+  do: "",
+  action: "claude",
+  http: { method: "POST", url: "", headers: {}, body: "" },
+  script: { name: "", args: [] },
+});
+
+/** The words a phrase is said with: what the engine matches, `{brain}` filled in. */
+export function spokenPhrase(phrase: string, brain: string, owner = "") {
+  return phrase
+    .replace(/\{brain\}/g, brain)
+    .replace(/\{owner\}/g, owner || "{owner}")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Wake phrases: "Brain will handle this", said in a meeting. A transcript the
+ * brain reads is scanned for each, and every one said starts a task at once.
+ */
+export function PhrasesEditor({
+  phrases,
+  onChange,
+  brainName,
+  defaultDo,
+  variables,
+  writable,
+  busy,
+  scripts,
+}: {
+  phrases: WakePhrase[];
+  onChange: (next: WakePhrase[]) => void;
+  brainName: string;
+  defaultDo: string;
+  variables: TriggerVariable[];
+  writable: boolean;
+  busy: boolean;
+  scripts: ScriptsState;
+}) {
+  const fold = useFold("meeting.phrases");
+  const set = (i: number, patch: Partial<WakePhrase>) =>
+    onChange(phrases.map((c, j) => (j === i ? { ...c, ...patch } : c)));
+  return (
+    <div className="ml-trigger__events" role="group" aria-label="Wake phrases">
+      <h4 className="ml-trigger__events-h">
+        <FoldButton open={fold.open} onToggle={fold.toggle}>
+          Wake phrases{" "}
+          <Badge tone={phrases.length ? "accent" : "neutral"}>{phrases.length}</Badge>
+        </FoldButton>
+      </h4>
+      {fold.open ? (
+        <>
+          <p className="ml-settings__hint">
+            Say one in a meeting, for example{" "}
+            <code>{spokenPhrase("{brain} will handle this", brainName)}</code>, and the task starts
+            as soon as the brain reads the transcript. <code>{"{brain}"}</code> is the brain&rsquo;s
+            name (Preferences), so renaming it renames every phrase. Matched word by word, whatever
+            the case or the punctuation between the words. The session gets the line it was said in
+            and the lines around it, so &ldquo;this&rdquo; can be found.
+          </p>
+          {phrases.map((ph, i) => (
+            <PhraseRow
+              key={i}
+              phrase={ph}
+              brainName={brainName}
+              defaultDo={defaultDo}
+              onChange={(patch) => set(i, patch)}
+              onRemove={() => onChange(phrases.filter((_, j) => j !== i))}
+              variables={variables}
+              writable={writable}
+              busy={busy}
+              scripts={scripts}
+            />
+          ))}
+          <div className="ml-settings__foot">
+            <Button
+              size="sm"
+              disabled={!writable || busy}
+              onClick={() => onChange([...phrases, blankPhrase()])}
+            >
+              Add a phrase
+            </Button>
+            {!phrases.length ? (
+              <Button
+                size="sm"
+                disabled={!writable || busy}
+                onClick={() => onChange([{ ...blankPhrase(), phrase: "{brain} will handle" }])}
+              >
+                Start with &ldquo;{spokenPhrase("{brain} will handle", brainName)}&rdquo;
+              </Button>
+            ) : null}
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function PhraseRow({
+  phrase,
+  brainName,
+  defaultDo,
+  onChange,
+  onRemove,
+  variables,
+  writable,
+  busy,
+  scripts,
+}: {
+  phrase: WakePhrase;
+  brainName: string;
+  defaultDo: string;
+  onChange: (patch: Partial<WakePhrase>) => void;
+  onRemove: () => void;
+  variables: TriggerVariable[];
+  writable: boolean;
+  busy: boolean;
+  scripts: ScriptsState;
+}) {
+  const [open, setOpen] = useState(!phrase.phrase.replace("{brain}", "").trim());
+  const spoken = spokenPhrase(phrase.phrase, brainName) || "new phrase";
+  return (
+    <div className="ml-trigger__event" aria-label={`Phrase ${spoken}`} role="group">
+      <div className="ml-trigger__event-head">
+        <Checkbox
+          label={<code>{spoken}</code>}
+          checked={phrase.on}
+          disabled={!writable || busy}
+          onChange={(v) => onChange({ on: v })}
+        />
+        <FoldButton open={open} onToggle={() => setOpen((v) => !v)} minor>
+          {open ? "hide" : `${actionSummary(phrase)}${phrase.anyone ? ", anyone" : ", only you"}`}
+        </FoldButton>
+        <Button size="sm" disabled={!writable || busy} onClick={onRemove} aria-label={`Remove ${spoken}`}>
+          Remove
+        </Button>
+      </div>
+      {phrase.description && !open ? (
+        <p className="ml-settings__hint ml-settings__hint--switch">{phrase.description}</p>
+      ) : null}
+      {open ? (
+        <>
+          <div className="ml-settings__grid">
+            <Field
+              label="Phrase"
+              hint={`At least two words. {brain} and {owner} are filled in. Said as: “${spoken}”.`}
+            >
+              {(id) => (
+                <TextInput
+                  id={id}
+                  value={phrase.phrase}
+                  placeholder="{brain} will handle"
+                  disabled={!writable}
+                  onChange={(e) => onChange({ phrase: e.target.value })}
+                />
+              )}
+            </Field>
+            <Field label="Description" hint="For you, when this list is folded.">
+              {(id) => (
+                <TextInput
+                  id={id}
+                  value={phrase.description}
+                  disabled={!writable}
+                  onChange={(e) => onChange({ description: e.target.value })}
+                />
+              )}
+            </Field>
+          </div>
+          <div className="ml-settings__switch">
+            <Checkbox
+              label="Anyone in the meeting may say it"
+              checked={phrase.anyone}
+              disabled={!writable || busy}
+              onChange={(v) => onChange({ anyone: v })}
+            />
+            <p className="ml-settings__hint ml-settings__hint--switch">
+              Off, only you: the transcript has to name you as the speaker. Anyone else saying it
+              is logged as refused and runs nothing.
+            </p>
+          </div>
+          <ActionEditor
+            setting={phrase}
+            onChange={onChange}
+            variables={variables}
+            writable={writable}
+            scripts={scripts}
+            name={`phrase ${spoken}`}
+            runHint="What the session does. {phrase_said} is the line, {phrase_rest} what came after the phrase, {phrase_context} the lines around it. Empty: the default below."
+            placeholder={defaultDo}
           />
         </>
       ) : null}

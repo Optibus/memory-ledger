@@ -10,6 +10,10 @@ Each trigger either starts a Claude session, calls an API, or runs one of your
 scripts. Everything runs on your own machine. Nothing is exposed to the
 internet, and no bot ever speaks.
 
+A **meeting** can too: say a wake phrase ("Brain will handle this") and the
+task starts as soon as the brain reads the transcript, `source: meeting`. See
+[Wake phrases](#wake-phrases).
+
 Another brain can reach this one too: a [B2B](b2b.md) message from a peer brain
 is polled from the relay and logged and run as a request here, `source: b2b`.
 
@@ -193,6 +197,7 @@ rendered command.
 | `{trigger_scope}` | every trigger | The conversation's gate key. | `github:o/r#5` |
 | `{request_id}` | every trigger | This run's request id, for `trigger.py show`. | `0a255d52-6c1e-4f0b-9a57-2f3e8d41c9b0` |
 | `{owner}` | every trigger | Your name, as the brain knows it. | `Alex` |
+| `{brain}` | every trigger | The brain's name (Settings → Preferences, `brain_name`). | `Brain` |
 | `{signature}` | every trigger | The signature line the brain ends its replies with. | `_sent by Alex's second brain_` |
 | `{slack_channel}` | Slack | The channel id. | `C0123ABCD` |
 | `{slack_thread}` | Slack | The thread's timestamp. | `1700000000.000100` |
@@ -300,6 +305,66 @@ are a list in `slack.commands`:
   notice. Running a command never opens the thread.
 - The session, for a Claude command, gets `slack_event: command`, `command:` and
   `command_args:` lines, and replies in the thread as for a mention.
+
+## Wake phrases
+
+Say it in a meeting and it is done: "**Brain will handle this**, send them the v2
+deck." Nothing listens live. When the brain reads the meeting's transcript or
+notes, it scans them for your **wake phrases**, and each one said starts a task
+**at once**, without asking: `source: meeting`, `meeting_event: phrase`.
+
+```json
+{"meeting": {"enabled": true, "phrases": [
+  {"phrase": "{brain} will handle"},
+  {"phrase": "{brain} take note", "anyone": true,
+   "do": "Add a note to the brain: {phrase_rest} (said by {phrase_speaker} in {meeting_title})"}
+]}}
+```
+
+- **The name.** `{brain}` is the brain's name, the `brain_name` setting
+  (Settings → Preferences; `$MEMORY_LEDGER_BRAIN_NAME` outranks it; default
+  `Brain`). `{owner}` works too. Renaming the brain renames every phrase. The
+  name is also `{brain}` in a signature, a notice or a run command, and the session
+  is told it (`you_are`).
+- **Matching.** Word by word, case- and accent-blind, whatever punctuation is
+  between the words: `{brain} will handle` matches "Brain, will handle this" and
+  "BRAIN will handle it", not "brain will handled". At least two words, so naming
+  the brain alone fires nothing. One match per line per phrase.
+- **The transcript.** One turn per line, `Name: what they said` (Meet's format;
+  a `[00:12]` timestamp in front is fine). A line with no name carries on the
+  last speaker's turn.
+- **Who.** You, as the transcript names you: the `owner` setting, in full or by
+  first name ("Alex" is "Alex Doe"), or a name passed with `--me`. A phrase marked
+  `anyone` runs for whoever says it. Anyone else's is logged **`refused`** and runs
+  nothing, with no notice, as there is nobody to send one to.
+- **Once.** A line already scanned is not run again: the request is keyed on the
+  meeting (`--key`, else the link, else the title) and the line. Scanning the
+  Gemini email and then the Doc, or re-ingesting, starts nothing twice.
+- **What it does.** Each phrase has an action like any trigger (Claude, an API
+  call, a script). The default run command says: work out from the lines around
+  it what was put on the brain, do it now, and if it is not clear, add a task for
+  you rather than guess. The session gets the line (`{phrase_said}`), what came
+  after the phrase (`{phrase_rest}`), the speaker (`{phrase_speaker}`), the six
+  lines before and two after (`{phrase_context}`, also in the prompt between
+  `<<<CONTEXT` fences), and `{meeting_title}`. There is no thread: it posts
+  nowhere unless the run command says to.
+
+**Where scans come from.** The `ingest-context` skill passes every meeting it
+ingests (a "Notes by Gemini" email, a Meet transcript Doc, pasted notes) to
+`trigger.py scan`, which logs and starts each task in a process of its own and
+returns at once. From anywhere else:
+
+```bash
+python3 scripts/trigger.py scan --file notes.txt --title "Acme sync" --link https://docs.google.com/… --dry-run
+python3 scripts/trigger.py scan --file notes.txt --title "Acme sync" --me "Alex Doe"
+pbpaste | python3 scripts/trigger.py scan --title "1:1"
+```
+
+`--dry-run` says what matches and whether it would run, logging nothing; `--wait`
+runs each task here, to the end. Through the server it is `POST /api/trigger-scan`,
+which runs the tasks on the trigger pool; Settings → Triggers → **Meetings** holds
+the switch, the phrases, and a box to try a transcript. Both the master switch and
+`meeting.enabled` must be on.
 
 ## Actions
 

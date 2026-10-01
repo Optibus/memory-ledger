@@ -200,6 +200,11 @@ def settings_payload() -> dict:
             "owner": graph.owner(),
             "owner_source": ("env" if "owner" in env else
                              "settings" if stored.get("owner") else "default"),
+            # What the brain answers to: `{brain}` in a template, and the word a
+            # wake phrase is said with.
+            "brain_name": graph.brain_name(),
+            "brain_name_source": ("env" if "brain_name" in env else
+                                  "settings" if stored.get("brain_name") else "default"),
             # what a CLI read (`brain_query.py`) uses when given no --backend.
             # This page and the map always ask for "auto", so they are unaffected.
             "backend": brain_query.default_backend(),

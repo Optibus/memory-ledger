@@ -32,6 +32,11 @@ The source, and where its content actually lives:
 - **Slack.** `slack_read_thread`, `slack_read_channel`,
   `slack_search_public_and_private`.
 - **Plain text.** Pasted directly, used as is.
+- **The wake phrases.** The owner's phrases for "the brain takes this one"
+  ("Brain will handle this"), in `trigger.json` under `meeting.phrases`. A
+  meeting's transcript or notes go through
+  `python3 "$CLAUDE_PLUGIN_ROOT/scripts/trigger.py" scan --file <transcript> --title "<meeting>" --link <doc url> --at <date>`,
+  which starts a task for each one said and returns at once (docs/trigger.md#wake-phrases).
 
 ## Rules honored
 
@@ -59,6 +64,8 @@ See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTION
   for deduping.
 - **Writes:** `meeting`, `person`, `decision`, `task`, `note`, `jira-issue`, plus
   the edges `relates-to`, `about`, `assigned-to`, `mentions`, `part-of`.
+- **Starts:** a trigger request per wake phrase said in a meeting, through
+  `trigger.py scan` (a no-op with wake phrases switched off).
 
 ## Deliverables
 
@@ -77,6 +84,11 @@ See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTION
   working is also filed under the process area, not left loose.
 - **Action items are owned.** Each is a `task` with an owner edge, a due date when
   one was given, and a link back to the meeting.
+- **The wake phrases were heard.** A meeting's transcript was passed to
+  `trigger.py scan` once, as written (not a summary: the phrase and who said it
+  are in the lines), so every task the owner put on the brain out loud started
+  at once. Its `matches` are in the reply. An action item the scan started is
+  not also filed as a task for the owner: the brain has it.
 - **Jira changes were applied, not just read.** The matching `jira-issue` node was
   updated, a substantive comment became a `note` linked `about` it, a direct
   mention that asks the owner for something became a `task`, and the actor was
@@ -111,6 +123,10 @@ One or two calm lines: what was ingested, then the single thing that needs the o
 
 > Saved the Team Planning call: 4 attendees, 2 decisions, 3 action items. **One is
 > yours: send Priya the export sample by Thursday.**
+
+When a wake phrase started something, say so in the same breath:
+
+> Saved the Acme sync. You put one on me: sending them the v2 deck, started now.
 
 This skill is what `read-email`, `slack-inbox` and `/ledger` hand to when they
 detect ingestible context. A meeting-transcript email is ingested automatically,

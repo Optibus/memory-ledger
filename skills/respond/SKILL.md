@@ -1,6 +1,6 @@
 ---
 name: respond
-description: Answer a Slack, Jira or GitHub mention as the brain, run a Slack command, or act on a change the owner subscribed to (a GitHub pull request change, a Jira transition, assignment or comment, the bot added to or removed from a Slack channel), in a headless session started by the trigger engine. Use ONLY when the prompt carries a `request_id`, a `source` (slack | jira | github | b2b) and a `permalink` from `scripts/trigger.py` ("You were summoned by a mention"). Reads the conversation from the permalink, does what was asked within the brain's rules, logs every outward action against the request id, and replies in place signed as the second brain.
+description: Answer a Slack, Jira or GitHub mention as the brain, run a Slack command, or act on a change the owner subscribed to (a GitHub pull request change, a Jira transition, assignment or comment, the bot added to or removed from a Slack channel), in a headless session started by the trigger engine. Use ONLY when the prompt carries a `request_id`, a `source` (slack | jira | github | b2b | meeting) and a `permalink` from `scripts/trigger.py` ("You were summoned by a mention", or by a wake phrase said in a meeting). Reads the conversation from the permalink, does what was asked within the brain's rules, logs every outward action against the request id, and replies in place signed as the second brain.
 ---
 
 # respond
@@ -45,6 +45,15 @@ by the owner at an interactive prompt: that is an ordinary turn.
   nowhere by default; an answer, only when `instructions` ask for one, is a B2B
   message back with the `b2b.py send` command `reply_convention` gives, ending
   with the signature.
+- **A wake phrase**, when `source` is `meeting` and `meeting_event` is `phrase`:
+  someone said one of the owner's wake phrases in a meeting ("Brain will handle
+  this"), and the transcript was scanned (docs/trigger.md#wake-phrases). The
+  message is the line it was said in; `wake_phrase` is the phrase, and the
+  `<<<CONTEXT` fences hold the lines around it, which is where "this" is. There
+  is nowhere to reply: do the task, as `instructions` say, and log what was done
+  with `--kind result`. When what was asked is not clear from the context, add a
+  task for the owner saying so rather than guessing. `you_are` is the brain's
+  name: the phrase was said to you.
 - **The owner's own MCP servers** for that source (Slack or Atlassian; for
   GitHub, `gh` or a GitHub MCP, with the session's own GitHub auth), plus
   whatever else the session was given (Gmail, Drive). They act as the owner.

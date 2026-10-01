@@ -1682,6 +1682,109 @@ def test_http_transport():
         urllib.request.urlopen = real_urlopen
 
 
+def test_wake_phrases(cfg):
+    print("\n== wake phrases: '<brain> will handle this' in a meeting starts a task ==")
+    os.environ["MEMORY_LEDGER_BRAIN_NAME"] = "Jarvis"
+    os.environ["MEMORY_LEDGER_OWNER"] = "Owner"
+    try:
+        mcfg = json.loads(json.dumps(cfg))
+        mcfg["meeting"] = {"enabled": True, "phrases": [
+            {"phrase": "{brain} will handle"},
+            {"phrase": "{brain} take note", "anyone": True,
+             "do": "Note it: {phrase_rest} (from {phrase_speaker} in {meeting_title})"},
+            {"phrase": "{brain} never mind", "on": False},
+        ]}
+        ck("the words are said with the brain's name",
+           trigger.phrase_words("{brain} will handle") == ["jarvis", "will", "handle"])
+        ck("case, accents and punctuation between the words do not matter",
+           trigger.find_phrase(["jarvis", "will", "handle"], "OK — JÁRVIS, will handle this.")
+           is not None
+           and trigger.find_phrase(["jarvis", "will", "handle"], "jarvis will handled it") is None)
+        turns = trigger.utterances("[00:01] Ana Lima: can someone send the deck?\n"
+                                   "Owner Doe: Jarvis will handle this,\n"
+                                   "send them the v2.\nsee https://x.example: here")
+        ck("a transcript is speakers' turns; a bare line carries on the last one",
+           turns[0] == ("Ana Lima", "can someone send the deck?")
+           and turns[1] == ("Owner Doe", "Jarvis will handle this,")
+           and turns[2] == ("Owner Doe", "send them the v2.")
+           and turns[3][0] == "Owner Doe", str(turns))
+        ck("the owner in full, or by first name, is the owner; someone else is not",
+           trigger.is_owner_name("Owner Doe") and trigger.is_owner_name("owner")
+           and not trigger.is_owner_name("Ana Lima") and not trigger.is_owner_name("")
+           and trigger.is_owner_name("Alex", aliases=["Alex"]))
+
+        transcript = ("Ana Lima: can someone send the deck to Acme?\n"
+                      "Owner Doe: Jarvis, will handle this — send them the v2 deck.\n"
+                      "Ana Lima: jarvis take note, the review moved to Friday\n"
+                      "Bo Chen: Jarvis will handle the invoices\n"
+                      "Owner Doe: jarvis never mind\n")
+        off = json.loads(json.dumps(mcfg))
+        off["meeting"]["enabled"] = False
+        ck("switched off, a scan starts nothing", not trigger.scan(off, transcript)["ok"])
+
+        ran, dispatch = dispatcher()
+        res = trigger.scan(mcfg, transcript, title="Acme sync", link="https://docs.example/d/1",
+                           dispatch=dispatch)
+        st = {m["speaker"]: m["status"] for m in res["matches"]}
+        ck("the owner's phrase runs, anyone's runs for an 'anyone' phrase, a stranger's is refused",
+           res["ok"] and res["matched"] == 3 and st == {"Owner Doe": "queued", "Ana Lima": "queued",
+                                                         "Bo Chen": "refused"}
+           and ran == res["queued"] and len(res["refused"]) == 1, str(res))
+        ck("a switched-off phrase never matches",
+           not any("never mind" in m["said"] for m in res["matches"]))
+        again = trigger.scan(mcfg, transcript, title="Acme sync", link="https://docs.example/d/1",
+                             dispatch=dispatch)
+        ck("the same transcript again runs nothing twice",
+           again["seen"] == 3 and not again["queued"] and len(ran) == 2, str(again))
+
+        con = trigger.db()
+        req = trigger.get_request(con, res["queued"][0])
+        ck("logged before it runs: source meeting, the line said, who said it",
+           req["source"] == "meeting" and req["is_owner"] and req["requester_name"] == "Owner Doe"
+           and req["text"].startswith("Jarvis, will handle this")
+           and req["permalink"] == "https://docs.example/d/1" and req["status"] == "queued")
+        prompt = trigger.build_prompt(req, mcfg)
+        ck("the session hears the phrase, the lines around it, its own name, and a default task",
+           "source: meeting" in prompt and "wake_phrase: jarvis will handle" in prompt
+           and "Ana Lima: can someone send the deck to Acme?" in prompt
+           and "you_are: Jarvis, Owner's second brain" in prompt
+           and "summoned by a wake phrase" in prompt
+           and "what they put on Jarvis, and do it now" in prompt, prompt[:600])
+        note = trigger.get_request(con, res["queued"][1])
+        ck("a phrase's own run command gets its variables",
+           trigger.render(trigger.run_command(note, mcfg), trigger.request_variables(note, mcfg))
+           == "Note it: the review moved to Friday (from Ana Lima in Acme sync)")
+        v = trigger.request_variables(req, mcfg)
+        ck("{brain} is a variable everywhere", v["brain"] == "Jarvis")
+        done = trigger.run_request(req["id"], mcfg)
+        ck("and it runs like any other request", done.get("ok") and
+           trigger.get_request(con, req["id"])["status"] == "done", str(done)[:300])
+
+        ck("the signature can carry the brain's name",
+           trigger.signature({"signature": "_{brain}, {owner}'s second brain_"})
+           == "_Jarvis, Owner's second brain_")
+    finally:
+        os.environ.pop("MEMORY_LEDGER_BRAIN_NAME", None)
+
+
+def test_save_phrases():
+    print("\n== save_config: wake phrases are checked before they are kept ==")
+    bad = [([{"phrase": "{brain}"}], "two words"), ([{"phrase": "  "}], "empty"),
+           ([{"phrase": "{brain} go {x}"}], "only use {brain}"),
+           ([{"phrase": "a b"}, {"phrase": "A  B"}], "twice"),
+           ([{"phrase": "a b", "do": "{nope}"}], "no variable"),
+           ([{"phrase": "a b", "action": "http"}], "needs a URL"),
+           ({"phrase": "a b"}, "must be a list")]
+    for phrases, why in bad:
+        res = trigger.save_config({"meeting": {"phrases": phrases}})
+        ck(f"refused: {why}", not res["ok"] and why in res["error"], str(res))
+    res = trigger.save_config({"meeting": {"enabled": True, "phrases": [
+        {"phrase": "  {brain}   will handle ", "anyone": False, "do": "Do {phrase_rest}"}]}})
+    ck("a good one is kept, its spaces tidied", res["ok"]
+       and res["config"]["meeting"]["phrases"][0]["phrase"] == "{brain} will handle"
+       and res["config"]["meeting"]["enabled"] is True, str(res)[:300])
+
+
 def main():
     try:
         test_config()
@@ -1707,7 +1810,9 @@ def main():
         test_slack_member(cfg)
         test_jira_changes(cfg)
         test_slack_dms(cfg)
+        test_wake_phrases(cfg)
         test_save()
+        test_save_phrases()
     finally:
         import shutil
         shutil.rmtree(HOME, ignore_errors=True)

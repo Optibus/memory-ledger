@@ -82,6 +82,17 @@ describe("Settings", () => {
     );
   });
 
+  it("names the brain, and says what the name is for", async () => {
+    const { user } = renderApp(<SettingsSection />, { route: "/settings" });
+    const field = await screen.findByLabelText("The brain's name");
+    expect(screen.getAllByText(/\("Jarvis will handle this"\)/).length).toBeGreaterThan(0);
+    await user.type(field, "Friday");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(writes.find((w) => w.path === "/api/settings")?.body).toMatchObject({ brain_name: "Friday" }),
+    );
+  });
+
   it("offers the realms the graph actually has, rather than a typed-in string", async () => {
     renderApp(<SettingsSection />, { route: "/settings" });
     const select = (await screen.findByLabelText("Default realm")) as HTMLSelectElement;

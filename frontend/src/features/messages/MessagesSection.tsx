@@ -1,12 +1,14 @@
-import { useMemo, useRef, useState } from "react";
-import type { KeyboardEvent } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api } from "@/api/client";
 import { useMeta } from "@/api/MetaContext";
 import { usePolling } from "@/hooks/usePolling";
-import { Badge, Button, EmptyState, SearchInput, Spinner, StatusMessage, TextArea } from "@/components";
+import { Badge, Button, EmptyState, RichText, SearchInput, Spinner, StatusMessage, TextArea } from "@/components";
 import { Section } from "@/features/shell/Section";
 import { formatDate, truncate } from "@/lib/format";
+import { applyMark, plainText } from "@/lib/richText";
+import type { Mark } from "@/lib/richText";
 import type { B2BConversation, B2BMessage } from "@/api/types";
 import "./MessagesSection.css";
 
@@ -42,7 +44,7 @@ export function MessagesSection() {
     !needle ||
     c.name.toLowerCase().includes(needle) ||
     c.peer_id.toLowerCase().includes(needle) ||
-    (c.last?.text ?? "").toLowerCase().includes(needle);
+    plainText(c.last?.text ?? "").toLowerCase().includes(needle);
   const shown = picking ? all.filter((c) => c.connected).filter(matches) : all.filter((c) => c.messages && matches(c));
 
   const open = (peer: string) => {
@@ -122,7 +124,7 @@ export function MessagesSection() {
                       <>
                         <AuthorIcon human={c.last.human} />
                         {c.last.direction === "out" ? "You: " : ""}
-                        {truncate(c.last.text, 70)}
+                        {truncate(plainText(c.last.text), 70)}
                       </>
                     ) : (
                       "no messages yet"
@@ -185,6 +187,24 @@ function Thread({ peer, conversation, messages, error, writable, onSent }: Threa
   const [busy, setBusy] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const box = useRef<HTMLTextAreaElement>(null);
+  // Where the selection goes after a mark rewrote the text, set once React has.
+  const pendingSel = useRef<[number, number] | null>(null);
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (el && pendingSel.current) {
+      el.setSelectionRange(...pendingSel.current);
+      pendingSel.current = null;
+    }
+  }, [text]);
+
+  const mark = (m: Mark) => {
+    const el = box.current;
+    if (!el) return;
+    const next = applyMark(text, el.selectionStart, el.selectionEnd, m);
+    pendingSel.current = [next.start, next.end];
+    setText(next.text);
+    el.focus();
+  };
   const connected = !!conversation?.connected;
   const canSend = writable && connected && !busy && !!text.trim();
 
@@ -209,6 +229,17 @@ function Thread({ peer, conversation, messages, error, writable, onSent }: Threa
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       void send();
+      return;
+    }
+    // ⌘/Ctrl + B, I, U, K, as in every editor; ⇧ + X strikes through.
+    if ((e.metaKey || e.ctrlKey) && !e.altKey) {
+      const k = e.key.toLowerCase();
+      const m: Mark | null =
+        k === "b" ? "b" : k === "i" ? "i" : k === "u" ? "u" : k === "k" ? "link" : k === "x" && e.shiftKey ? "s" : null;
+      if (m) {
+        e.preventDefault();
+        mark(m);
+      }
     }
   };
 
@@ -234,7 +265,9 @@ function Thread({ peer, conversation, messages, error, writable, onSent }: Threa
         {messages && !messages.length ? <EmptyState title="No messages yet" hint="Say hello below." /> : null}
         {messages?.map((m) => (
           <li key={`${m.direction}-${m.id}`} className={`ml-msg__item ml-msg__item--${m.direction}`}>
-            <div className="ml-msg__bubble">{m.text}</div>
+            <div className="ml-msg__bubble">
+              <RichText text={m.text} />
+            </div>
             <div className="ml-msg__meta">
               <AuthorIcon human={m.human} />
               <time dateTime={m.at} title={m.at}>
@@ -249,13 +282,14 @@ function Thread({ peer, conversation, messages, error, writable, onSent }: Threa
       <div className="ml-msg__compose">
         {why ? <p className="ml-msg__hint">{why}</p> : null}
         {sendError ? <StatusMessage tone="error">{sendError}</StatusMessage> : null}
+        <FormatBar onMark={mark} disabled={!writable || !connected} />
         <div className="ml-msg__compose-row">
           <TextArea
             ref={box}
             rows={2}
             value={text}
             disabled={!writable || !connected}
-            placeholder="Write a message. Enter sends, Shift+Enter for a new line."
+            placeholder="Write a message. Enter sends, Shift+Enter for a new line. **bold** *italic* __underline__"
             aria-label="message"
             onChange={(e) => setText(e.target.value)}
             onKeyDown={onKey}
@@ -266,5 +300,37 @@ function Thread({ peer, conversation, messages, error, writable, onSent }: Threa
         </div>
       </div>
     </>
+  );
+}
+
+const MARKS: { mark: Mark; label: ReactNode; title: string }[] = [
+  { mark: "b", label: <b>B</b>, title: "Bold (⌘B): **text**" },
+  { mark: "i", label: <i>I</i>, title: "Italic (⌘I): *text*" },
+  { mark: "u", label: <u>U</u>, title: "Underline (⌘U): __text__" },
+  { mark: "s", label: <s>S</s>, title: "Strikethrough (⌘⇧X): ~~text~~" },
+  { mark: "code", label: <code>{"</>"}</code>, title: "Code: `text`" },
+  { mark: "link", label: "Link", title: "Link (⌘K): [text](https://…)" },
+];
+
+/** Buttons that wrap the selection in a mark; the message is sent as typed. */
+function FormatBar({ onMark, disabled }: { onMark: (m: Mark) => void; disabled: boolean }) {
+  return (
+    <div className="ml-msg__format" role="toolbar" aria-label="formatting">
+      {MARKS.map((m) => (
+        <button
+          key={m.mark}
+          type="button"
+          className="ml-msg__fmt"
+          title={m.title}
+          aria-label={m.title.split(" (")[0]!.split(":")[0]}
+          disabled={disabled}
+          // Keep the textarea's selection: a click would otherwise blur it first.
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => onMark(m.mark)}
+        >
+          {m.label}
+        </button>
+      ))}
+    </div>
   );
 }

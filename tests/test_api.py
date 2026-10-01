@@ -59,6 +59,7 @@ POST_ROUTES = [
     "/api/upload-bundle", "/api/import-bundle", "/api/delete-contracts",
     "/api/trigger-gate", "/api/trigger-action", "/api/trigger-config", "/api/trigger-check",
     "/api/trigger-channel", "/api/trigger-person", "/api/trigger-decline", "/api/trigger-reprocess",
+    "/api/trigger-scan",
     "/api/b2b-config", "/api/b2b-identity", "/api/b2b-broker", "/api/b2b-broker-check",
     "/api/b2b-peer", "/api/b2b-allowed", "/api/b2b-send",
     "/api/export-scripts", "/api/upload-scripts", "/api/import-scripts", "/api/create-script",
@@ -587,6 +588,17 @@ def test_settings_writes(s: Server):
     ck("and it took", j["effective"]["tz"] == "Asia/Jerusalem" and
        j["effective"]["owner"] == "Grace Hopper" and j["effective"]["map_poll_seconds"] == 5
        and j["effective"]["ui_sync"] is True, str(j.get("effective"))[:200])
+    ck("the brain's name defaults to a word people say",
+       j["effective"]["brain_name"] == "Brain" and j["effective"]["brain_name_source"] == "default")
+    named = s.post("/api/settings", {"brain_name": "  Jarvis  "}).json()
+    ck("and can be set, tidied", named["effective"]["brain_name"] == "Jarvis"
+       and named["effective"]["brain_name_source"] == "settings", str(named.get("effective"))[:200])
+    ck("the vocabulary carries it, for the page's title", s.get("/api/meta").json()["brain_name"]
+       == "Jarvis")
+    ck("a name with braces would read as a variable", refused(
+        s.post("/api/settings", {"brain_name": "{x}"}), 400, "no braces"))
+    s.post("/api/settings", {"brain_name": ""})
+    ck("an empty one goes back to the default", s.get("/api/meta").json()["brain_name"] == "Brain")
     ck("a realm set here applies to the next write, not the next restart",
        s.post("/api/add-task", {"title": "realm probe"}).json()["node"]["realm"] == "personal")
     ck("and to an idea proposed from the map",
@@ -1012,6 +1024,24 @@ def test_trigger_routes(s: Server):
         s.post("/api/trigger-reprocess", {"request_id": rid}), 400, "can be reprocessed"))
     ck("a reprocess needs a request", refused(s.post("/api/trigger-reprocess", {}),
                                               400, "missing request_id"))
+
+    ck("a scan with wake phrases off starts nothing", refused(
+        s.post("/api/trigger-scan", {"text": "Brain will handle it"}), 400, "wake phrases are off"))
+    saved = s.post("/api/trigger-config", {"enabled": True, "meeting": {
+        "enabled": True, "phrases": [{"phrase": "{brain} will handle"}]}}).json()
+    ck("wake phrases are saved through the config", saved.get("ok")
+       and saved["config"]["meeting"]["phrases"][0]["phrase"] == "{brain} will handle", str(saved)[:200])
+    dry = s.post("/api/trigger-scan", {"text": "Ana: who sends it?\nGrace Hopper: Brain will handle it",
+                                       "dry_run": True}).json()
+    ck("a dry run says what matches and who said it, and logs nothing",
+       dry.get("ok") and dry["matched"] == 1 and dry["matches"][0]["is_owner"]
+       and dry["matches"][0]["runs"], str(dry)[:300])
+    stranger = s.post("/api/trigger-scan", {"text": "Ana: brain will handle the rest",
+                                            "title": "probe"}).json()
+    ck("a stranger's phrase is logged refused, and runs nothing",
+       stranger.get("ok") and len(stranger["refused"]) == 1 and not stranger["queued"],
+       str(stranger)[:300])
+    s.post("/api/trigger-config", {"enabled": False, "meeting": {"enabled": False, "phrases": []}})
 
     ck("a malformed scope is refused", refused(s.post("/api/trigger-gate",
                                                       {"scope": "bogus", "enabled": True}),
