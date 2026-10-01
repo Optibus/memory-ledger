@@ -270,6 +270,43 @@ class TriggerAction(Body):
     detail: Text = T("What, in a sentence a person could audit.")
 
 
+# -------------------------------------------------------------------- b2b
+class B2BConfig(Body):
+    """A patch of `<home>/b2b.json`: only the keys sent change. The token is
+    write-only."""
+    enabled: Any = Field(None, description="Poll the relay (needs the trigger master "
+                                           "switch on, and a user_id and token).")
+    server_url: Any = Field(None, description="The relay's base URL.")
+    user_id: Any = Field(None, description="This brain's user id on the relay.")
+    token: Any = Field(None, description="This brain's relay token. Write-only: empty "
+                                         "keeps the stored one.")
+    poll_seconds: Any = Field(None, description="How often to read the relay, 30 to 86400.")
+    do: Any = Field(None, description="The run command for a received message; "
+                                      "`{variables}` as for triggers, plus `b2b_*`.")
+    action: Any = Field(None, description="`claude`, `http` or `script`.")
+    http: _obj = Field(None, description="`method`, `url`, `headers`, `body`.")
+    script: _obj = Field(None, description="`name`, `args`.")
+    clear: Optional[list[LooseStr]] = Field(None, description="`[\"token\"]` removes it.")
+
+
+class B2BRegister(Body):
+    server_url: Text = T("The relay to register on; empty uses the stored one.")
+    force: Any = Field(False, description="Replace an account already stored. Unread "
+                                          "messages for the old one are lost.")
+
+
+class B2BPeer(Body):
+    peer_id: Text = T("The other brain's user id on the relay.")
+    name: Text = T("How to call them.")
+    enabled: Any = Field(None, description="true connects the peer, false disconnects it "
+                                           "(the row is kept, marked removed).")
+
+
+class B2BSend(Body):
+    to: Text = T("A connected peer's user id or name.")
+    text: Text = T("The message.")
+
+
 # -------------------------------------------------------------- contracts
 _sections = Annotated[Optional[dict[str, Any]], BeforeValidator(_dict_or_none)]
 

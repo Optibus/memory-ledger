@@ -35,7 +35,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Byte-compile scripts and hooks
-        run: python -m compileall -q scripts hooks
+        run: python -m compileall -q scripts hooks services
 
       # The frontend is the only part of the repo with a toolchain. Its suites
       # are unit (components, hooks, pure logic) and integration (a whole section
@@ -74,7 +74,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/memory-ledger
-          key: server-venv-${{ runner.os }}-py3.12-${{ hashFiles('scripts/requirements-server.txt') }}
+          key: server-venv-${{ runner.os }}-py3.12-${{ hashFiles('scripts/requirements-server.txt', 'services/b2b/requirements.txt') }}
 
       # The suites are stdlib-only and self-contained, so there is no install
       # step and no reason not to run them. The servers they start bring their

@@ -10,6 +10,9 @@ Each trigger either starts a Claude session, calls an API, or runs one of your
 scripts. Everything runs on your own machine. Nothing is exposed to the
 internet, and no bot ever speaks.
 
+Another brain can reach this one too: a [B2B](b2b.md) message from a peer brain
+is polled from the relay and logged and run as a request here, `source: b2b`.
+
 This page is the design and the reference. Setup is in
 [Setting it up](#setting-it-up); the moving parts are in
 [How it works](#how-it-works).

@@ -1,6 +1,6 @@
 ---
 name: respond
-description: Answer a Slack, Jira or GitHub mention as the brain, run a Slack command, or act on a change the owner subscribed to (a GitHub pull request change, a Jira transition, assignment or comment, the bot added to or removed from a Slack channel), in a headless session started by the trigger engine. Use ONLY when the prompt carries a `request_id`, a `source` (slack | jira | github) and a `permalink` from `scripts/trigger.py` ("You were summoned by a mention"). Reads the conversation from the permalink, does what was asked within the brain's rules, logs every outward action against the request id, and replies in place signed as the second brain.
+description: Answer a Slack, Jira or GitHub mention as the brain, run a Slack command, or act on a change the owner subscribed to (a GitHub pull request change, a Jira transition, assignment or comment, the bot added to or removed from a Slack channel), in a headless session started by the trigger engine. Use ONLY when the prompt carries a `request_id`, a `source` (slack | jira | github | b2b) and a `permalink` from `scripts/trigger.py` ("You were summoned by a mention"). Reads the conversation from the permalink, does what was asked within the brain's rules, logs every outward action against the request id, and replies in place signed as the second brain.
 ---
 
 # respond
@@ -38,6 +38,13 @@ by the owner at an interactive prompt: that is an ordinary turn.
   `command_args` lists what was in its braces, in order. The message is still the
   request; `instructions` say what the command does. Reply in the thread as for a
   mention, unless `instructions` say otherwise.
+- **A B2B message**, when `source` is `b2b` and `b2b_event` is `message`: another
+  brain, a peer the owner connected, left it on the relay (docs/b2b.md). There is
+  no permalink and no thread: the message is the whole conversation, and the
+  requester is that peer, never the owner. Do what `instructions` says. Post
+  nowhere by default; an answer, only when `instructions` ask for one, is a B2B
+  message back with the `b2b.py send` command `reply_convention` gives, ending
+  with the signature.
 - **The owner's own MCP servers** for that source (Slack or Atlassian; for
   GitHub, `gh` or a GitHub MCP, with the session's own GitHub auth), plus
   whatever else the session was given (Gmail, Drive). They act as the owner.

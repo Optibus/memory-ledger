@@ -245,7 +245,8 @@ for _src, _cat in EVENTS.items():
 # are there on every source; a source-only one is empty elsewhere. A name not
 # here is refused on save, so a typo is caught before a trigger runs.
 VARIABLES = {
-    "trigger_source": (SOURCES, "Where it came from: slack, jira or github.", "github"),
+    "trigger_source": (SOURCES, "Where it came from: slack, jira or github (b2b for a "
+                                "message from another brain, docs/b2b.md).", "github"),
     "trigger_kind": (SOURCES, "What happened: the event (on Slack mention, command, "
                               "joined_channel, left_channel; on Jira mention, transitioned, "
                               "assigned, unassigned, comment; on GitHub mention, "
@@ -1443,12 +1444,21 @@ def build_prompt(req: dict, cfg: dict) -> str:
                           ", as a new message in the conversation, not in a thread")
                        if in_dm else "reply in the Slack thread of that message"),
              "jira": "add a comment on that Jira issue",
-             "github": "add a comment on that GitHub pull request or issue"}[req["source"]]
-    tools = {"github": "GitHub tools (`gh`, or a GitHub MCP)"}.get(req["source"],
-                                                                   f"{req['source']} tools")
+             "github": "add a comment on that GitHub pull request or issue",
+             # docs/b2b.md: a message from another brain. There is no thread to
+             # post in; an answer is another B2B message, sent only when asked.
+             "b2b": ("none by default: this is a message from another brain, not a "
+                     "conversation to post in. Answer it only if `instructions` say to, "
+                     "and then only as a B2B message back: python3 "
+                     f"\"{Path(__file__).resolve().parent / 'b2b.py'}\" send --to "
+                     f"{req.get('requester_id') or '<peer id>'} --text \"<answer, then the "
+                     "signature>\"")}[req["source"]]
+    tools = {"github": "GitHub tools (`gh`, or a GitHub MCP)",
+             "b2b": "brain (there is no permalink: the message is the whole "
+                    "conversation)"}.get(req["source"], f"{req['source']} tools")
     event = ""
     kind = meta.get("kind", "")
-    name = {"slack": "Slack", "jira": "Jira", "github": "GitHub"}[req["source"]]
+    name = {"slack": "Slack", "jira": "Jira", "github": "GitHub", "b2b": "B2B"}[req["source"]]
     if (req.get("reason") or "").startswith("subscribed") and kind != "mention":
         reply = ("none by default: this is a change the owner subscribed to, not a "
                  f"message to answer. Do what `instructions` says, and post on {name} "

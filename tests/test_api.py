@@ -43,7 +43,7 @@ GET_ROUTES = [
     "/api/backups", "/api/doctor", "/api/consolidate-preview",
     "/api/person-duplicates", "/api/kinds", "/api/skills", "/api/bundle",
     "/api/rule", "/api/rule-proposals", "/api/settings", "/api/timezones", "/api/status", "/api/meta",
-    "/api/suggest-links", "/api/search", "/api/trigger", "/api/trigger-request",
+    "/api/suggest-links", "/api/search", "/api/trigger", "/api/trigger-request", "/api/b2b",
     "/api/scripts", "/api/script", "/api/tasks", "/api/task", "/api/usage-report",
 ]
 POST_ROUTES = [
@@ -58,6 +58,7 @@ POST_ROUTES = [
     "/api/upload-bundle", "/api/import-bundle", "/api/delete-contracts",
     "/api/trigger-gate", "/api/trigger-action", "/api/trigger-config", "/api/trigger-check",
     "/api/trigger-channel", "/api/trigger-decline",
+    "/api/b2b-config", "/api/b2b-register", "/api/b2b-peer", "/api/b2b-send",
     "/api/export-scripts", "/api/upload-scripts", "/api/import-scripts", "/api/create-script",
 ]
 VIEWS = ["agenda", "open", "today", "tomorrow", "week", "closed", "range"]
@@ -996,6 +997,35 @@ def test_trigger_routes(s: Server):
                                                400, "scope must look like"))
 
 
+# ===================================================================== b2b
+def test_b2b_routes(s: Server):
+    print("\n== b2b: config, peers, send (docs/b2b.md) ==")
+    t = s.get("/api/b2b").json()
+    ck("status answers with no b2b.json", t.get("ok") and t["config"]["active"] is False
+       and t["peers"] == [] and "runtime" in t)
+    c = s.post("/api/b2b-config", {"server_url": "http://127.0.0.1:9", "user_id": "me-1",
+                                   "token": "secret-b2b", "poll_seconds": 120})
+    ck("b2b-config saves", c.status == 200 and c.json()["config"]["poll_seconds"] == 120,
+       str(c.raw[:200]))
+    ck("and never sends the token back", b"secret-b2b" not in c.raw
+       and c.json()["config"]["token"]["set"] is True)
+    ck("a bad interval is refused", refused(s.post("/api/b2b-config", {"poll_seconds": 1}),
+                                            400, "poll_seconds"))
+    p = s.post("/api/b2b-peer", {"peer_id": "peer-1", "name": "Ana", "enabled": True})
+    ck("b2b-peer connects one", p.status == 200 and p.json()["peers"][0]["name"] == "Ana")
+    ck("enabled must be a boolean", refused(s.post("/api/b2b-peer", {"peer_id": "peer-1"}),
+                                            400, "true or false"))
+    ck("own id cannot be a peer", refused(s.post("/api/b2b-peer", {"peer_id": "me-1",
+                                                                   "enabled": True}), 400))
+    ck("a send to an unreachable relay says so", refused(s.post("/api/b2b-send", {
+        "to": "Ana", "text": "hi"}), 400, "could not reach the relay"))
+    ck("a send to a stranger is refused", refused(s.post("/api/b2b-send", {
+        "to": "nobody", "text": "hi"}), 400, "not a connected peer"))
+    p = s.post("/api/b2b-peer", {"peer_id": "peer-1", "enabled": False})
+    ck("b2b-peer disconnects, keeping the row", p.status == 200
+       and p.json()["peers"][0]["removed_at"])
+
+
 # ============================================================ usage report
 def test_usage_report(s: Server):
     print("\n== the usage report is rendered from usage-week nodes, no model ==")
@@ -1064,6 +1094,7 @@ def main():
         test_learned_rules(s)
         test_scripts(s)
         test_trigger_routes(s)
+        test_b2b_routes(s)
         test_usage_report(s)
     finally:
         s.stop()

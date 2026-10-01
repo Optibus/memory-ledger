@@ -19,6 +19,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Body as BodyParam, Depends
 from fastapi.responses import JSONResponse
 
+import b2b
 import graph
 import trigger
 
@@ -563,6 +564,54 @@ def trigger_action(data: m.TriggerAction = body(m.TriggerAction)):
         return reply({"ok": False, "error": "missing request_id"})
     return reply(trigger.log_action(trigger.db(), rid, clip(data.kind, 60),
                                     clip(data.target, 500), clip(data.detail, 4000)))
+
+
+# -------------------------------------------------------------------- b2b
+def _b2b_restart(res: dict) -> dict:
+    """Apply a saved B2B change to the poller now, when this server runs it."""
+    if res.get("ok"):
+        res["runtime"] = (trigger_runtime.restart() if state.TRIGGERS
+                          else trigger_runtime.status()).get("b2b", {})
+        res["watching"] = state.TRIGGERS
+    return res
+
+
+@router.post("/b2b-config", tags=["b2b"], summary="Change the B2B configuration",
+             description="Merges the keys sent into `<home>/b2b.json` (mode 600) and "
+                         "restarts the poller on it. The token is write-only.")
+def b2b_config(data: m.B2BConfig = body(m.B2BConfig)):
+    patch = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
+    if "clear" in patch:
+        patch["clear"] = [c for c in patch["clear"] if isinstance(c, str)]
+    return reply(_b2b_restart(b2b.save_config(patch)))
+
+
+@router.post("/b2b-register", tags=["b2b"], summary="Get a new account from the relay",
+             description="Stores the user id and token the relay returns. Refuses to "
+                         "replace a stored account unless `force`.")
+def b2b_register(data: m.B2BRegister = body(m.B2BRegister)):
+    return reply(_b2b_restart(b2b.register(clip(data.server_url, 300), data.force is True)))
+
+
+@router.post("/b2b-peer", tags=["b2b"], summary="Connect or disconnect a peer",
+             description="Only a connected peer's messages run anything. Disconnecting "
+                         "keeps the row, marked removed.")
+def b2b_peer(data: m.B2BPeer = body(m.B2BPeer)):
+    if not isinstance(data.enabled, bool):
+        return reply({"ok": False, "error": "enabled must be true or false"})
+    con = b2b.db()
+    res = (b2b.add_peer(con, clip(data.peer_id, 100), clip(data.name, 80)) if data.enabled
+           else b2b.remove_peer(con, clip(data.peer_id, 100)))
+    if res.get("ok"):
+        res["peers"] = b2b.list_peers(con, True)
+    return reply(res)
+
+
+@router.post("/b2b-send", tags=["b2b"], summary="Send a message to a peer",
+             description="Sealed by the relay so only that peer can read it, and logged "
+                         "here.")
+def b2b_send(data: m.B2BSend = body(m.B2BSend)):
+    return reply(b2b.send(clip(data.to, 100), clip(data.text, b2b.TEXT_MAX)))
 
 
 # ------------------------------------------- authoring skills and rules

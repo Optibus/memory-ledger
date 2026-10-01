@@ -2,8 +2,8 @@
 
 Everything that decides, logs and dispatches is in `scripts/trigger.py`, which
 is stdlib. This module only owns what the server has and the engine may not:
-the Slack Socket Mode websocket (`slack_sdk`), the Jira and GitHub poll loops, and
-the pool the headless sessions run on — so several mentions run at once
+the Slack Socket Mode websocket (`slack_sdk`), the Jira, GitHub and B2B poll loops
+(docs/b2b.md), and the pool the headless sessions run on — so several mentions run at once
 without a watcher waiting on any of them.
 
 Started from the app's lifespan when `state.TRIGGERS` is set, which `serve.py`
@@ -18,6 +18,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
+import b2b
 import trigger
 
 log = trigger.log
@@ -39,7 +40,7 @@ _pool: ThreadPoolExecutor | None = None
 _slack_client = None
 STATE: dict = {"running": False, "reason": "not started", "started_at": "",
                "slack": {"state": "off"}, "jira": {"state": "off"}, "github": {"state": "off"},
-               "recovered": {}}
+               "b2b": {"state": "off"}, "recovered": {}}
 
 
 def _now() -> str:
@@ -113,7 +114,8 @@ def _start(recovering: bool) -> None:
     global _pool, _stop
     trigger.setup_logging()
     cfg = trigger.load_config()
-    STATE.update(slack={"state": "off"}, jira={"state": "off"}, github={"state": "off"})
+    STATE.update(slack={"state": "off"}, jira={"state": "off"}, github={"state": "off"},
+                 b2b={"state": "off"})
     if not cfg.get("enabled") or cfg.get("_problem"):
         STATE.update(running=False, reason=cfg.get("_problem") or "triggers are switched off")
         log.info("triggers not running: %s", STATE["reason"])
@@ -133,6 +135,15 @@ def _start(recovering: bool) -> None:
     if trigger.source_enabled(cfg, "github"):
         threading.Thread(target=_github_loop, args=(cfg, _stop), daemon=True,
                          name="trigger-github").start()
+    b2b_cfg = b2b.load_config()
+    if b2b.active(b2b_cfg):
+        # Its own file and switch, under the same master switch: a message
+        # from another brain runs a session on the owner's behalf too.
+        threading.Thread(target=_b2b_loop, args=(b2b_cfg, _stop), daemon=True,
+                         name="trigger-b2b").start()
+    elif b2b_cfg.get("enabled"):
+        _note("b2b", state="misconfigured",
+              last_error=b2b_cfg.get("_problem") or "needs a user_id and a token")
     if trigger.source_enabled(cfg, "slack"):
         threading.Thread(target=_slack_main, args=(cfg, _stop), daemon=True,
                          name="trigger-slack").start()
@@ -204,6 +215,26 @@ def _github_loop(cfg: dict, stop_event: threading.Event) -> None:
                 _note("github", state="misconfigured", last_error=res.get("error", ""))
         except Exception as e:
             _note("github", state="erroring", last_error=str(e)[:300])
+        stop_event.wait(every)
+
+
+# ---------------------------------------------------------------- b2b
+def _b2b_loop(cfg: dict, stop_event: threading.Event) -> None:
+    """Read the relay every `poll_seconds`. Each message is deleted there as
+    it is read, so whatever arrives is logged as a request before anything
+    else (`b2b.poll`)."""
+    every = b2b.poll_seconds(cfg)
+    _note("b2b", state="polling", every_s=every)
+    while not stop_event.is_set():
+        try:
+            res = b2b.poll(cfg, _dispatch)
+            if res.get("ok"):
+                _note("b2b", state="polling", last_ok=_now(), last_error="",
+                      last={k: len(res.get(k) or []) for k in ("queued", "refused")})
+            else:
+                _note("b2b", state="erroring", last_error=res.get("error", ""))
+        except Exception as e:
+            _note("b2b", state="erroring", last_error=str(e)[:300])
         stop_event.wait(every)
 
 

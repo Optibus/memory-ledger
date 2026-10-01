@@ -35,6 +35,8 @@ TAGS = [
     {"name": "trigger", "description": "Slack, Jira and GitHub events that summon the brain: "
                                        "the request log, its actions, and the "
                                        "per-conversation gate (docs/trigger.md)."},
+    {"name": "b2b", "description": "Brain 2 Brain: this brain's account on the B2B relay, "
+                                   "its peers, and the messages sent (docs/b2b.md)."},
 ]
 
 
