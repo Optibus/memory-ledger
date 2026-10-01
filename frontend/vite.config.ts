@@ -3,12 +3,11 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath, URL } from "node:url";
 
-// The build output is COMMITTED (frontend/dist). serve.py is a stdlib server the
-// plugin ships with: a user who installs memory-ledger runs `python3
-// scripts/serve.py` and gets the UI with no npm, no node, no install step. The
-// only way to keep that promise with a compiled SPA is to ship the compiled
-// artifact. `base: "./"` keeps the asset URLs relative so the same dist works
-// whether it is served from / or from a sub-path.
+// The build output (frontend/dist) is NOT committed: `python3 scripts/serve.py`
+// runs this build on first start, and again when the source is newer, so npm is
+// needed for the UI but never for the API. `base: "./"` keeps the asset URLs
+// relative so the same dist works whether it is served from / or from a
+// sub-path.
 export default defineConfig({
   base: "./",
   plugins: [react()],

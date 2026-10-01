@@ -10,10 +10,11 @@ builds a venv for the server from `scripts/requirements-server.txt` (see
 [The server's environment](#the-servers-environment)) and re-enters it on every
 start after that. The engine, the hooks and the CLI never import any of it.
 
-The UI needs no toolchain to run: `frontend/dist` is committed, so a machine
-with no `npm` serves the same page as any other. When the source IS newer than
-the bundle and npm is there, the server rebuilds it before binding the port;
-`--no-build` skips that and `--rebuild` forces it.
+The UI needs npm; the API does not. `frontend/dist` is not in git, so the
+server builds it before binding the port on first start, and rebuilds it when
+the source is newer than the bundle; `--no-build` skips that and `--rebuild`
+forces it. With no `npm`, every endpoint still answers and only the page is a
+503 naming the reason.
 
 ```bash
 python3 scripts/serve.py                    # http://127.0.0.1:8770

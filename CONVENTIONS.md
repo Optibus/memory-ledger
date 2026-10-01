@@ -522,8 +522,9 @@ expose the UI (`--host 0.0.0.0` for phone access), pass **`--no-write`**: every
 reports `writable: false`).
 
 **Five sections, behind one hamburger: Map, Dashboard, People, Capabilities, Settings.** The UI
-is a React single-page app (`frontend/`, built to a committed `frontend/dist`
-that `scripts/serve.py` serves, and rebuilds when your source is newer — see
+is a React single-page app (`frontend/`, built to `frontend/dist`, which is not
+in git: `scripts/serve.py` builds it on first start and rebuilds it when your
+source is newer, so the UI needs npm and the API does not — see
 [the frontend](docs/frontend.md)). The
 sections live in a left drawer (`m` toggles it, Settings pinned at the bottom) so
 nothing sits on top of the search bar, each section owns the whole viewport, and
@@ -1100,10 +1101,8 @@ without matching doc updates is **incomplete**.
   and a new endpoint also means pinning it in `tests/test_api.py`, whose route
   inventory fails until you do (the OpenAPI document is generated from the routes,
   so it needs no edit);
-- a change to the web UI (`frontend/src/`), which also means **rebuilding
-  `frontend/dist` in the same commit** — it is committed so the server needs no
-  node, and a stale bundle ships behavior nobody wrote (`serve.py` rebuilds it
-  locally, but only your own machine sees that);
+- a change to the web UI (`frontend/src/`). There is no bundle to commit with
+  it — `frontend/dist` is ignored, and `serve.py` rebuilds it from the source;
 - a change to storage, sync, realms, vocabulary (node types, edges, states), or
   the install/enable flow.
 

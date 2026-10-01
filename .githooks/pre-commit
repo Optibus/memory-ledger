@@ -29,9 +29,9 @@ def is_behavior(f: str) -> bool:
         return True
     if f.startswith("hooks/"):                 # Claude Code hooks (.py / .json / .sh)
         return True
-    # The UI. Source only: frontend/dist is BUILT from it, so a rebuild is not a
-    # behavior change of its own and demanding a doc edit for one would train
-    # people to reach for --no-verify on every commit.
+    # The UI. Source only: frontend/dist is BUILT from it and is not in git
+    # (serve.py builds it on first start), so it can never be the behavior
+    # change a commit carries.
     if f.startswith("frontend/src/") or f == "frontend/index.html":
         return True
     if f.startswith(".claude-plugin/") and f.endswith(".json"):
