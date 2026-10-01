@@ -218,10 +218,12 @@ costs nothing. See
 [docs/trigger.md](docs/trigger.md).
 
 **Let brains talk to each other.** B2B (Brain 2 Brain) is a small in-memory
-relay (`services/b2b/`) where one brain leaves a message for another, sealed so
-only the recipient can read it and deleted the moment it is read. Your brain
-polls it on the interval you set, and a message from a peer you connected lands
-in Tasks and runs like a trigger. See [docs/b2b.md](docs/b2b.md).
+relay (`services/b2b/`) where one brain leaves a message for another. Your user
+id is your public key, a challenge proves you hold the private key, and messages
+are sealed by the sender so only the recipient can read them, then deleted the
+moment they are read. Your brain polls every broker you set up, on the interval
+you set, and a message from a peer you connected (linked to a person) lands in
+Tasks and runs like a trigger. See [docs/b2b.md](docs/b2b.md).
 **`/neo4j-up`** stands up the optional local graph database (Docker, one command,
 data under `~/.second_brain/neo4j`) and points the brain at it.
 

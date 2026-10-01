@@ -143,7 +143,8 @@ def _start(recovering: bool) -> None:
                          name="trigger-b2b").start()
     elif b2b_cfg.get("enabled"):
         _note("b2b", state="misconfigured",
-              last_error=b2b_cfg.get("_problem") or "needs a user_id and a token")
+              last_error=b2b_cfg.get("_problem")
+              or "needs an identity and an enabled broker")
     if trigger.source_enabled(cfg, "slack"):
         threading.Thread(target=_slack_main, args=(cfg, _stop), daemon=True,
                          name="trigger-slack").start()

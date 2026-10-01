@@ -586,11 +586,34 @@ def b2b_config(data: m.B2BConfig = body(m.B2BConfig)):
     return reply(_b2b_restart(b2b.save_config(patch)))
 
 
-@router.post("/b2b-register", tags=["b2b"], summary="Get a new account from the relay",
-             description="Stores the user id and token the relay returns. Refuses to "
-                         "replace a stored account unless `force`.")
-def b2b_register(data: m.B2BRegister = body(m.B2BRegister)):
-    return reply(_b2b_restart(b2b.register(clip(data.server_url, 300), data.force is True)))
+@router.post("/b2b-identity", tags=["b2b"], summary="Make this brain's key pair",
+             description="Generates an X25519 key pair; the public key is the user id to "
+                         "share. Refuses to replace a stored one unless `force`.")
+def b2b_identity(data: m.B2BIdentity = body(m.B2BIdentity)):
+    return reply(_b2b_restart(b2b.generate_identity(data.force is True)))
+
+
+@router.post("/b2b-broker", tags=["b2b"], summary="Add, change or remove a broker",
+             description="With no `id`, adds the broker at `url`. With an `id`, changes "
+                         "its name, url or switch, or drops it with `remove`.")
+def b2b_broker(data: m.B2BBroker = body(m.B2BBroker)):
+    if data.enabled is not None and not isinstance(data.enabled, bool):
+        return reply({"ok": False, "error": "enabled must be true or false"})
+    if not data.id:
+        res = b2b.add_broker(clip(data.url, 300), clip(data.name, 80),
+                             data.enabled is not False)
+    else:
+        res = b2b.update_broker(clip(data.id, 40), remove=data.remove is True,
+                                url=clip(data.url, 300) or None,
+                                name=clip(data.name, 80) or None, enabled=data.enabled)
+    return reply(_b2b_restart(res))
+
+
+@router.post("/b2b-broker-check", tags=["b2b"], summary="Log in to a broker now",
+             description="Answers the broker's challenge with this brain's key and opens a "
+                         "one-hour session: it is reachable, and takes this id.")
+def b2b_broker_check(data: m.B2BBrokerCheck = body(m.B2BBrokerCheck)):
+    return reply(b2b.check_broker(clip(data.id, 40)))
 
 
 @router.post("/b2b-peer", tags=["b2b"], summary="Connect or disconnect a peer",
@@ -600,7 +623,8 @@ def b2b_peer(data: m.B2BPeer = body(m.B2BPeer)):
     if not isinstance(data.enabled, bool):
         return reply({"ok": False, "error": "enabled must be true or false"})
     con = b2b.db()
-    res = (b2b.add_peer(con, clip(data.peer_id, 100), clip(data.name, 80)) if data.enabled
+    res = (b2b.add_peer(con, clip(data.peer_id, 100), clip(data.name, 80),
+                        clip(data.broker_id, 40), clip(data.person_id, 200)) if data.enabled
            else b2b.remove_peer(con, clip(data.peer_id, 100)))
     if res.get("ok"):
         res["peers"] = b2b.list_peers(con, True)
@@ -608,8 +632,8 @@ def b2b_peer(data: m.B2BPeer = body(m.B2BPeer)):
 
 
 @router.post("/b2b-send", tags=["b2b"], summary="Send a message to a peer",
-             description="Sealed by the relay so only that peer can read it, and logged "
-                         "here.")
+             description="Sealed here, to the peer's key and signed by this brain's, then "
+                         "left on the peer's broker, and logged.")
 def b2b_send(data: m.B2BSend = body(m.B2BSend)):
     return reply(b2b.send(clip(data.to, 100), clip(data.text, b2b.TEXT_MAX)))
 

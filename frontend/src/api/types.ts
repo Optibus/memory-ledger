@@ -1029,3 +1029,87 @@ export interface RuleProposals extends Envelope {
   truncated: boolean;
   proposals: RuleProposal[];
 }
+
+// ---------------------------------------------------------------- brain to brain
+// docs/b2b.md. The config is what `<home>/b2b.json` holds. The private key is
+// never in it: the server says whether one is set and where from.
+
+export interface B2BBroker {
+  id: string;
+  name: string;
+  url: string;
+  enabled: boolean;
+  /** A login the poller holds right now, and when it lapses. */
+  session: { open: boolean; expires_at?: string };
+}
+
+export interface B2BConfig {
+  path: string;
+  exists: boolean;
+  problem: string;
+  /** In effect: the switch AND a file that parses. */
+  enabled: boolean;
+  active: boolean;
+  /** This brain's public key, which is its address. Safe to share. */
+  user_id: string;
+  private_key: { set: boolean; source: "env" | "file" | ""; env_var: string };
+  brokers: B2BBroker[];
+  poll_seconds: number;
+  /** The run command for a received message, with `{variables}`. */
+  do: string;
+  action: TriggerAction;
+  http: TriggerHttp;
+  script: TriggerScriptRef;
+  variables: Record<string, string>;
+}
+
+export interface B2BPeer {
+  peer_id: string;
+  name: string;
+  added_at: string;
+  removed_at: string | null;
+  broker_id: string;
+  person_id: string;
+  person_title: string;
+}
+
+export interface B2BSent {
+  id: string;
+  peer_id: string;
+  text: string;
+  sent_at: string;
+  request_id: string;
+  broker_id: string;
+}
+
+export interface B2BRuntime {
+  state: string;
+  last_error?: string;
+  last_ok?: string;
+  every_s?: number;
+}
+
+export interface B2BStatus extends Envelope {
+  config: B2BConfig;
+  peers: B2BPeer[];
+  sent: B2BSent[];
+  /** Received messages by status. */
+  received: Record<string, number>;
+  runtime: B2BRuntime;
+  /** False when the server runs no poller (--no-trigger or --no-write). */
+  watching: boolean;
+}
+
+export interface B2BBrokerCheck extends Envelope {
+  broker: string;
+  user_id: string;
+  session: { open: boolean; expires_at?: string };
+}
+
+export interface B2BSendResult extends Envelope {
+  id: string;
+  to: string;
+  name: string;
+  broker: string;
+  sent_at: string;
+}

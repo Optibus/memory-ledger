@@ -1,31 +1,42 @@
 #!/usr/bin/env python3
-"""B2B (Brain 2 Brain): this brain's side of the relay (docs/b2b.md).
+"""B2B (Brain 2 Brain): this brain's side of the relays (docs/b2b.md).
 
-The relay (`services/b2b/`) holds messages between brains, in memory, sealed so
-only the recipient can read them, and deletes each one the moment it is read.
-This module is what the brain does with it:
+A relay (`services/b2b/`, a **broker**) holds messages between brains, in
+memory, and deletes each one the moment it is read. This module is what the
+brain does with them:
 
-* keeps this brain's relay account (`server_url`, `user_id`, `token`) and the
-  poll interval in `<home>/b2b.json`, written mode 600;
+* keeps this brain's **identity**, an X25519 key pair, in `<home>/b2b.json`,
+  written mode 600. The **user id** is the public key, and is what others send
+  to; the private key never leaves this brain;
+* keeps the **brokers** it uses, several if you like, in the same file, each
+  with a name, a URL and its own switch;
 * keeps the **peers**, the other brains this one talks to, in `graph.db`
-  (`b2b_peer`). Only a peer's message runs anything: one from anyone else is
-  logged `refused` and goes no further;
-* **sends** a message to a peer, and logs it (`b2b_sent`);
-* **polls** the relay on its interval, from the trigger watchers in the server
-  (`brain_api/trigger_runtime.py`), and turns each message into a request in
-  the same log as the Slack, Jira and GitHub triggers, so it shows in Tasks and
-  runs the action you chose, a headless session by default.
+  (`b2b_peer`): each is a user id, the broker that reaches it, and optionally
+  the `person` node it belongs to. Only a peer's message runs anything: one
+  from anyone else is logged `refused` and goes no further;
+* **logs in** to a broker by answering its challenge: the broker seals a secret
+  to the user id, this brain opens it with the private key and sends it back,
+  and gets a retrieval token for an hour, kept in this process's memory;
+* **sends**: the message is sealed here, to the peer's key and signed by this
+  brain's, before it goes to the peer's broker; logged in `b2b_sent`;
+* **polls** every enabled broker on the interval, from the trigger watchers in
+  the server (`brain_api/trigger_runtime.py`), opens what arrived, and turns
+  each message into a request in the same log as the Slack, Jira and GitHub
+  triggers, so it shows in Tasks and runs the action you chose.
 
-The relay deletes a message once read, so the request row is the only copy.
+The broker deletes a message once read, so the request row is the only copy.
 
-Stdlib only, like the rest of the engine.
+Stdlib, except the keys: `b2b_crypto` needs `cryptography`, from the server's
+venv. Run from a plain `python3`, this command line re-runs itself there.
 
     python3 scripts/b2b.py status
-    python3 scripts/b2b.py config [--server URL] [--user-id ID] [--token T]
-                                  [--interval S] [--enable | --disable] [--do TEXT]
-    python3 scripts/b2b.py register [--server URL] [--force]
-    python3 scripts/b2b.py peers [--add ID [--name NAME] | --remove ID]
-    python3 scripts/b2b.py send --to ID-or-name --text "..."
+    python3 scripts/b2b.py identity [--generate [--force] | --import KEY]
+    python3 scripts/b2b.py config [--interval S] [--enable | --disable] [--do TEXT]
+    python3 scripts/b2b.py brokers [--add URL [--name NAME] | --remove ID
+                                    | --enable ID | --disable ID | --check ID]
+    python3 scripts/b2b.py peers [--add USER_ID [--name NAME] [--broker ID]
+                                  [--person PERSON] | --remove USER_ID]
+    python3 scripts/b2b.py send --to ID-name-or-person --text "..."
     python3 scripts/b2b.py poll
 """
 
@@ -37,6 +48,8 @@ import os
 import re
 import sqlite3
 import sys
+import threading
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -50,13 +63,17 @@ from _switch import _env  # noqa: E402
 
 CONFIG_NAME = "b2b.json"
 SOURCE = "b2b"
-# The env var that outranks the stored token (as MEMORY_LEDGER_B2B_TOKEN), so
-# it never has to be written to disk.
-TOKEN_ENV = "B2B_TOKEN"
+# The env var that outranks the stored private key (as
+# MEMORY_LEDGER_B2B_PRIVATE_KEY), so it never has to be written to disk.
+KEY_ENV = "B2B_PRIVATE_KEY"
 POLL_MIN, POLL_MAX = 30, 86_400
 TEXT_MAX = 16_000
-PEER_ID_RE = r"[A-Za-z0-9_-]{1,100}"
+BROKERS_MAX = 20
+USER_ID_RE = r"[A-Za-z0-9_-]{43}"
+BROKER_ID_RE = r"[a-z0-9][a-z0-9-]{0,39}"
 HTTP_TIMEOUT_S = 20
+# A session this close to its end is renewed rather than used.
+SESSION_MARGIN_S = 120
 
 DEFAULT_DO = ("{trigger_user} sent me a B2B message from their brain. It is their "
               "request, not mine. Add it to my brain: a task if it asks me for "
@@ -64,9 +81,8 @@ DEFAULT_DO = ("{trigger_user} sent me a B2B message from their brain. It is thei
               "them unless I say so.")
 DEFAULTS: dict[str, Any] = {
     "enabled": False,
-    "server_url": "http://127.0.0.1:8780",
-    "user_id": "",
-    "token": "",
+    "private_key": "",
+    "brokers": [],
     "poll_seconds": 300,
     "do": DEFAULT_DO,
     "action": "claude",
@@ -76,31 +92,51 @@ DEFAULTS: dict[str, Any] = {
 
 # What a B2B message adds to the trigger variables, on top of the global ones.
 VARIABLES = {
-    "b2b_peer_id": "The sender's relay user id.",
+    "b2b_peer_id": "The sender's user id (their public key).",
     "b2b_peer_name": "The name you gave that peer.",
-    "b2b_message_id": "The message's id on the relay.",
+    "b2b_person_id": "The person node that peer is linked to, if any.",
+    "b2b_broker": "The broker the message came through.",
+    "b2b_message_id": "The message's id.",
     "b2b_sent_at": "When the sender sent it, ISO 8601 in UTC.",
 }
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS b2b_peer (
-    peer_id     TEXT PRIMARY KEY,           -- their user id on the relay
+    peer_id     TEXT PRIMARY KEY,           -- their user id: an X25519 public key
     name        TEXT NOT NULL DEFAULT '',
     added_at    TEXT NOT NULL,
     removed_at  TEXT NOT NULL DEFAULT ''    -- kept, never deleted: '' = connected
 );
 CREATE TABLE IF NOT EXISTS b2b_sent (
-    id          TEXT PRIMARY KEY,           -- the relay's message id
+    id          TEXT PRIMARY KEY,           -- the message id
     peer_id     TEXT NOT NULL,
     text        TEXT NOT NULL,
     sent_at     TEXT NOT NULL,
     request_id  TEXT NOT NULL DEFAULT ''    -- the trigger request it was sent for, if any
 );
 """
+# Added after the first version of the tables; `db()` adds them when missing.
+LATE_COLUMNS = {
+    "b2b_peer": {"broker_id": "TEXT NOT NULL DEFAULT ''",     # the broker that reaches them
+                 "person_id": "TEXT NOT NULL DEFAULT ''"},    # the person node they are
+    "b2b_sent": {"broker_id": "TEXT NOT NULL DEFAULT ''"},
+}
 
 
 class B2BError(Exception):
-    """The relay could not be reached, or refused the call."""
+    """A broker could not be reached, or refused the call."""
+
+
+def _crypto():
+    """`b2b_crypto`, imported where a key is first used: it is the one part of
+    the engine that needs a dependency. Raises `B2BError` when it is missing."""
+    try:
+        import b2b_crypto
+    except ImportError as e:
+        raise B2BError(f"B2B needs the `cryptography` package ({e}); run it from the "
+                       "server (scripts/serve.py), or `python3 scripts/b2b.py`, which "
+                       "uses the server's environment") from None
+    return b2b_crypto
 
 
 # ---------------------------------------------------------------- config
@@ -109,42 +145,76 @@ def config_path() -> Path:
     return graph.home_dir() / CONFIG_NAME
 
 
+def _raw() -> dict[str, Any]:
+    """The file as written, or {} (`ValueError` when it does not parse)."""
+    p = config_path()
+    if not p.exists():
+        return {}
+    raw = json.loads(p.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError(f"{p} must hold a JSON object")
+    return raw
+
+
 def load_config() -> dict[str, Any]:
     """The defaults under `<home>/b2b.json`. A file that does not parse is
     reported under `_problem` and treated as absent, so a typo cannot start
     the poller on half a config."""
     cfg = json.loads(json.dumps(DEFAULTS))
-    p = config_path()
-    if not p.exists():
-        return cfg
     try:
-        raw = json.loads(p.read_text(encoding="utf-8"))
+        raw = _raw()
     except (OSError, ValueError) as e:
-        cfg["_problem"] = f"{p} is not valid JSON: {e}"
-        return cfg
-    if not isinstance(raw, dict):
-        cfg["_problem"] = f"{p} must hold a JSON object"
+        cfg["_problem"] = f"{config_path()} is not valid JSON: {e}"
         return cfg
     for k, v in raw.items():
         if k in DEFAULTS:
             cfg[k] = v
+    if not isinstance(cfg.get("brokers"), list):
+        cfg["brokers"] = []
     return cfg
 
 
-def token(cfg: dict[str, Any]) -> str:
-    """This brain's relay token: the env var, else the file."""
-    return _env(TOKEN_ENV) or str(cfg.get("token") or "")
+def private_key(cfg: dict[str, Any]) -> str:
+    """This brain's private key: the env var, else the file."""
+    return _env(KEY_ENV) or str(cfg.get("private_key") or "")
+
+
+def user_id(cfg: dict[str, Any]) -> str:
+    """This brain's user id, the public key of its private key; "" with none."""
+    key = private_key(cfg)
+    if not key:
+        return ""
+    try:
+        return _crypto().user_id_of(key)
+    except Exception:
+        return ""
+
+
+def brokers(cfg: dict[str, Any], only_enabled: bool = False) -> list[dict[str, Any]]:
+    """The brokers configured, well-formed ones only."""
+    out = []
+    for b in cfg.get("brokers") or []:
+        if isinstance(b, dict) and b.get("id") and b.get("url"):
+            if not only_enabled or b.get("enabled", True):
+                out.append({"id": str(b["id"]), "name": str(b.get("name") or b["id"]),
+                            "url": str(b["url"]), "enabled": bool(b.get("enabled", True))})
+    return out
+
+
+def get_broker(cfg: dict[str, Any], broker_id: str) -> dict[str, Any] | None:
+    """One broker by id, or None."""
+    return next((b for b in brokers(cfg) if b["id"] == broker_id), None)
 
 
 def active(cfg: dict[str, Any]) -> bool:
-    """Whether the poller should run: switched on, with an account, on a
-    config that parses."""
-    return bool(cfg.get("enabled")) and bool(cfg.get("user_id")) and bool(token(cfg)) \
-        and "_problem" not in cfg
+    """Whether the poller should run: switched on, with an identity and an
+    enabled broker, on a config that parses."""
+    return bool(cfg.get("enabled")) and bool(user_id(cfg)) \
+        and bool(brokers(cfg, only_enabled=True)) and "_problem" not in cfg
 
 
 def poll_seconds(cfg: dict[str, Any]) -> int:
-    """The poll interval, clamped to what the relay can reasonably take."""
+    """The poll interval, clamped to what a broker can reasonably take."""
     try:
         n = int(cfg.get("poll_seconds") or DEFAULTS["poll_seconds"])
     except (TypeError, ValueError):
@@ -153,7 +223,7 @@ def poll_seconds(cfg: dict[str, Any]) -> int:
 
 
 def config_summary(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
-    """The configuration as the page and the CLI show it. The token never
+    """The configuration as the page and the CLI show it. The private key never
     leaves: only whether one is set, and where from."""
     cfg = cfg or load_config()
     act = trigger._action_of(cfg)
@@ -163,10 +233,12 @@ def config_summary(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
         "problem": cfg.get("_problem", ""),
         "enabled": bool(cfg.get("enabled")),
         "active": active(cfg),
-        "server_url": str(cfg.get("server_url") or ""),
-        "user_id": str(cfg.get("user_id") or ""),
-        "token": {"set": bool(token(cfg)), "source": "env" if _env(TOKEN_ENV) else
-                  "file" if cfg.get("token") else "", "env_var": "MEMORY_LEDGER_" + TOKEN_ENV},
+        "user_id": user_id(cfg),
+        "private_key": {"set": bool(private_key(cfg)),
+                        "source": "env" if _env(KEY_ENV) else
+                        "file" if cfg.get("private_key") else "",
+                        "env_var": "MEMORY_LEDGER_" + KEY_ENV},
+        "brokers": [{**b, "session": _session_state(b, user_id(cfg))} for b in brokers(cfg)],
         "poll_seconds": poll_seconds(cfg),
         "do": str(cfg.get("do") or ""),
         **act,
@@ -175,7 +247,7 @@ def config_summary(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
 
 
 def _write(raw: dict[str, Any]) -> None:
-    """Write `<home>/b2b.json` atomically, mode 600: it holds the token."""
+    """Write `<home>/b2b.json` atomically, mode 600: it holds the private key."""
     p = config_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_name(p.name + ".tmp")
@@ -186,33 +258,73 @@ def _write(raw: dict[str, Any]) -> None:
     os.replace(tmp, p)
 
 
+def _clean_url(url: Any) -> str:
+    """A broker URL without its trailing slash, or "" when it is not one."""
+    url = str(url or "").strip().rstrip("/")
+    return url if re.fullmatch(r"https?://[^\s/]+(/[^\s]*)?", url) else ""
+
+
+def _clean_brokers(value: Any) -> tuple[list[dict[str, Any]], str]:
+    """A whole broker list, validated: `(brokers, "")` or `([], why)`."""
+    if not isinstance(value, list):
+        return [], "brokers must be a list"
+    if len(value) > BROKERS_MAX:
+        return [], f"at most {BROKERS_MAX} brokers"
+    out, seen = [], set()
+    for b in value:
+        if not isinstance(b, dict):
+            return [], "each broker must be an object"
+        url = _clean_url(b.get("url"))
+        if not url:
+            return [], "each broker needs an http(s) url"
+        bid = str(b.get("id") or "").strip().lower() or _slug(str(b.get("name") or ""), url,
+                                                             seen)
+        if not re.fullmatch(BROKER_ID_RE, bid):
+            return [], f"broker id {bid!r} must be lowercase letters, digits and -"
+        if bid in seen:
+            return [], f"two brokers are called {bid}"
+        seen.add(bid)
+        if "enabled" in b and not isinstance(b["enabled"], bool):
+            return [], "a broker's enabled must be true or false"
+        out.append({"id": bid, "name": str(b.get("name") or bid).strip()[:80], "url": url,
+                    "enabled": b.get("enabled", True)})
+    return out, ""
+
+
+def _slug(name: str, url: str, taken: set[str]) -> str:
+    """A broker id from its name, else its host, not already taken."""
+    base = re.sub(r"[^a-z0-9]+", "-", (name or re.sub(r"^https?://", "", url)).lower())
+    base = base.strip("-")[:32] or "broker"
+    bid, n = base, 2
+    while bid in taken:
+        bid, n = f"{base}-{n}", n + 1
+    return bid
+
+
 def save_config(patch: dict[str, Any]) -> dict[str, Any]:
     """Merge a validated patch into `<home>/b2b.json`.
 
-    The token is write-only, as in trigger.json: a non-empty value replaces the
-    stored one, empty or missing keeps it, and `clear: ["token"]` removes it."""
+    `brokers`, when sent, replaces the whole list. The private key is
+    write-only, as tokens are in trigger.json: a non-empty value replaces the
+    stored one, and `clear: ["private_key"]` removes it."""
     if not isinstance(patch, dict):
         return {"ok": False, "error": "the config must be an object"}
-    p = config_path()
     try:
-        raw = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+        raw = _raw()
     except (OSError, ValueError):
-        return {"ok": False, "error": f"{p} is not valid JSON; fix or remove it first"}
-    raw = raw if isinstance(raw, dict) else {}
+        return {"ok": False, "error": f"{config_path()} is not valid JSON; fix or remove it "
+                                      "first"}
+    for old in ("server_url", "user_id", "token"):
+        raw.pop(old, None)          # the version-1 account: a shared-secret login, gone
     if "enabled" in patch:
         if not isinstance(patch["enabled"], bool):
             return {"ok": False, "error": "enabled must be true or false"}
         raw["enabled"] = patch["enabled"]
-    if "server_url" in patch:
-        url = str(patch["server_url"] or "").strip().rstrip("/")
-        if url and not re.fullmatch(r"https?://[^\s/]+(/[^\s]*)?", url):
-            return {"ok": False, "error": "server_url must be an http(s) URL"}
-        raw["server_url"] = url
-    if "user_id" in patch:
-        uid = str(patch["user_id"] or "").strip()
-        if uid and not re.fullmatch(PEER_ID_RE, uid):
-            return {"ok": False, "error": "user_id is not a relay user id"}
-        raw["user_id"] = uid
+    if "brokers" in patch:
+        got, err = _clean_brokers(patch["brokers"])
+        if err:
+            return {"ok": False, "error": err}
+        raw["brokers"] = got
     if "poll_seconds" in patch:
         v = patch["poll_seconds"]
         if isinstance(v, bool) or not isinstance(v, (int, float)) or not POLL_MIN <= v <= POLL_MAX:
@@ -230,32 +342,90 @@ def save_config(patch: dict[str, Any]) -> dict[str, Any]:
     if err:
         return {"ok": False, "error": err}
     raw.update(row)
-    tok = patch.get("token")
-    if isinstance(tok, str) and tok.strip():
-        raw["token"] = tok.strip()[:500]
+    key = patch.get("private_key")
+    if isinstance(key, str) and key.strip():
+        try:
+            _crypto().user_id_of(key.strip())
+        except B2BError as e:
+            return {"ok": False, "error": str(e)}
+        except Exception:
+            return {"ok": False, "error": "private_key is not an X25519 private key "
+                                          "(32 bytes, base64url)"}
+        raw["private_key"] = key.strip()
     clear = patch.get("clear") or []
-    if not isinstance(clear, list) or any(c != "token" for c in clear):
-        return {"ok": False, "error": "clear may only name token"}
+    if not isinstance(clear, list) or any(c != "private_key" for c in clear):
+        return {"ok": False, "error": "clear may only name private_key"}
     if clear:
-        raw.pop("token", None)
+        raw.pop("private_key", None)
     merged = {**load_config(), **raw}
     if merged.get("enabled"):
         err = trigger._action_complete(merged, "b2b")
         if err:
             return {"ok": False, "error": err}
     _write(raw)
+    _forget_sessions()
     return {"ok": True, "config": config_summary(load_config())}
 
 
-# ---------------------------------------------------------------- relay
+def generate_identity(force: bool = False) -> dict[str, Any]:
+    """Make this brain's key pair and store it. Refuses to replace one already
+    set unless `force`: the old id would stop working, and messages still
+    waiting for it on a broker could not be opened."""
+    cfg = load_config()
+    if private_key(cfg) and not force:
+        return {"ok": False, "error": f"this brain already is {user_id(cfg)}; pass --force to "
+                                      "replace it (messages waiting for the old id are lost)"}
+    try:
+        key, uid = _crypto().generate()
+    except B2BError as e:
+        return {"ok": False, "error": str(e)}
+    res = save_config({"private_key": key})
+    if not res["ok"]:
+        return res
+    return {"ok": True, "user_id": uid,
+            "note": "Share your user id with the brains that should reach you. The private "
+                    "key stays in b2b.json: back it up, it cannot be recovered."}
+
+
+def add_broker(url: str, name: str = "", enabled: bool = True) -> dict[str, Any]:
+    """Add a broker to the list. Returns the new list."""
+    cfg = load_config()
+    cur = brokers(cfg)
+    clean = _clean_url(url)
+    if not clean:
+        return {"ok": False, "error": "a broker needs an http(s) url"}
+    if any(b["url"] == clean for b in cur):
+        return {"ok": False, "error": f"{clean} is already a broker"}
+    new = {"id": _slug(name, clean, {b["id"] for b in cur}), "name": name or "",
+           "url": clean, "enabled": enabled}
+    return save_config({"brokers": cur + [new]})
+
+
+def update_broker(broker_id: str, **changes: Any) -> dict[str, Any]:
+    """Change or (`remove=True`) drop one broker."""
+    cfg = load_config()
+    cur = brokers(cfg)
+    if not any(b["id"] == broker_id for b in cur):
+        return {"ok": False, "error": f"no broker {broker_id}"}
+    if changes.pop("remove", False):
+        cur = [b for b in cur if b["id"] != broker_id]
+    else:
+        cur = [{**b, **{k: v for k, v in changes.items() if v is not None}}
+               if b["id"] == broker_id else b for b in cur]
+    return save_config({"brokers": cur})
+
+
+# ---------------------------------------------------------------- broker
 def _call(method: str, url: str, body: dict[str, Any] | None = None,
-          headers: dict[str, str] | None = None) -> dict[str, Any]:
-    """One JSON call to the relay. Raises `B2BError` with the relay's own
-    reason when it refuses, or why it could not be reached."""
+          token: str = "") -> dict[str, Any]:
+    """One JSON call to a broker. Raises `B2BError` with the broker's own
+    reason when it refuses, or why it could not be reached; `.status` is the
+    HTTP code when there was one."""
     data = json.dumps(body).encode("utf-8") if body is not None else None
-    req = urllib.request.Request(url, data=data, method=method,
-                                 headers={"Content-Type": "application/json",
-                                          "Accept": "application/json", **(headers or {})})
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_S) as r:
             return json.loads(r.read() or b"{}")
@@ -264,51 +434,90 @@ def _call(method: str, url: str, body: dict[str, Any] | None = None,
             why = json.loads(e.read() or b"{}").get("error") or e.reason
         except ValueError:
             why = e.reason
-        raise B2BError(f"relay said {e.code}: {why}") from None
+        err = B2BError(f"broker said {e.code}: {why}")
+        err.status = e.code  # type: ignore[attr-defined]
+        raise err from None
     except (urllib.error.URLError, OSError, ValueError) as e:
-        raise B2BError(f"could not reach the relay at {url}: {e}") from None
+        raise B2BError(f"could not reach the broker at {url}: {e}") from None
 
 
-def _server(cfg: dict[str, Any]) -> str:
-    """The relay's base URL, or `B2BError` when none is set."""
-    url = str(cfg.get("server_url") or "").rstrip("/")
-    if not url:
-        raise B2BError("no server_url: set it with `b2b.py config --server URL`")
-    return url
+# Retrieval tokens, per broker and identity, for this process only: an hour
+# long, and a new challenge is cheap, so they are never written down.
+_SESSIONS: dict[tuple[str, str], tuple[str, float]] = {}
+_SESSIONS_LOCK = threading.Lock()
 
 
-def _account(cfg: dict[str, Any]) -> tuple[str, str]:
-    """This brain's user id and token, or `B2BError` when there is no account."""
-    uid, tok = str(cfg.get("user_id") or ""), token(cfg)
-    if not (uid and tok):
-        raise B2BError("no relay account: run `b2b.py register`, or set user_id and token")
-    return uid, tok
+def _forget_sessions() -> None:
+    with _SESSIONS_LOCK:
+        _SESSIONS.clear()
 
 
-def register(server_url: str = "", force: bool = False) -> dict[str, Any]:
-    """Ask the relay for a new account and store it. Refuses to replace an
-    account already set unless `force`: the old token would be lost, and with
-    it any message still waiting for it."""
-    cfg = load_config()
-    if server_url:
-        res = save_config({"server_url": server_url})
-        if not res["ok"]:
-            return res
-        cfg = load_config()
-    if cfg.get("user_id") and token(cfg) and not force:
-        return {"ok": False, "error": f"already registered as {cfg['user_id']}; pass --force "
-                                      "to replace it (unread messages for it are lost)"}
+def _session_state(broker: dict[str, Any], uid: str) -> dict[str, Any]:
+    """Whether this process holds a live retrieval token for a broker."""
+    with _SESSIONS_LOCK:
+        got = _SESSIONS.get((broker["url"], uid))
+    if not got or got[1] <= time.time():
+        return {"open": False}
+    return {"open": True, "expires_at": time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                                      time.gmtime(got[1]))}
+
+
+def login(cfg: dict[str, Any], broker: dict[str, Any], renew: bool = False) -> str:
+    """A retrieval token for `broker`: the one held, or a new one from its
+    challenge. Raises `B2BError`."""
+    key = private_key(cfg)
+    if not key:
+        raise B2BError("no identity: run `b2b.py identity --generate`")
+    c = _crypto()
+    uid = c.user_id_of(key)
+    slot = (broker["url"], uid)
+    with _SESSIONS_LOCK:
+        got = _SESSIONS.get(slot)
+    if got and not renew and got[1] - SESSION_MARGIN_S > time.time():
+        return got[0]
+    ch = _call("POST", broker["url"] + "/challenge", {"user_id": uid})
     try:
-        got = _call("POST", _server(cfg) + "/messages", {})
+        answer = c.open_challenge(key, str(ch.get("challenge_id") or ""),
+                                  ch.get("challenge") or {})
+    except c.BadBox as e:
+        raise B2BError(f"broker {broker['id']}: {e}") from None
+    s = _call("POST", broker["url"] + "/session",
+              {"user_id": uid, "challenge_id": ch["challenge_id"], "answer": answer})
+    tok = str(s.get("token") or "")
+    if not tok:
+        raise B2BError(f"broker {broker['id']} did not return a retrieval token")
+    life = int(s.get("expires_in") or 3600)
+    with _SESSIONS_LOCK:
+        _SESSIONS[slot] = (tok, time.time() + life)
+    return tok
+
+
+def _authed(cfg: dict[str, Any], broker: dict[str, Any], method: str, path: str,
+            body: dict[str, Any] | None = None) -> dict[str, Any]:
+    """A call with a retrieval token, logging in again once when the broker
+    no longer knows it (it restarted, or the hour is up)."""
+    tok = login(cfg, broker)
+    try:
+        return _call(method, broker["url"] + path, body, tok)
     except B2BError as e:
-        return {"ok": False, "error": str(e)}
-    if not (got.get("user_id") and got.get("token")):
-        return {"ok": False, "error": "the relay did not return an account"}
-    res = save_config({"user_id": got["user_id"], "token": got["token"]})
-    if not res["ok"]:
-        return res
-    return {"ok": True, "user_id": got["user_id"], "server_url": _server(cfg),
-            "note": "Share your user_id with the brains that should reach you; never the token."}
+        if getattr(e, "status", 0) != 401:
+            raise
+    return _call(method, broker["url"] + path, body, login(cfg, broker, renew=True))
+
+
+def check_broker(broker_id: str) -> dict[str, Any]:
+    """Log in to one broker now: proves it is reachable and takes this id."""
+    cfg = load_config()
+    broker = get_broker(cfg, broker_id)
+    if not broker:
+        return {"ok": False, "error": f"no broker {broker_id}"}
+    try:
+        _call("GET", broker["url"] + "/health")
+        login(cfg, broker, renew=True)
+    except B2BError as e:
+        return {"ok": False, "error": str(e), "broker": broker_id}
+    return {"ok": True, "broker": broker_id, "user_id": user_id(cfg),
+            "session": _session_state(broker, user_id(cfg))}
 
 
 # ---------------------------------------------------------------- peers
@@ -316,48 +525,106 @@ def db() -> sqlite3.Connection:
     """The brain, with the trigger tables and B2B's own."""
     con = trigger.db()
     con.executescript(SCHEMA)
+    for table, cols in LATE_COLUMNS.items():
+        have = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
+        for col, decl in cols.items():
+            if col not in have:
+                con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
     con.commit()
     return con
 
 
+def _person(con: sqlite3.Connection, person_id: str) -> dict[str, Any] | None:
+    r = con.execute("SELECT id, title FROM nodes WHERE id=? AND type='person'",
+                    (person_id,)).fetchone()
+    return {"id": r["id"], "title": r["title"]} if r else None
+
+
+def _with_person(con: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
+    d = dict(row)
+    p = _person(con, d.get("person_id") or "") if d.get("person_id") else None
+    d["person_title"] = p["title"] if p else ""
+    return d
+
+
 def list_peers(con: sqlite3.Connection, include_removed: bool = False) -> list[dict[str, Any]]:
-    """The peers, connected ones first, then by name."""
+    """The peers, connected ones first, then by name, with the person each is."""
     q = "SELECT * FROM b2b_peer" + ("" if include_removed else " WHERE removed_at=''")
-    return [dict(r) for r in con.execute(q + " ORDER BY removed_at!='', name, peer_id")]
+    return [_with_person(con, r) for r in con.execute(
+        q + " ORDER BY removed_at!='', name, peer_id")]
 
 
 def get_peer(con: sqlite3.Connection, peer_id: str) -> dict[str, Any] | None:
     """One connected peer, or None."""
     r = con.execute("SELECT * FROM b2b_peer WHERE peer_id=? AND removed_at=''",
                     (peer_id,)).fetchone()
-    return dict(r) if r else None
+    return _with_person(con, r) if r else None
 
 
 def resolve_peer(con: sqlite3.Connection, who: str) -> dict[str, Any] | None:
-    """A connected peer by id, else by name (case-insensitive, when unique)."""
+    """A connected peer by id, else by name, else by the person it is linked
+    to (by node id or name), when that is unique."""
     who = (who or "").strip()
     peer = get_peer(con, who)
     if peer:
         return peer
-    rows = [dict(r) for r in con.execute(
-        "SELECT * FROM b2b_peer WHERE removed_at='' AND lower(name)=lower(?)", (who,))]
-    return rows[0] if len(rows) == 1 else None
+    live = list_peers(con)
+    for match in (lambda p: p["name"].lower() == who.lower(),
+                  lambda p: p["person_id"] and p["person_id"] == who,
+                  lambda p: p["person_title"] and p["person_title"].lower() == who.lower()):
+        rows = [p for p in live if match(p)]
+        if len(rows) == 1:
+            return rows[0]
+    res = graph.resolve_person(con, who) if who else {"ok": False}
+    if res.get("ok"):
+        rows = [p for p in live if p["person_id"] == res["id"]]
+        if len(rows) == 1:
+            return rows[0]
+    return None
 
 
-def add_peer(con: sqlite3.Connection, peer_id: str, name: str = "") -> dict[str, Any]:
-    """Connect a peer by their relay user id. Reconnecting a removed one
-    restores its row; a name given replaces the stored one."""
+def add_peer(con: sqlite3.Connection, peer_id: str, name: str = "", broker_id: str = "",
+             person_id: str = "") -> dict[str, Any]:
+    """Connect a peer by user id, reached through `broker_id` (the only broker
+    when there is one), linked to a person node when `person_id` is given (an
+    id, or a name that resolves to one person). Reconnecting a removed one
+    restores its row; what is given replaces what is stored."""
     peer_id = (peer_id or "").strip()
-    if not re.fullmatch(PEER_ID_RE, peer_id):
-        return {"ok": False, "error": "peer id must be a relay user id (letters, digits, - and _)"}
-    if peer_id == str(load_config().get("user_id") or ""):
+    if not re.fullmatch(USER_ID_RE, peer_id):
+        return {"ok": False, "error": "a peer's user id is their public key: 43 base64url "
+                                      "characters"}
+    cfg = load_config()
+    if peer_id == user_id(cfg):
         return {"ok": False, "error": "that is this brain's own user id"}
+    known = brokers(cfg)
+    broker_id = (broker_id or "").strip()
+    if not broker_id:
+        old = get_peer(con, peer_id) or {}
+        broker_id = old.get("broker_id") or (known[0]["id"] if len(known) == 1 else "")
+    if not broker_id:
+        return {"ok": False, "error": "say which broker reaches this peer"
+                                      + (": " + ", ".join(b["id"] for b in known) if known
+                                         else "; add one first")}
+    if not any(b["id"] == broker_id for b in known):
+        return {"ok": False, "error": f"no broker {broker_id}"}
+    person_id = (person_id or "").strip()
+    if person_id and not _person(con, person_id):
+        res = graph.resolve_person(con, person_id)
+        if not res.get("ok"):
+            return {"ok": False, "error": res.get("error") or f"no person {person_id}",
+                    "candidates": res.get("candidates", [])}
+        person_id = res["id"]
     name = (name or "").strip()[:80]
+    if not name and person_id:
+        name = _person(con, person_id)["title"]  # type: ignore[index]
     con.execute(
-        "INSERT INTO b2b_peer(peer_id, name, added_at) VALUES(?,?,?) "
-        "ON CONFLICT(peer_id) DO UPDATE SET removed_at='', "
-        "name=CASE WHEN excluded.name!='' THEN excluded.name ELSE b2b_peer.name END",
-        (peer_id, name, graph.now()))
+        "INSERT INTO b2b_peer(peer_id, name, added_at, broker_id, person_id) "
+        "VALUES(?,?,?,?,?) ON CONFLICT(peer_id) DO UPDATE SET removed_at='', "
+        "broker_id=excluded.broker_id, "
+        "name=CASE WHEN excluded.name!='' THEN excluded.name ELSE b2b_peer.name END, "
+        "person_id=CASE WHEN excluded.person_id!='' THEN excluded.person_id "
+        "ELSE b2b_peer.person_id END",
+        (peer_id, name, graph.now(), broker_id, person_id))
     con.commit()
     return {"ok": True, "peer": get_peer(con, peer_id)}
 
@@ -374,9 +641,9 @@ def remove_peer(con: sqlite3.Connection, peer_id: str) -> dict[str, Any]:
 
 # ---------------------------------------------------------------- send
 def send(to: str, text: str, request_id: str = "") -> dict[str, Any]:
-    """Send `text` to a connected peer, by id or name, and log it. Sent from a
-    trigger session (`request_id`, or `$MEMORY_LEDGER_REQUEST_ID`), it is also
-    an action on that request, so the audit shows it."""
+    """Seal `text` to a connected peer (by id, name or person) and leave it on
+    their broker, and log it. Sent from a trigger session (`request_id`, or
+    `$MEMORY_LEDGER_REQUEST_ID`), it is also an action on that request."""
     text = (text or "").strip()
     if not text:
         return {"ok": False, "error": "missing text"}
@@ -387,22 +654,32 @@ def send(to: str, text: str, request_id: str = "") -> dict[str, Any]:
     if not peer:
         return {"ok": False, "error": f"{to} is not a connected peer; add it with "
                                       "`b2b.py peers --add <their user id> --name <name>`"}
+    broker = get_broker(cfg, peer["broker_id"])
+    if not broker:
+        return {"ok": False, "error": f"{peer['name'] or peer['peer_id']} is reached through "
+                                      f"broker {peer['broker_id'] or '(none)'}, which is not "
+                                      "configured"}
+    sent_at = trigger.now_iso()
     try:
-        uid, tok = _account(cfg)
-        got = _call("POST", _server(cfg) + "/messages",
-                    {"user_id": uid, "token": tok, "to": peer["peer_id"], "text": text})
+        c = _crypto()
+        try:
+            env = c.seal(private_key(cfg), peer["peer_id"], {"text": text, "sent_at": sent_at})
+        except (c.BadBox, ValueError) as e:
+            raise B2BError(f"cannot seal to {peer['peer_id']}: {e}") from None
+        got = _authed(cfg, broker, "POST", "/messages", {"to": peer["peer_id"], "envelope": env})
     except B2BError as e:
         return {"ok": False, "error": str(e)}
     rid = request_id or os.environ.get("MEMORY_LEDGER_REQUEST_ID", "")
-    con.execute("INSERT OR IGNORE INTO b2b_sent(id, peer_id, text, sent_at, request_id) "
-                "VALUES(?,?,?,?,?)", (str(got.get("id") or ""), peer["peer_id"], text,
-                                      str(got.get("sent_at") or graph.now()), rid))
+    con.execute("INSERT OR IGNORE INTO b2b_sent(id, peer_id, text, sent_at, request_id, "
+                "broker_id) VALUES(?,?,?,?,?,?)",
+                (env["id"], peer["peer_id"], text, sent_at, rid, broker["id"]))
     con.commit()
     if rid and trigger.get_request(con, rid):
         trigger.log_action(con, rid, "b2b-send", f"b2b:{peer['peer_id']}",
-                           f"sent a B2B message to {peer['name'] or peer['peer_id']}")
-    return {"ok": True, "id": got.get("id"), "to": peer["peer_id"], "name": peer["name"],
-            "sent_at": got.get("sent_at")}
+                           f"sent a B2B message to {peer['name'] or peer['peer_id']} "
+                           f"through {broker['id']}")
+    return {"ok": True, "id": env["id"], "to": peer["peer_id"], "name": peer["name"],
+            "broker": broker["id"], "sent_at": sent_at, "queued_at": got.get("sent_at")}
 
 
 def list_sent(con: sqlite3.Connection, limit: int = 50) -> list[dict[str, Any]]:
@@ -413,13 +690,15 @@ def list_sent(con: sqlite3.Connection, limit: int = 50) -> list[dict[str, Any]]:
 
 # ---------------------------------------------------------------- receive
 def message_event(msg: dict[str, Any], peer: dict[str, Any] | None,
-                  cfg: dict[str, Any]) -> dict[str, Any]:
-    """One relay message as a trigger event: what `trigger._new_request` logs."""
+                  cfg: dict[str, Any], broker: dict[str, Any]) -> dict[str, Any]:
+    """One opened message as a trigger event: what `trigger._new_request` logs."""
     sender = str(msg.get("from") or "")
-    name = (peer or {}).get("name") or sender
-    meta = {"kind": "message", "where": f"B2B message from {name}",
+    name = (peer or {}).get("name") or (peer or {}).get("person_title") or sender
+    meta = {"kind": "message", "where": f"B2B message from {name} via {broker['name']}",
             "at": str(msg.get("sent_at") or ""),
             "vars": {"b2b_peer_id": sender, "b2b_peer_name": (peer or {}).get("name", ""),
+                     "b2b_person_id": (peer or {}).get("person_id", ""),
+                     "b2b_broker": broker["id"],
                      "b2b_message_id": str(msg.get("id") or ""),
                      "b2b_sent_at": str(msg.get("sent_at") or "")}}
     trigger._stamp(meta, {**cfg, "do": str(cfg.get("do") or "")})
@@ -428,44 +707,73 @@ def message_event(msg: dict[str, Any], peer: dict[str, Any] | None,
             "permalink": "", "text": str(msg.get("text") or "")[:TEXT_MAX], "meta": meta}
 
 
-def poll(cfg: dict[str, Any] | None = None,
-         dispatch: Callable[[str], None] | None = None) -> dict[str, Any]:
-    """One pass: read every message waiting on the relay (which deletes them
-    there) and log each as a request. A connected peer's is queued and handed
-    to `dispatch`; anyone else's is logged `refused` and runs nothing."""
-    cfg = cfg or load_config()
-    if cfg.get("_problem"):
-        return {"ok": False, "error": cfg["_problem"]}
-    try:
-        uid, tok = _account(cfg)
-        got = _call("GET", _server(cfg) + "/messages",
-                    headers={"X-B2B-User-Id": uid, "X-B2B-Token": tok})
-    except B2BError as e:
-        return {"ok": False, "error": str(e)}
-    con = db()
-    queued, refused = [], []
-    for msg in got.get("messages") or []:
-        if not isinstance(msg, dict) or not msg.get("id"):
+def _poll_broker(cfg: dict[str, Any], broker: dict[str, Any], con: sqlite3.Connection,
+                 dispatch: Callable[[str], None] | None, out: dict[str, list]) -> None:
+    """Read one broker (which deletes what it returns), open each envelope and
+    log it as a request."""
+    c = _crypto()
+    got = _authed(cfg, broker, "GET", "/messages")
+    key = private_key(cfg)
+    for item in got.get("messages") or []:
+        env = item.get("envelope") if isinstance(item, dict) else None
+        if not isinstance(env, dict) or not env.get("id"):
             continue
-        peer = get_peer(con, str(msg.get("from") or ""))
-        ev = message_event(msg, peer, cfg)
+        try:
+            payload = c.open_envelope(key, env)
+        except c.BadBox as e:
+            # Not sealed to this key, or not by the brain it claims: there is
+            # no sender to believe, so nothing to log it as. Counted, dropped.
+            out["unreadable"].append(str(env.get("id")))
+            trigger.log.info("b2b %s: dropped message %s: %s", broker["id"], env.get("id"), e)
+            continue
+        msg = {"id": env["id"], "from": env["from"], "text": payload.get("text", ""),
+               "sent_at": payload.get("sent_at") or item.get("at", "")}
+        peer = get_peer(con, msg["from"])
+        ev = message_event(msg, peer, cfg, broker)
         if peer:
             req = trigger._new_request(con, ev, "queued", "b2b peer")
             if req:
-                queued.append(req["id"])
-                trigger.log.info("new request %s  b2b from %s -> queued", req["id"],
-                                 ev["requester_name"])
+                out["queued"].append(req["id"])
+                trigger.log.info("new request %s  b2b from %s via %s -> queued", req["id"],
+                                 ev["requester_name"], broker["id"])
                 if dispatch:
                     dispatch(req["id"])
         else:
             req = trigger._new_request(con, ev, "refused", "b2b: not a connected peer")
             if req:
                 trigger._set_request(con, req["id"], finished_at=trigger.now_iso())
-                refused.append(req["id"])
-                trigger.log.info("new request %s  b2b from %s -> refused: not a peer",
-                                 req["id"], ev["requester_id"])
-    return {"ok": True, "received": len(queued) + len(refused), "queued": queued,
-            "refused": refused}
+                out["refused"].append(req["id"])
+                trigger.log.info("new request %s  b2b from %s via %s -> refused: not a peer",
+                                 req["id"], ev["requester_id"], broker["id"])
+
+
+def poll(cfg: dict[str, Any] | None = None,
+         dispatch: Callable[[str], None] | None = None) -> dict[str, Any]:
+    """One pass over every enabled broker. A connected peer's message is
+    queued and handed to `dispatch`; anyone else's is logged `refused` and runs
+    nothing. One broker failing does not stop the others: it is reported in
+    `errors`, and the pass is `ok` only when none failed."""
+    cfg = cfg or load_config()
+    if cfg.get("_problem"):
+        return {"ok": False, "error": cfg["_problem"]}
+    if not private_key(cfg):
+        return {"ok": False, "error": "no identity: run `b2b.py identity --generate`"}
+    todo = brokers(cfg, only_enabled=True)
+    if not todo:
+        return {"ok": False, "error": "no enabled broker"}
+    con = db()
+    out: dict[str, list] = {"queued": [], "refused": [], "unreadable": []}
+    errors: dict[str, str] = {}
+    for broker in todo:
+        try:
+            _poll_broker(cfg, broker, con, dispatch, out)
+        except B2BError as e:
+            errors[broker["id"]] = str(e)
+    res: dict[str, Any] = {"ok": not errors, "received": len(out["queued"]) + len(out["refused"]),
+                           **out, "errors": errors}
+    if errors:
+        res["error"] = "; ".join(f"{k}: {v}" for k, v in errors.items())
+    return res
 
 
 def status_payload() -> dict[str, Any]:
@@ -479,50 +787,98 @@ def status_payload() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------- cli
+def _ensure_crypto_env() -> None:
+    """Re-run this command under the server's venv when `cryptography` is not
+    importable here, so `python3 scripts/b2b.py` works from any shell."""
+    try:
+        import cryptography  # noqa: F401
+        return
+    except ImportError:
+        pass
+    if os.environ.get("MEMORY_LEDGER_B2B_REEXEC"):
+        return                       # already tried: _crypto() explains
+    import serve
+    py = serve.server_python()
+    os.environ["MEMORY_LEDGER_B2B_REEXEC"] = "1"
+    sys.stdout.flush()
+    os.execv(str(py), [str(py), str(Path(__file__).resolve()), *sys.argv[1:]])
+
+
 def main(argv: list[str] | None = None) -> int:
     """The command line. Prints JSON, like trigger.py."""
     ap = argparse.ArgumentParser(prog="b2b.py", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("status", help="the account, the peers, what was sent and received")
-    p = sub.add_parser("config", help="change the relay account and the poll interval")
-    p.add_argument("--server", default=None)
-    p.add_argument("--user-id", default=None)
-    p.add_argument("--token", default=None)
+    sub.add_parser("status", help="the identity, brokers, peers, what was sent and received")
+    p = sub.add_parser("identity", help="this brain's key pair; its user id is the public key")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--generate", action="store_true")
+    g.add_argument("--import", dest="import_key", default="",
+                   help="a private key (base64url) to use, from another machine")
+    p.add_argument("--force", action="store_true")
+    p = sub.add_parser("config", help="the poll interval, the switch, the run command")
     p.add_argument("--interval", type=int, default=None, help="poll every N seconds")
     p.add_argument("--do", default=None, help="the run command for a received message")
     g = p.add_mutually_exclusive_group()
     g.add_argument("--enable", action="store_true")
     g.add_argument("--disable", action="store_true")
-    p = sub.add_parser("register", help="get a new account from the relay and store it")
-    p.add_argument("--server", default="")
-    p.add_argument("--force", action="store_true")
+    p = sub.add_parser("brokers", help="the relays this brain uses")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--add", default="", help="a broker's URL")
+    g.add_argument("--remove", default="")
+    g.add_argument("--enable", default="")
+    g.add_argument("--disable", default="")
+    g.add_argument("--check", default="", help="log in to it now")
+    p.add_argument("--name", default="")
     p = sub.add_parser("peers", help="the brains this one talks to")
     g = p.add_mutually_exclusive_group()
-    g.add_argument("--add", default="", help="a peer's relay user id")
+    g.add_argument("--add", default="", help="a peer's user id (their public key)")
     g.add_argument("--remove", default="")
     p.add_argument("--name", default="")
+    p.add_argument("--broker", default="", help="the broker that reaches them")
+    p.add_argument("--person", default="", help="the person node they are: an id or a name")
     p = sub.add_parser("send", help="send a message to a peer")
-    p.add_argument("--to", required=True, help="a peer's user id or name")
+    p.add_argument("--to", required=True, help="a peer's user id, name, or person")
     p.add_argument("--text", required=True)
     p.add_argument("--request", default="")
     sub.add_parser("poll", help="one pass: fetch, log, and run what arrived, in this process")
     args = ap.parse_args(argv)
+    _ensure_crypto_env()
 
     if args.cmd == "status":
         res = status_payload()
+    elif args.cmd == "identity":
+        if args.generate:
+            res = generate_identity(args.force)
+        elif args.import_key:
+            if private_key(load_config()) and not args.force:
+                res = {"ok": False, "error": "an identity is set; pass --force to replace it"}
+            else:
+                res = save_config({"private_key": args.import_key})
+        else:
+            cfg = load_config()
+            res = {"ok": True, "user_id": user_id(cfg),
+                   "private_key": config_summary(cfg)["private_key"]}
     elif args.cmd == "config":
         patch: dict[str, Any] = {k: v for k, v in (
-            ("server_url", args.server), ("user_id", args.user_id), ("token", args.token),
             ("poll_seconds", args.interval), ("do", args.do)) if v is not None}
         if args.enable or args.disable:
             patch["enabled"] = bool(args.enable)
         res = save_config(patch) if patch else {"ok": True, "config": config_summary()}
-    elif args.cmd == "register":
-        res = register(args.server, args.force)
+    elif args.cmd == "brokers":
+        if args.add:
+            res = add_broker(args.add, args.name)
+        elif args.remove:
+            res = update_broker(args.remove, remove=True)
+        elif args.enable or args.disable:
+            res = update_broker(args.enable or args.disable, enabled=bool(args.enable))
+        elif args.check:
+            res = check_broker(args.check)
+        else:
+            res = {"ok": True, "brokers": config_summary()["brokers"]}
     elif args.cmd == "peers":
         con = db()
         if args.add:
-            res = add_peer(con, args.add, args.name)
+            res = add_peer(con, args.add, args.name, args.broker, args.person)
         elif args.remove:
             res = remove_peer(con, args.remove)
         else:

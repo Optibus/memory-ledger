@@ -1,221 +1,264 @@
 """B2B (Brain 2 Brain): an in-memory relay that lets one brain leave a message
 for another (services/b2b/README.md, docs/b2b.md).
 
-Three things happen here, all on `/messages`:
+A user's id **is** their public key: an X25519 public key, 32 bytes, as
+unpadded base64url (43 characters). The brain makes the key pair itself and the
+private key never leaves it. The relay keeps, in memory only, the ids that have
+proven they hold their key, and the messages waiting for each of them.
 
-* `POST /messages` with no `user_id` and no `token` registers a new user and
-  returns both, once. The relay keeps neither the token nor anything that
-  decrypts with it on its own.
-* `POST /messages` with `user_id`, `token`, `to` and `text` leaves `text` for
-  the user `to`, sealed so only `to` can read it.
-* `GET /messages` with the `X-B2B-User-Id` and `X-B2B-Token` headers returns
-  every message waiting for that user, decrypted, and deletes them from the
-  relay. A message is read once.
+* `POST /challenge {user_id}` returns a random secret sealed to that id. Only
+  the holder of the private key can open it.
+* `POST /session {user_id, challenge_id, answer}` checks the opened secret and
+  returns a **retrieval token**, valid for one hour. The first session an id
+  opens registers it on the relay.
+* `POST /messages {to, envelope}` (`Authorization: Bearer <token>`) leaves a
+  message for `to`. The envelope was sealed by the sender, to `to`'s key, before
+  it was sent: the relay never sees a message in clear and holds nothing that
+  opens one.
+* `GET /messages` (bearer) returns every envelope waiting for the caller and
+  deletes them from the relay. A message is read once.
 
 Everything lives in this process's memory. There is no database: when the
-relay stops, every user and every message waiting on it is gone, by design.
-
-How "only they can read it" holds. Each user gets an X25519 key pair at
-registration. The public key is kept as it is. The private key is kept only
-wrapped (AES-GCM) under a key derived with scrypt from the user's token, which
-the relay never stores. A message is sealed to the recipient's public key with
-an ephemeral X25519 exchange, HKDF and AES-GCM, so sending needs nothing of the
-recipient's, and opening needs the recipient's token. The sender is sealed
-inside the message too: what sits in memory is ciphertext and a timestamp.
+relay stops, every id, session and message on it is gone, by design.
 
     python3 services/b2b/serve_b2b.py [--host 127.0.0.1] [--port 8780]
 """
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
 import hmac
-import json
 import os
+import re
 import secrets
 import threading
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from fastapi import Body, FastAPI, Header
 from fastapi.responses import JSONResponse
 
-VERSION = "1.0.0"
+VERSION = "2.0.0"
 
 # Caps that keep one process's memory bounded. Over them is refused, never
 # truncated: a message cut short is a different message.
-TEXT_MAX = 16_000
+ENVELOPE_MAX = 40_000           # characters of base64 ciphertext: ~16,000 of text, sealed
 QUEUE_MAX = 500
 USERS_MAX = 10_000
-ID_MAX = 100
+CHALLENGES_PER_USER = 5
+CHALLENGE_TTL_S = 120
+SESSION_TTL_S = 3600
+SESSIONS_PER_USER = 20
 
-# scrypt's cost. Paid on every authenticated call, so it is tuned to tens of
-# milliseconds, not to a password's seconds: the token is 256 random bits, and
-# the work only has to make a stolen memory dump useless, not a weak guess hard.
-SCRYPT_N, SCRYPT_R, SCRYPT_P = 2 ** 14, 8, 1
-HKDF_INFO = b"b2b/v1/message"
-WRAP_AAD = b"b2b/v1/private-key:"
+ID_RE = re.compile(r"[A-Za-z0-9_-]{43}")
+MSG_ID_RE = re.compile(r"[0-9a-f]{32}")
+CHALLENGE_INFO = b"b2b/v2/challenge"
 
 
-def now_iso() -> str:
-    """The current UTC time, ISO 8601 to the second."""
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+def now_iso(ts: float | None = None) -> str:
+    """A UTC time, ISO 8601 to the second; now when `ts` is not given."""
+    return datetime.fromtimestamp(ts if ts is not None else time.time(),
+                                  timezone.utc).isoformat(timespec="seconds")
 
 
 # ---------------------------------------------------------------- crypto
-def derive(token: str, salt: bytes) -> tuple[bytes, bytes]:
-    """The key that unwraps a user's private key, and the verifier that proves
-    the token without it, both from one scrypt run over the token."""
-    out = Scrypt(salt=salt, length=64, n=SCRYPT_N, r=SCRYPT_R, p=SCRYPT_P).derive(
-        token.encode("utf-8"))
-    return out[:32], out[32:]
+def b64(raw: bytes) -> str:
+    """Unpadded base64url, the form every key and box travels in."""
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
 
 
-def seal(public: X25519PublicKey, plaintext: bytes, aad: bytes) -> dict[str, bytes]:
-    """Encrypt `plaintext` so only the holder of `public`'s private key opens it."""
+def unb64(text: str) -> bytes:
+    """The inverse of `b64`. Raises `ValueError` on anything that is not."""
+    try:
+        return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+    except (binascii.Error, TypeError) as e:
+        raise ValueError(str(e)) from None
+
+
+def public_key(user_id: str) -> X25519PublicKey:
+    """The public key a user id is. Raises `ValueError` when it is not one."""
+    if not isinstance(user_id, str) or not ID_RE.fullmatch(user_id):
+        raise ValueError("not a user id")
+    return X25519PublicKey.from_public_bytes(unb64(user_id))
+
+
+def seal_challenge(user_id: str, challenge_id: str, secret: bytes) -> dict[str, str]:
+    """`secret` sealed to the id's key: ephemeral X25519, HKDF-SHA256, AES-GCM,
+    bound to the challenge id. Only the private key opens it."""
+    pub = public_key(user_id)
     eph = X25519PrivateKey.generate()
     eph_pub = eph.public_key().public_bytes_raw()
     key = HKDF(algorithm=hashes.SHA256(), length=32, salt=None,
-               info=HKDF_INFO + eph_pub + public.public_bytes_raw()).derive(eph.exchange(public))
+               info=CHALLENGE_INFO + eph_pub + pub.public_bytes_raw()).derive(eph.exchange(pub))
     nonce = os.urandom(12)
-    return {"eph": eph_pub, "nonce": nonce, "ct": AESGCM(key).encrypt(nonce, plaintext, aad)}
+    ct = AESGCM(key).encrypt(nonce, secret, challenge_id.encode())
+    return {"eph": b64(eph_pub), "nonce": b64(nonce), "ct": b64(ct)}
 
 
-def open_sealed(private: X25519PrivateKey, box: dict[str, bytes], aad: bytes) -> bytes:
-    """The inverse of `seal`. Raises `InvalidTag` when the box is not for this key."""
-    eph = X25519PublicKey.from_public_bytes(box["eph"])
-    own = private.public_key().public_bytes_raw()
-    key = HKDF(algorithm=hashes.SHA256(), length=32, salt=None,
-               info=HKDF_INFO + box["eph"] + own).derive(private.exchange(eph))
-    return AESGCM(key).decrypt(box["nonce"], box["ct"], aad)
+def _digest(value: str) -> bytes:
+    """What the relay keeps of a secret it hands out: never the secret."""
+    return hashlib.sha256(value.encode()).digest()
 
 
 # ---------------------------------------------------------------- store
 @dataclass
 class User:
-    """One registered user: what proves their token, their public key, their
-    private key wrapped under that token, and the messages waiting for them."""
+    """One id that proved it holds its key, and the messages waiting for it."""
 
     user_id: str
-    salt: bytes
-    verifier: bytes
-    public: bytes
-    wrapped: bytes
-    nonce: bytes
-    created_at: str
+    registered_at: str
     inbox: list[dict[str, Any]] = field(default_factory=list)
 
 
 class Unauthorized(Exception):
-    """The user id and token do not match a registered user."""
+    """No valid retrieval token, or a challenge answered wrong."""
 
 
 class Store:
-    """Every user and every waiting message, in memory, behind one lock."""
+    """Every id, challenge, session and waiting message, in memory, behind one lock."""
 
     def __init__(self) -> None:
         """An empty relay."""
         self._users: dict[str, User] = {}
+        # challenge_id -> (user_id, digest of the secret, expires at)
+        self._challenges: dict[str, tuple[str, bytes, float]] = {}
+        # digest of the token -> (user_id, expires at)
+        self._sessions: dict[bytes, tuple[str, float]] = {}
         self._lock = threading.Lock()
 
-    def register(self) -> tuple[str, str]:
-        """Create a user. Returns `(user_id, token)`; the token is not kept."""
-        token = secrets.token_urlsafe(32)
-        salt = os.urandom(16)
-        kek, verifier = derive(token, salt)
-        private = X25519PrivateKey.generate()
-        user_id = uuid.uuid4().hex
-        nonce = os.urandom(12)
-        wrapped = AESGCM(kek).encrypt(nonce, private.private_bytes_raw(),
-                                      WRAP_AAD + user_id.encode())
-        user = User(user_id=user_id, salt=salt, verifier=verifier,
-                    public=private.public_key().public_bytes_raw(),
-                    wrapped=wrapped, nonce=nonce, created_at=now_iso())
-        with self._lock:
-            if len(self._users) >= USERS_MAX:
-                raise OverflowError("the relay is full")
-            self._users[user_id] = user
-        return user_id, token
+    def _sweep(self, now: float) -> None:
+        """Forget expired challenges and sessions. Called under the lock."""
+        self._challenges = {k: v for k, v in self._challenges.items() if v[2] > now}
+        self._sessions = {k: v for k, v in self._sessions.items() if v[1] > now}
 
-    def _auth(self, user_id: str, token: str) -> tuple[User, bytes]:
-        """The user and their key-encryption key, or `Unauthorized`. The same
-        work is done for an unknown id, so timing does not tell which ids exist."""
+    def challenge(self, user_id: str) -> dict[str, Any]:
+        """A fresh secret sealed to `user_id`. Raises `ValueError` for an id
+        that is not a public key, `OverflowError` when it has too many open."""
+        public_key(user_id)
+        secret = secrets.token_urlsafe(32)
+        cid = uuid.uuid4().hex
+        now = time.time()
         with self._lock:
-            user = self._users.get(user_id)
-        salt = user.salt if user else b"\0" * 16
-        kek, verifier = derive(token, salt)
-        if user is None or not hmac.compare_digest(verifier, user.verifier):
+            self._sweep(now)
+            if sum(1 for v in self._challenges.values() if v[0] == user_id) \
+                    >= CHALLENGES_PER_USER:
+                raise OverflowError("too many open challenges for this id; answer one "
+                                    f"or wait {CHALLENGE_TTL_S}s")
+            self._challenges[cid] = (user_id, _digest(secret), now + CHALLENGE_TTL_S)
+        return {"challenge_id": cid, "challenge": seal_challenge(user_id, cid, secret.encode()),
+                "expires_at": now_iso(now + CHALLENGE_TTL_S)}
+
+    def session(self, user_id: str, challenge_id: str, answer: str) -> dict[str, Any]:
+        """Check an answered challenge and open a session. The challenge is
+        spent either way: a wrong answer cannot be retried against it."""
+        now = time.time()
+        with self._lock:
+            self._sweep(now)
+            got = self._challenges.pop(challenge_id, None)
+        if got is None or got[0] != user_id \
+                or not hmac.compare_digest(got[1], _digest(answer)):
             raise Unauthorized()
-        return user, kek
-
-    def check(self, user_id: str, token: str) -> None:
-        """Raise `Unauthorized` unless the token is this user's."""
-        self._auth(user_id, token)
-
-    def exists(self, user_id: str) -> bool:
-        """Whether a user id is registered."""
+        token = secrets.token_urlsafe(32)
+        expires = now + SESSION_TTL_S
         with self._lock:
-            return user_id in self._users
+            if user_id not in self._users:
+                if len(self._users) >= USERS_MAX:
+                    raise OverflowError("the relay is full")
+                self._users[user_id] = User(user_id=user_id, registered_at=now_iso(now))
+            mine = sorted((v[1], k) for k, v in self._sessions.items() if v[0] == user_id)
+            for _, k in mine[:max(0, len(mine) - SESSIONS_PER_USER + 1)]:
+                del self._sessions[k]
+            self._sessions[_digest(token)] = (user_id, expires)
+        return {"token": token, "expires_at": now_iso(expires), "expires_in": SESSION_TTL_S}
 
-    def send(self, sender: str, token: str, to: str, text: str) -> dict[str, str]:
-        """Leave `text` for `to`, from the authenticated `sender`. Raises
-        `Unauthorized`, `LookupError` (no such recipient) or `OverflowError`
-        (their inbox is full)."""
-        self._auth(sender, token)
+    def whoami(self, token: str) -> str:
+        """The id a retrieval token belongs to, or `Unauthorized`."""
+        now = time.time()
+        with self._lock:
+            got = self._sessions.get(_digest(token or ""))
+        if got is None or got[1] <= now:
+            raise Unauthorized()
+        return got[0]
+
+    def send(self, token: str, to: str, envelope: dict[str, Any]) -> dict[str, str]:
+        """Leave a sealed envelope for `to`. Raises `Unauthorized`, `ValueError`
+        (a malformed envelope, or one not from the caller), `LookupError` (no
+        such recipient) or `OverflowError` (their inbox is full)."""
+        sender = self.whoami(token)
+        env = _clean_envelope(envelope)
+        if env["from"] != sender:
+            raise ValueError("envelope.from must be your own id")
+        sent_at = now_iso()
         with self._lock:
             target = self._users.get(to)
-        if target is None:
-            raise LookupError(to)
-        message_id = uuid.uuid4().hex
-        sent_at = now_iso()
-        plain = json.dumps({"id": message_id, "from": sender, "text": text,
-                            "sent_at": sent_at}).encode("utf-8")
-        box = seal(X25519PublicKey.from_public_bytes(target.public), plain,
-                   message_id.encode())
-        with self._lock:
+            if target is None:
+                raise LookupError(to)
             if len(target.inbox) >= QUEUE_MAX:
                 raise OverflowError(to)
-            target.inbox.append({"id": message_id, "at": sent_at, "box": box})
-        return {"id": message_id, "to": to, "sent_at": sent_at}
+            if any(m["id"] == env["id"] for m in target.inbox):
+                raise ValueError("a message with this id is already waiting")
+            target.inbox.append({"id": env["id"], "from": sender, "at": sent_at,
+                                 "envelope": env})
+        return {"id": env["id"], "to": to, "sent_at": sent_at}
 
-    def fetch(self, user_id: str, token: str) -> list[dict[str, str]]:
-        """Every message waiting for the user, opened, oldest first, and
-        deleted from the relay. Only the ones actually returned are deleted, so
-        a message that arrives during the call waits for the next one."""
-        user, kek = self._auth(user_id, token)
-        private = X25519PrivateKey.from_private_bytes(
-            AESGCM(kek).decrypt(user.nonce, user.wrapped, WRAP_AAD + user_id.encode()))
+    def fetch(self, token: str) -> list[dict[str, Any]]:
+        """Every envelope waiting for the caller, oldest first, and deleted
+        from the relay. Only the ones returned are deleted, so a message that
+        arrives during the call waits for the next one."""
+        user_id = self.whoami(token)
         with self._lock:
-            waiting = list(user.inbox)
-        out, done = [], set()
-        for item in waiting:
-            try:
-                msg = json.loads(open_sealed(private, item["box"], item["id"].encode()))
-            except (InvalidTag, ValueError):
-                # Cannot happen for a box this relay sealed; dropped rather than
-                # left to fail on every fetch forever.
-                done.add(item["id"])
-                continue
-            out.append({"id": msg["id"], "from": msg["from"], "text": msg["text"],
-                        "sent_at": msg["sent_at"]})
-            done.add(item["id"])
-        with self._lock:
-            user.inbox = [m for m in user.inbox if m["id"] not in done]
+            user = self._users.get(user_id)
+            if user is None:
+                return []
+            out, user.inbox = list(user.inbox), []
         return out
+
+
+def _clean_envelope(env: Any) -> dict[str, str]:
+    """The envelope's fields, checked for shape only: the relay cannot open
+    it, and does not try."""
+    if not isinstance(env, dict):
+        raise ValueError("envelope must be an object")
+    out: dict[str, str] = {}
+    for k in ("v", "id", "from", "eph", "nonce", "ct"):
+        v = env.get(k)
+        if k == "v":
+            if v != 2:
+                raise ValueError("envelope.v must be 2")
+            continue
+        if not isinstance(v, str) or not v:
+            raise ValueError(f"envelope.{k} is missing")
+        out[k] = v
+    if not MSG_ID_RE.fullmatch(out["id"]):
+        raise ValueError("envelope.id must be 32 hex characters")
+    if not ID_RE.fullmatch(out["from"]) or not ID_RE.fullmatch(out["eph"]):
+        raise ValueError("envelope.from and envelope.eph must be public keys")
+    if len(out["ct"]) > ENVELOPE_MAX:
+        raise OverflowError("envelope is too large")
+    try:
+        unb64(out["nonce"])
+        unb64(out["ct"])
+    except ValueError:
+        raise ValueError("envelope.nonce and envelope.ct must be base64url") from None
+    return {"v": 2, **out}  # type: ignore[dict-item]
 
 
 # ---------------------------------------------------------------- http
 STORE = Store()
 app = FastAPI(title="B2B — Brain 2 Brain", version=VERSION,
-              description="An in-memory relay for messages between brains. Nothing is "
-                          "written to disk: a restart loses every user and message.")
+              description="An in-memory relay for messages between brains. A user id is "
+                          "an X25519 public key; a challenge proves the private key and "
+                          "opens a one-hour session. Messages arrive sealed by the sender "
+                          "and are deleted once read. Nothing is written to disk.")
 
 
 def _err(status: int, error: str) -> JSONResponse:
@@ -223,9 +266,15 @@ def _err(status: int, error: str) -> JSONResponse:
     return JSONResponse({"ok": False, "error": error}, status_code=status)
 
 
-def _text(value: Any, cap: int = ID_MAX) -> str:
+def _text(value: Any, cap: int = 200) -> str:
     """A trimmed string field, or "" when it is missing or not text."""
     return value.strip()[:cap] if isinstance(value, str) else ""
+
+
+def _bearer(authorization: str) -> str:
+    """The token in an `Authorization: Bearer` header, or ""."""
+    scheme, _, tok = (authorization or "").partition(" ")
+    return tok.strip() if scheme.lower() == "bearer" else ""
 
 
 @app.get("/health", summary="Is the relay up")
@@ -234,52 +283,76 @@ def health() -> dict[str, Any]:
     return {"ok": True, "service": "b2b", "version": VERSION}
 
 
-@app.post("/messages", summary="Register, or send a message", response_model=None)
-def post_messages(data: Any = Body(default=None)) -> JSONResponse | dict[str, Any]:
-    """With no `user_id` and no `token`: register, and return both (the token
-    is shown this once). With both, plus `to` and `text`: send."""
+@app.post("/challenge", summary="Get a challenge sealed to your id", response_model=None)
+def post_challenge(data: Any = Body(default=None)) -> JSONResponse | dict[str, Any]:
+    """`{user_id}`: a secret sealed to that public key, to open with the
+    private key and send back to `/session` within two minutes."""
     data = data if isinstance(data, dict) else {}
-    user_id, token = _text(data.get("user_id")), _text(data.get("token"))
-    if not user_id and not token:
-        try:
-            uid, tok = STORE.register()
-        except OverflowError as e:
-            return _err(503, str(e))
-        return JSONResponse({"ok": True, "registered": True, "user_id": uid, "token": tok,
-                             "note": "Keep the token: it is shown once and the relay cannot "
-                                     "recover it. Messages live in memory only."},
-                            status_code=201)
-    if not (user_id and token):
-        return _err(400, "send both user_id and token, or neither to register")
-    to = _text(data.get("to"))
-    text = data.get("text")
-    if not to:
-        return _err(400, "missing to: the user id to send the message to")
-    if not isinstance(text, str) or not text.strip():
-        return _err(400, "missing text")
-    if len(text) > TEXT_MAX:
-        return _err(413, f"text is over {TEXT_MAX} characters")
+    user_id = _text(data.get("user_id"))
+    if not user_id:
+        return _err(400, "missing user_id: your X25519 public key, base64url")
     try:
-        res = STORE.send(user_id, token, to, text)
+        return {"ok": True, **STORE.challenge(user_id)}
+    except ValueError:
+        return _err(400, "user_id is not an X25519 public key (43 base64url characters)")
+    except OverflowError as e:
+        return _err(429, str(e))
+
+
+@app.post("/session", summary="Answer a challenge, get a retrieval token",
+          response_model=None)
+def post_session(data: Any = Body(default=None)) -> JSONResponse | dict[str, Any]:
+    """`{user_id, challenge_id, answer}`: the opened secret. Right, and the
+    relay returns a retrieval token valid for an hour."""
+    data = data if isinstance(data, dict) else {}
+    user_id, cid = _text(data.get("user_id")), _text(data.get("challenge_id"))
+    answer = _text(data.get("answer"))
+    if not (user_id and cid and answer):
+        return _err(400, "send user_id, challenge_id and answer")
+    try:
+        return JSONResponse({"ok": True, "user_id": user_id,
+                             **STORE.session(user_id, cid, answer)}, status_code=201)
     except Unauthorized:
-        return _err(401, "user_id and token do not match")
+        return _err(401, "wrong, expired or already used challenge")
+    except OverflowError as e:
+        return _err(503, str(e))
+
+
+@app.post("/messages", summary="Send a sealed message", response_model=None)
+def post_messages(data: Any = Body(default=None),
+                  authorization: str = Header(default="")) -> JSONResponse | dict[str, Any]:
+    """`{to, envelope}` with a retrieval token. The envelope is sealed by the
+    sender to `to`'s key; the relay only checks its shape and who it is from."""
+    tok = _bearer(authorization)
+    if not tok:
+        return _err(401, "send Authorization: Bearer <retrieval token>")
+    data = data if isinstance(data, dict) else {}
+    to = _text(data.get("to"))
+    if not ID_RE.fullmatch(to):
+        return _err(400, "to must be a user id (an X25519 public key)")
+    try:
+        res = STORE.send(tok, to, data.get("envelope"))
+    except Unauthorized:
+        return _err(401, "no valid retrieval token: answer a new challenge")
     except LookupError:
-        return _err(404, f"no user {to} on this relay")
-    except OverflowError:
-        return _err(429, f"{to} has {QUEUE_MAX} unread messages; try later")
+        return _err(404, f"{to} has never opened a session on this relay")
+    except OverflowError as e:
+        return _err(413 if "large" in str(e) else 429,
+                    str(e) if "large" in str(e) else f"{to} has {QUEUE_MAX} unread messages")
+    except ValueError as e:
+        return _err(400, str(e))
     return JSONResponse({"ok": True, **res}, status_code=202)
 
 
 @app.get("/messages", summary="Read and delete my messages", response_model=None)
-def get_messages(x_b2b_user_id: str = Header(default=""),
-                 x_b2b_token: str = Header(default="")) -> JSONResponse | dict[str, Any]:
-    """Every message waiting for the caller, oldest first. Each is deleted from
-    the relay as it is returned: the caller is now the only copy."""
-    user_id, token = _text(x_b2b_user_id), _text(x_b2b_token)
-    if not (user_id and token):
-        return _err(401, "send the X-B2B-User-Id and X-B2B-Token headers")
+def get_messages(authorization: str = Header(default="")) -> JSONResponse | dict[str, Any]:
+    """Every envelope waiting for the caller, oldest first. Each is deleted
+    from the relay as it is returned: the caller is now the only copy."""
+    tok = _bearer(authorization)
+    if not tok:
+        return _err(401, "send Authorization: Bearer <retrieval token>")
     try:
-        messages = STORE.fetch(user_id, token)
+        messages = STORE.fetch(tok)
     except Unauthorized:
-        return _err(401, "user_id and token do not match")
+        return _err(401, "no valid retrieval token: answer a new challenge")
     return {"ok": True, "messages": messages}

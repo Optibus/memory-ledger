@@ -742,3 +742,65 @@ export const ruleProposalsFixture = {
     },
   ],
 };
+
+export const b2bFixture: import("@/api/types").B2BStatus = {
+  ok: true,
+  watching: true,
+  config: {
+    path: "/home/brain/b2b.json",
+    exists: true,
+    problem: "",
+    enabled: true,
+    active: true,
+    user_id: "MCowBQYDK2VwAyEAmyOwnPublicKeyAaaaaaaaaaaaaaaaaaaaa",
+    private_key: { set: true, source: "file", env_var: "MEMORY_LEDGER_B2B_PRIVATE_KEY" },
+    brokers: [
+      {
+        id: "b1",
+        name: "Optibus broker",
+        url: "https://broker.example.com",
+        enabled: true,
+        session: { open: true, expires_at: "2026-09-30T18:00:00Z" },
+      },
+      { id: "b2", name: "Lab broker", url: "https://lab.example.com", enabled: false, session: { open: false } },
+    ],
+    poll_seconds: 60,
+    do: "{b2b_peer} wrote: {b2b_content}",
+    action: "claude",
+    http: { url: "", method: "POST", headers: {}, body: "" },
+    script: { name: "", args: [] },
+    variables: { b2b_peer: "who sent it", b2b_content: "what they wrote" },
+  },
+  peers: [
+    {
+      peer_id: "A".repeat(43),
+      name: "Dana",
+      added_at: "2026-09-01T09:00:00Z",
+      removed_at: null,
+      broker_id: "b1",
+      person_id: "person_alex",
+      person_title: "Alex",
+    },
+    {
+      peer_id: "B".repeat(43),
+      name: "Old friend",
+      added_at: "2026-08-01T09:00:00Z",
+      removed_at: "2026-09-10T09:00:00Z",
+      broker_id: "b1",
+      person_id: "",
+      person_title: "",
+    },
+  ],
+  sent: [
+    {
+      id: "m1",
+      peer_id: "A".repeat(43),
+      text: "Can you review my PR?",
+      sent_at: "2026-09-29T10:00:00Z",
+      request_id: "r1",
+      broker_id: "b1",
+    },
+  ],
+  received: { done: 2 },
+  runtime: { state: "polling", last_ok: "2026-09-30T09:00:00Z", every_s: 60 },
+};

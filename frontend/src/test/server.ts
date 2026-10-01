@@ -2,6 +2,7 @@ import { setupServer } from "msw/node";
 import { http, HttpResponse } from "msw";
 import {
   agendaFixture,
+  b2bFixture,
   backupsFixture,
   captureFixture,
   consolidationPreviewFixture,
@@ -84,6 +85,7 @@ export const handlers = [
   http.get("/api/rule-proposals", () => HttpResponse.json(ruleProposalsFixture)),
   http.get("/api/status", () => HttpResponse.json(statusFixture)),
   http.get("/api/trigger", () => HttpResponse.json(triggerFixture)),
+  http.get("/api/b2b", () => HttpResponse.json(b2bFixture)),
   http.get("/api/tasks", () => HttpResponse.json(tasksFixture)),
   http.get("/api/task", () => HttpResponse.json(taskDetailFixture)),
   http.get("/api/usage-report", ({ request }) => {
@@ -148,6 +150,16 @@ export const handlers = [
   write("/api/settings"),
   write("/api/neo4j-config"),
   write("/api/neo4j-test"),
+  write("/api/b2b-config", () => ok({ config: b2bFixture.config, runtime: b2bFixture.runtime })),
+  write("/api/b2b-broker", () => ok({ config: b2bFixture.config })),
+  write("/api/b2b-broker-check", (body: { id?: string }) =>
+    ok({ broker: body.id, user_id: b2bFixture.config.user_id, session: { open: true, expires_at: "2026-09-30T18:00:00Z" } }),
+  ),
+  write("/api/b2b-identity", () => ok({ user_id: b2bFixture.config.user_id, note: "Key pair made." })),
+  write("/api/b2b-peer", () => ok({ peers: b2bFixture.peers })),
+  write("/api/b2b-send", () =>
+    ok({ id: "m2", to: "A".repeat(43), name: "Dana", broker: "b1", sent_at: "2026-09-30T10:00:00Z" }),
+  ),
   write("/api/trigger-config", () => ok({ config: triggerFixture.config, runtime: triggerFixture.runtime })),
   write("/api/trigger-channel", () => ok({ channels: triggerFixture.channels })),
   write("/api/trigger-check", (body: { only?: string }) =>

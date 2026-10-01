@@ -19,6 +19,7 @@ import { UpkeepCard } from "./UpkeepCard";
 import { DoctorCard } from "./DoctorCard";
 import { BrowserCard } from "./BrowserCard";
 import { TriggerCard } from "./TriggerCard";
+import { B2BCard } from "./B2BCard";
 import { RealmsCard } from "./RealmsCard";
 import { LearnedRulesCard } from "./LearnedRulesCard";
 import type { RealmCount, Settings, Status, StoredSettings, Timezones } from "@/api/types";
@@ -106,6 +107,8 @@ export function SettingsSection() {
       <DoctorCard />
 
       {settings.data ? <TriggerCard writable={settings.data.writable} /> : null}
+
+      {settings.data ? <B2BCard writable={settings.data.writable} /> : null}
 
       {status.data ? <StoreCard status={status.data} onChanged={() => status.reload()} /> : null}
       {status.error ? <StatusMessage tone="error">{status.error}</StatusMessage> : null}
