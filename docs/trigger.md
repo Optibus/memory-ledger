@@ -10,6 +10,9 @@ Each trigger either starts a Claude session, calls an API, or runs one of your
 scripts. Everything runs on your own machine. Nothing is exposed to the
 internet, and no bot ever speaks.
 
+Another brain can reach this one too: a [B2B](b2b.md) message from a peer brain
+is polled from the relay and logged and run as a request here, `source: b2b`.
+
 This page is the design and the reference. Setup is in
 [Setting it up](#setting-it-up); the moving parts are in
 [How it works](#how-it-works).
@@ -549,7 +552,7 @@ Two tables in `graph.db`, and one node per request:
 
 | Where | What |
 |---|---|
-| `trigger_request` | one row per mention or GitHub event noticed: `id` (UUID), `source`, `event_id`, `scope`, requester id and name, permalink, text, `received_at`, `status` (`queued` → `running` → `done` / `declined` / `failed` / `timeout` / `interrupted`, or `refused`), exit code, result, stderr, cost, and what ran: `session_id`, `command` (JSON argv; for an `http` action only the method and URL, never the headers) and `cwd` |
+| `trigger_request` | one row per mention or GitHub event noticed: `id` (UUID), `source`, `event_id`, `scope`, requester id and name, permalink, text, `received_at`, `status` (`queued` → `running` → `done` / `declined` / `failed` / `timeout` / `interrupted`, or `refused`, or `blocked` for a B2B message from a brain off the allowed list), exit code, result, stderr, cost, and what ran: `session_id`, `command` (JSON argv; for an `http` action only the method and URL, never the headers) and `cwd` |
 | `trigger_action` | append-only: every action taken for a request — `kind` (`reply`, `reply-dm`, `declined`, `refusal-notice`, `refusal-notice-dm`, `jira-transition`, …), `target`, `detail`, `at` |
 | `trigger_channel` | the Slack channels open to everyone, with who opened and closed each and when. Closed ones are kept |
 | a `request` node | the same request in the graph, so `recall "who asked me to …"` finds it, and it mirrors to neo4j like any other node |
@@ -574,6 +577,26 @@ subagents' transcripts, at the list prices in `MODEL_PRICES` in
 `scripts/trigger.py`, and flagged `cost_estimated`. The Tasks card shows it as
 `~$1.23`. A failed or timed-out task from before the estimate existed gets one
 the first time the Tasks section lists it.
+
+### Reprocessing a task
+
+A task that went wrong (`failed`, `timeout`, `interrupted`), or a B2B message
+that the allowed list stopped (`blocked`), has a **Reprocess** button on its
+Tasks card. A blocked one asks first, because running it means you vouch for a
+sender who is not on the list. Reprocess puts the request back to `queued` and
+runs it right away. It runs on the trigger pool, or on its own thread when the
+watchers are off, with the action the request was stamped with when it came
+in. The last run's session, result, exit code, stderr and cost are cleared.
+The actions it logged stay, and a `reprocess` action records who asked and
+what the status was before. `done`, `declined`, `refused` and live requests
+cannot be reprocessed.
+
+```bash
+python3 scripts/trigger.py reprocess --request <id>         # queue it again
+python3 scripts/trigger.py reprocess --request <id> --run   # and run it here, now
+```
+
+or `POST /api/trigger-reprocess {request_id}`.
 
 ### The server log
 

@@ -1,0 +1,8 @@
+# The B2B relay's dependencies, and only the relay's. Nothing in scripts/ or
+# hooks/ imports them: the brain talks to the relay over HTTP with the stdlib.
+# `services/b2b/serve_b2b.py` installs this file into its own venv on first run,
+# keyed by a hash of this file, like scripts/serve.py does for the brain's API.
+fastapi==0.141.1
+uvicorn==0.53.0
+# X25519 + HKDF + AES-GCM for the sealed messages and the wrapped private keys.
+cryptography==50.0.2

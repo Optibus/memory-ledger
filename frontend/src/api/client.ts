@@ -155,6 +155,8 @@ export const api = {
     get<import("./types").UsageReportPayload>("/api/usage-report", range, signal),
   trigger: (signal?: AbortSignal) =>
     get<import("./types").TriggerStatus>("/api/trigger", { limit: 5 }, signal),
+  b2b: (signal?: AbortSignal) =>
+    get<import("./types").B2BStatus>("/api/b2b", undefined, signal),
   capture: (signal?: AbortSignal) =>
     get<import("./types").CaptureState>("/api/capture", undefined, signal),
   doctor: (signal?: AbortSignal) =>
@@ -209,6 +211,43 @@ export const api = {
     }),
   checkTrigger: (only: import("./types").TriggerService) =>
     post<import("./types").TriggerCheck>("/api/trigger-check", { only }),
+  /** Make this brain's key pair. Refused when one exists, unless `force`. */
+  /** Put a blocked or failed task back in the queue and run it now. */
+  reprocessTask: (request_id: string) =>
+    post<{ ok: boolean; request_id: string; status: string; was: string }>("/api/trigger-reprocess", {
+      request_id,
+    }),
+  b2bIdentity: (force = false) =>
+    post<{ ok: boolean; user_id: string; note: string }>("/api/b2b-identity", force ? { force } : {}),
+  /** A patch. The private key is write-only: send one to import it, list it
+   *  in `clear` to remove it, leave it out to keep what is stored. */
+  saveB2B: (body: Record<string, unknown>) =>
+    post<{ ok: boolean; config: import("./types").B2BConfig; runtime: import("./types").B2BRuntime }>(
+      "/api/b2b-config",
+      body,
+    ),
+  /** Add (`url`), change (`id`) or remove (`id` and `remove`) a broker. */
+  saveB2BBroker: (body: Record<string, unknown>) =>
+    post<{ ok: boolean; config: import("./types").B2BConfig }>("/api/b2b-broker", body),
+  checkB2BBroker: (id: string) =>
+    post<import("./types").B2BBrokerCheck>("/api/b2b-broker-check", { id }),
+  /** Connect (`enabled: true`) or disconnect a peer. The row is kept either way. */
+  setB2BPeer: (body: {
+    peer_id: string;
+    enabled: boolean;
+    name?: string;
+    broker_id?: string;
+    person_id?: string;
+  }) =>
+    post<{ ok: boolean; peer?: import("./types").B2BPeer; peers: import("./types").B2BPeer[] }>(
+      "/api/b2b-peer",
+      body,
+    ),
+  /** Let a user id send to this brain (`enabled: true`), or block it again. */
+  setB2BAllowed: (body: { user_id: string; enabled: boolean; name?: string }) =>
+    post<{ ok: boolean; allowed: import("./types").B2BAllowed[] }>("/api/b2b-allowed", body),
+  sendB2B: (to: string, text: string) =>
+    post<import("./types").B2BSendResult>("/api/b2b-send", { to, text }),
   flush: () => post("/api/flush", {}),
   /**
    * Consolidate. Refused without `confirm`, by the server — the preview is not

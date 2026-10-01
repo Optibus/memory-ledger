@@ -30,7 +30,7 @@ const FACETS: { facet: Facet; label: string }[] = [
  * silently filtered out by a choice made before they existed.
  */
 export function TasksSection() {
-  const { data, error, live } = usePolling<TasksPayload>((signal) => api.tasks(signal), {
+  const { data, error, live, refresh } = usePolling<TasksPayload>((signal) => api.tasks(signal), {
     intervalMs: TASKS_POLL_MS,
   });
   const [q, setQ] = useState("");
@@ -143,6 +143,7 @@ export function TasksSection() {
             now={now}
             open={expanded === t.id}
             onToggle={() => setExpanded(expanded === t.id ? null : t.id)}
+            onChanged={refresh}
           />
         ))}
       </div>

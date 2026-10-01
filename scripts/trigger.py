@@ -64,8 +64,12 @@ SOURCES = ("slack", "jira", "github")
 # A request moves queued -> running -> one of the finished states, or is
 # refused at the door. `interrupted` is a session a server restart orphaned.
 # `declined` is a request the session would not do because it broke a rule;
-# `refused` never reached a session, because the conversation was not open.
-FINISHED = ("done", "declined", "failed", "timeout", "interrupted", "refused")
+# `refused` never reached a session, because the conversation was not open;
+# `blocked` is a B2B message from a brain that is not on the allowed list.
+FINISHED = ("done", "declined", "failed", "timeout", "interrupted", "refused", "blocked")
+# What `reprocess` may put back in the queue: a run that went wrong, or a
+# message the allowed list stopped.
+REPROCESSABLE = ("blocked", "failed", "timeout", "interrupted")
 STATUSES = ("queued", "running") + FINISHED
 
 # Actions a node keeps a copy of. The table keeps every one; the node is what
@@ -245,7 +249,8 @@ for _src, _cat in EVENTS.items():
 # are there on every source; a source-only one is empty elsewhere. A name not
 # here is refused on save, so a typo is caught before a trigger runs.
 VARIABLES = {
-    "trigger_source": (SOURCES, "Where it came from: slack, jira or github.", "github"),
+    "trigger_source": (SOURCES, "Where it came from: slack, jira or github (b2b for a "
+                                "message from another brain, docs/b2b.md).", "github"),
     "trigger_kind": (SOURCES, "What happened: the event (on Slack mention, command, "
                               "joined_channel, left_channel; on Jira mention, transitioned, "
                               "assigned, unassigned, comment; on GitHub mention, "
@@ -1443,12 +1448,21 @@ def build_prompt(req: dict, cfg: dict) -> str:
                           ", as a new message in the conversation, not in a thread")
                        if in_dm else "reply in the Slack thread of that message"),
              "jira": "add a comment on that Jira issue",
-             "github": "add a comment on that GitHub pull request or issue"}[req["source"]]
-    tools = {"github": "GitHub tools (`gh`, or a GitHub MCP)"}.get(req["source"],
-                                                                   f"{req['source']} tools")
+             "github": "add a comment on that GitHub pull request or issue",
+             # docs/b2b.md: a message from another brain. There is no thread to
+             # post in; an answer is another B2B message, sent only when asked.
+             "b2b": ("none by default: this is a message from another brain, not a "
+                     "conversation to post in. Answer it only if `instructions` say to, "
+                     "and then only as a B2B message back: python3 "
+                     f"\"{Path(__file__).resolve().parent / 'b2b.py'}\" send --to "
+                     f"{req.get('requester_id') or '<peer id>'} --text \"<answer, then the "
+                     "signature>\"")}[req["source"]]
+    tools = {"github": "GitHub tools (`gh`, or a GitHub MCP)",
+             "b2b": "brain (there is no permalink: the message is the whole "
+                    "conversation)"}.get(req["source"], f"{req['source']} tools")
     event = ""
     kind = meta.get("kind", "")
-    name = {"slack": "Slack", "jira": "Jira", "github": "GitHub"}[req["source"]]
+    name = {"slack": "Slack", "jira": "Jira", "github": "GitHub", "b2b": "B2B"}[req["source"]]
     if (req.get("reason") or "").startswith("subscribed") and kind != "mention":
         reply = ("none by default: this is a change the owner subscribed to, not a "
                  f"message to answer. Do what `instructions` says, and post on {name} "
@@ -1937,8 +1951,8 @@ def decline(con, request_id: str, reason: str, rule: str = "", cfg: dict | None 
     req = get_request(con, request_id)
     if not req:
         return {"ok": False, "error": f"no request {request_id}"}
-    if req["status"] in ("refused",):
-        return {"ok": False, "error": f"request {request_id} was refused at the door"}
+    if req["status"] in ("refused", "blocked"):
+        return {"ok": False, "error": f"request {request_id} was {req['status']} at the door"}
     reason = (reason or "").strip()[:300]
     if not reason:
         return {"ok": False, "error": "missing reason"}
@@ -1950,6 +1964,29 @@ def decline(con, request_id: str, reason: str, rule: str = "", cfg: dict | None 
             "notice": refusal_text(cfg, "policy", reason), "signature": signature(cfg),
             "how": "Post `notice` in the language of the message that mentioned you, then "
                    "`signature` exactly as it is, untranslated, as the last line."}
+
+
+def reprocess(con, request_id: str, dispatch=None, by: str = "") -> dict:
+    """Put a blocked or failed request back in the queue, and hand it to
+    `dispatch`. What the last run left (its session, result, exit code) is
+    cleared; the actions it logged stay, and a `reprocess` action says who
+    asked and what the request was before."""
+    req = get_request(con, request_id)
+    if not req:
+        return {"ok": False, "error": f"no request {request_id}"}
+    if req["status"] not in REPROCESSABLE:
+        return {"ok": False, "error": f"request {request_id} is {req['status']}; only "
+                                      f"{', '.join(REPROCESSABLE)} ones can be reprocessed"}
+    was = req["status"]
+    _set_request(con, request_id, status="queued", reason=f"reprocess: was {was}",
+                 started_at="", finished_at="", exit_code=None, result="", stderr="",
+                 session_id="", cost_usd=None, cost_estimated=0)
+    log_action(con, request_id, "reprocess", by or "owner", f"put back in the queue (was {was})")
+    log.info("request %s reprocessed (was %s)%s", request_id, was, f" by {by}" if by else "")
+    if dispatch:
+        dispatch(request_id)
+    return {"ok": True, "request_id": request_id, "status": "queued", "was": was,
+            "dispatched": dispatch is not None}
 
 
 def recover(cfg: dict, dispatch) -> dict:
@@ -3478,6 +3515,11 @@ def main(argv=None) -> int:
     p.add_argument("--request", default=os.environ.get("MEMORY_LEDGER_REQUEST_ID", ""))
     p.add_argument("--reason", required=True)
     p.add_argument("--rule", default="")
+    p = sub.add_parser("reprocess", help="put a blocked or failed request back in the queue")
+    p.add_argument("--request", required=True)
+    p.add_argument("--run", action="store_true",
+                   help="run it now, in this process (else the server runs it: use the "
+                        "Tasks panel, or POST /api/trigger-reprocess, while it is up)")
     p = sub.add_parser("variables", help="what a run command can use; with --request, the "
                                          "values and the rendered run command for it")
     p.add_argument("--request", default="")
@@ -3534,6 +3576,12 @@ def main(argv=None) -> int:
             out({"ok": False, "error": "no --request and no $MEMORY_LEDGER_REQUEST_ID"})
             return 1
         res = decline(db(), args.request, args.reason, args.rule)
+        out(res)
+        return 0 if res["ok"] else 1
+    elif args.cmd == "reprocess":
+        res = reprocess(db(), args.request, by="cli")
+        if res["ok"] and args.run:
+            res["run"] = run_request(args.request)
         out(res)
         return 0 if res["ok"] else 1
     elif args.cmd in ("poll-jira", "poll-github"):

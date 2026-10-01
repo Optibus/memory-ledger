@@ -19,6 +19,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Body as BodyParam, Depends
 from fastapi.responses import JSONResponse
 
+import b2b
 import graph
 import trigger
 
@@ -543,6 +544,23 @@ def trigger_channel(data: m.TriggerChannel = body(m.TriggerChannel)):
     return reply(res)
 
 
+@router.post("/trigger-reprocess", tags=["trigger"], summary="Run a blocked or failed request again",
+             description="Puts a `blocked`, `failed`, `timeout` or `interrupted` request back "
+                         "in the queue and runs it now, with the action it was stamped with. "
+                         "What the last run left is cleared; its logged actions stay, and a "
+                         "`reprocess` action is added.")
+def trigger_reprocess(data: m.TriggerReprocess = body(m.TriggerReprocess)):
+    rid = clip(data.request_id, 60)
+    if not rid:
+        return reply({"ok": False, "error": "missing request_id"})
+    ran: dict = {}
+    res = trigger.reprocess(trigger.db(), rid, lambda r: ran.update(on=trigger_runtime.run_soon(r)),
+                            by="web-ui")
+    if ran:
+        res["runs_on"] = ran["on"]
+    return reply(res)
+
+
 @router.post("/trigger-decline", tags=["trigger"], summary="Decline a request that breaks a rule",
              description="What the session calls instead of doing the work. Marks the request "
                          "`declined`, logs why, and returns the policy notice and the "
@@ -563,6 +581,97 @@ def trigger_action(data: m.TriggerAction = body(m.TriggerAction)):
         return reply({"ok": False, "error": "missing request_id"})
     return reply(trigger.log_action(trigger.db(), rid, clip(data.kind, 60),
                                     clip(data.target, 500), clip(data.detail, 4000)))
+
+
+# -------------------------------------------------------------------- b2b
+def _b2b_restart(res: dict) -> dict:
+    """Apply a saved B2B change to the poller now, when this server runs it."""
+    if res.get("ok"):
+        res["runtime"] = (trigger_runtime.restart() if state.TRIGGERS
+                          else trigger_runtime.status()).get("b2b", {})
+        res["watching"] = state.TRIGGERS
+    return res
+
+
+@router.post("/b2b-config", tags=["b2b"], summary="Change the B2B configuration",
+             description="Merges the keys sent into `<home>/b2b.json` (mode 600) and "
+                         "restarts the poller on it. The token is write-only.")
+def b2b_config(data: m.B2BConfig = body(m.B2BConfig)):
+    patch = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
+    if "clear" in patch:
+        patch["clear"] = [c for c in patch["clear"] if isinstance(c, str)]
+    return reply(_b2b_restart(b2b.save_config(patch)))
+
+
+@router.post("/b2b-identity", tags=["b2b"], summary="Make this brain's key pair",
+             description="Generates an X25519 key pair; the public key is the user id to "
+                         "share. Refuses to replace a stored one unless `force`.")
+def b2b_identity(data: m.B2BIdentity = body(m.B2BIdentity)):
+    return reply(_b2b_restart(b2b.generate_identity(data.force is True)))
+
+
+@router.post("/b2b-broker", tags=["b2b"], summary="Add, change or remove a broker",
+             description="With no `id`, adds the broker at `url`. With an `id`, changes "
+                         "its name, url or switch, or drops it with `remove`.")
+def b2b_broker(data: m.B2BBroker = body(m.B2BBroker)):
+    if data.enabled is not None and not isinstance(data.enabled, bool):
+        return reply({"ok": False, "error": "enabled must be true or false"})
+    if not data.id:
+        res = b2b.add_broker(clip(data.url, 300), clip(data.name, 80),
+                             data.enabled is not False)
+    else:
+        res = b2b.update_broker(clip(data.id, 40), remove=data.remove is True,
+                                url=clip(data.url, 300) or None,
+                                name=clip(data.name, 80) or None, enabled=data.enabled)
+    return reply(_b2b_restart(res))
+
+
+@router.post("/b2b-broker-check", tags=["b2b"], summary="Log in to a broker now",
+             description="Answers the broker's challenge with this brain's key and opens a "
+                         "one-hour session: it is reachable, and takes this id.")
+def b2b_broker_check(data: m.B2BBrokerCheck = body(m.B2BBrokerCheck)):
+    return reply(b2b.check_broker(clip(data.id, 40)))
+
+
+@router.post("/b2b-peer", tags=["b2b"], summary="Connect or disconnect a peer",
+             description="A peer is a brain this one sends to. Connecting also allows it to "
+                         "send back, unless `allow` is false. Disconnecting keeps the row, "
+                         "marked removed, and leaves the allowed list as it is.")
+def b2b_peer(data: m.B2BPeer = body(m.B2BPeer)):
+    if not isinstance(data.enabled, bool):
+        return reply({"ok": False, "error": "enabled must be true or false"})
+    con = b2b.db()
+    res = (b2b.add_peer(con, clip(data.peer_id, 100), clip(data.name, 80),
+                        clip(data.broker_id, 40), clip(data.person_id, 200),
+                        allow=data.allow is not False) if data.enabled
+           else b2b.remove_peer(con, clip(data.peer_id, 100)))
+    if res.get("ok"):
+        res["peers"] = b2b.list_peers(con, True)
+        res["allowed"] = b2b.list_allowed(con, True)
+    return reply(res)
+
+
+@router.post("/b2b-allowed", tags=["b2b"], summary="Allow or block a sender",
+             description="The allowed list, like friends: only these user ids' messages run "
+                         "anything. A message from anyone else is logged `blocked`, and can "
+                         "be reprocessed from Tasks.")
+def b2b_allowed(data: m.B2BAllowed = body(m.B2BAllowed)):
+    if not isinstance(data.enabled, bool):
+        return reply({"ok": False, "error": "enabled must be true or false"})
+    con = b2b.db()
+    uid = clip(data.user_id, 100)
+    res = (b2b.allow_sender(con, uid, clip(data.name, 80)) if data.enabled
+           else b2b.disallow_sender(con, uid))
+    if res.get("ok"):
+        res["allowed"] = b2b.list_allowed(con, True)
+    return reply(res)
+
+
+@router.post("/b2b-send", tags=["b2b"], summary="Send a message to a peer",
+             description="Sealed here, to the peer's key and signed by this brain's, then "
+                         "left on the peer's broker, and logged.")
+def b2b_send(data: m.B2BSend = body(m.B2BSend)):
+    return reply(b2b.send(clip(data.to, 100), clip(data.text, b2b.TEXT_MAX)))
 
 
 # ------------------------------------------- authoring skills and rules

@@ -172,7 +172,7 @@ off switch, since the bootstrap hook recreates it on the next session; see
 | `delegate` | Hand a task to a person/agent and track the follow-up. |
 | `writing-style` | Learn your voice and write as you, in your language, at the register the reader can act on. |
 | `export-memory` | Dump the whole graph to Markdown / JSON. |
-| `respond` | Answer a Slack, Jira or GitHub mention as you (or act on a GitHub PR change you subscribed to), from a headless session the trigger engine starts ([triggers](docs/trigger.md)). |
+| `respond` | Answer a Slack, Jira or GitHub mention as you (or act on a GitHub PR change you subscribed to, or a [B2B](docs/b2b.md) message from a peer brain), from a headless session the trigger engine starts ([triggers](docs/trigger.md)). |
 
 **Every skill is a contract, not a script** (CONVENTIONS §5). Each one declares
 what must be TRUE when it finishes, what it reads and writes in the graph, and
@@ -216,6 +216,14 @@ same, or call an API or run one of your scripts with no model call at all.
 Closed conversations stay closed until you open them, and turning someone away
 costs nothing. See
 [docs/trigger.md](docs/trigger.md).
+
+**Let brains talk to each other.** B2B (Brain 2 Brain) is a small in-memory
+relay (`services/b2b/`) where one brain leaves a message for another. Your user
+id is your public key, a challenge proves you hold the private key, and messages
+are sealed by the sender so only the recipient can read them, then deleted the
+moment they are read. Your brain polls every broker you set up, on the interval
+you set, and a message from a peer you connected (linked to a person) lands in
+Tasks and runs like a trigger. See [docs/b2b.md](docs/b2b.md).
 **`/neo4j-up`** stands up the optional local graph database (Docker, one command,
 data under `~/.second_brain/neo4j`) and points the brain at it.
 

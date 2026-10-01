@@ -102,3 +102,10 @@
   display: grid; gap: var(--space-2);
 }
 .ml-trigger__code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; }
+
+/* Brain to brain: a user id is a long unbroken key, and each broker or peer is a small block. */
+.ml-b2b__id { color: var(--muted); overflow-wrap: anywhere; font-size: 11.5px; }
+.ml-b2b__row {
+  display: grid; gap: var(--space-2); padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border); font-size: 11.5px;
+}

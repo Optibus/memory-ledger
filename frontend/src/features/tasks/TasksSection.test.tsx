@@ -4,7 +4,7 @@ import { http, HttpResponse } from "msw";
 import { TasksSection } from "./TasksSection";
 import { duration, filterTasks } from "./filter";
 import { renderApp } from "@/test/utils";
-import { server } from "@/test/server";
+import { resetWrites, server, writes } from "@/test/server";
 import { tasksFixture } from "@/test/fixtures";
 
 describe("Tasks", () => {
@@ -12,10 +12,42 @@ describe("Tasks", () => {
     renderApp(<TasksSection />, { route: "/tasks", withMeta: false });
     const list = await screen.findByRole("list", { name: "tasks" });
     const cards = within(list).getAllByRole("listitem");
-    expect(cards).toHaveLength(3);
+    expect(cards).toHaveLength(4);
     expect(cards[0]).toHaveClass("ml-run--running");
     expect(cards[1]).toHaveClass("ml-run--done");
     expect(cards[2]).toHaveClass("ml-run--failed");
+    expect(cards[3]).toHaveClass("ml-run--blocked");
+  });
+
+  it("offers to reprocess only a failed or blocked task, and runs a failed one at once", async () => {
+    resetWrites();
+    const { user } = renderApp(<TasksSection />, { route: "/tasks", withMeta: false });
+    const list = await screen.findByRole("list", { name: "tasks" });
+    const cards = await within(list).findAllByRole("listitem");
+    expect(within(cards[0]).queryByRole("button", { name: /^Reprocess/ })).toBeNull();
+    expect(within(cards[1]).queryByRole("button", { name: /^Reprocess/ })).toBeNull();
+    await user.click(within(cards[2]).getByRole("button", { name: /^Reprocess/ }));
+    await waitFor(() =>
+      expect(writes.filter((w) => w.path === "/api/trigger-reprocess").map((w) => w.body)).toEqual([
+        { request_id: "t-failed" },
+      ]),
+    );
+  });
+
+  it("asks before running a blocked message", async () => {
+    resetWrites();
+    const { user } = renderApp(<TasksSection />, { route: "/tasks", withMeta: false });
+    const list = await screen.findByRole("list", { name: "tasks" });
+    const blocked = within((await within(list).findAllByRole("listitem"))[3]);
+    await user.click(blocked.getByRole("button", { name: /^Reprocess/ }));
+    expect(blocked.getByText(/not on the allowed list/)).toBeInTheDocument();
+    expect(writes.some((w) => w.path === "/api/trigger-reprocess")).toBe(false);
+    await user.click(blocked.getByRole("button", { name: "Run it" }));
+    await waitFor(() =>
+      expect(writes.filter((w) => w.path === "/api/trigger-reprocess").map((w) => w.body)).toEqual([
+        { request_id: "t-blocked" },
+      ]),
+    );
   });
 
   it("shows a running task's progress on its card", async () => {
@@ -45,8 +77,9 @@ describe("Tasks", () => {
     expect(filterTasks(tasksFixture.tasks, "", { source: ["slack"] }).map((t) => t.id)).toEqual([
       "t-done",
       "t-failed",
+      "t-blocked",
     ]);
-    expect(filterTasks(tasksFixture.tasks, "", { requester: ["Alex"], status: ["done"] }).map((t) => t.id)).toEqual([
+    expect(filterTasks(tasksFixture.tasks, "", { requester: ["Alex", "Stranger"], status: ["done"] }).map((t) => t.id)).toEqual([
       "t-running",
     ]);
     expect(filterTasks(tasksFixture.tasks, "triage abc-1", {}).map((t) => t.id)).toEqual(["t-failed"]);

@@ -43,7 +43,7 @@ GET_ROUTES = [
     "/api/backups", "/api/doctor", "/api/consolidate-preview",
     "/api/person-duplicates", "/api/kinds", "/api/skills", "/api/bundle",
     "/api/rule", "/api/rule-proposals", "/api/settings", "/api/timezones", "/api/status", "/api/meta",
-    "/api/suggest-links", "/api/search", "/api/trigger", "/api/trigger-request",
+    "/api/suggest-links", "/api/search", "/api/trigger", "/api/trigger-request", "/api/b2b",
     "/api/scripts", "/api/script", "/api/tasks", "/api/task", "/api/usage-report",
 ]
 POST_ROUTES = [
@@ -57,7 +57,9 @@ POST_ROUTES = [
     "/api/export-skills", "/api/ingest-skills", "/api/export-bundle",
     "/api/upload-bundle", "/api/import-bundle", "/api/delete-contracts",
     "/api/trigger-gate", "/api/trigger-action", "/api/trigger-config", "/api/trigger-check",
-    "/api/trigger-channel", "/api/trigger-decline",
+    "/api/trigger-channel", "/api/trigger-decline", "/api/trigger-reprocess",
+    "/api/b2b-config", "/api/b2b-identity", "/api/b2b-broker", "/api/b2b-broker-check",
+    "/api/b2b-peer", "/api/b2b-allowed", "/api/b2b-send",
     "/api/export-scripts", "/api/upload-scripts", "/api/import-scripts", "/api/create-script",
 ]
 VIEWS = ["agenda", "open", "today", "tomorrow", "week", "closed", "range"]
@@ -990,10 +992,81 @@ def test_trigger_routes(s: Server):
        str(dcl.raw[:200]))
     ck("a decline needs a reason", refused(s.post("/api/trigger-decline", {"request_id": rid}),
                                            400, "missing reason"))
+    ck("a declined request cannot be reprocessed", refused(
+        s.post("/api/trigger-reprocess", {"request_id": rid}), 400, "can be reprocessed"))
+    ck("a reprocess needs a request", refused(s.post("/api/trigger-reprocess", {}),
+                                              400, "missing request_id"))
 
     ck("a malformed scope is refused", refused(s.post("/api/trigger-gate",
                                                       {"scope": "bogus", "enabled": True}),
                                                400, "scope must look like"))
+
+
+# ===================================================================== b2b
+def test_b2b_routes(s: Server):
+    print("\n== b2b: identity, brokers, peers, send (docs/b2b.md) ==")
+    t = s.get("/api/b2b").json()
+    ck("status answers with no b2b.json", t.get("ok") and t["config"]["active"] is False
+       and t["peers"] == [] and t["config"]["brokers"] == [] and "runtime" in t)
+    i = s.post("/api/b2b-identity", {})
+    me = i.json().get("user_id", "")
+    ck("b2b-identity makes a key pair; the id is the public key",
+       i.status == 200 and len(me) == 43, str(i.raw[:200]))
+    key = json.loads((Path(s.home) / "b2b.json").read_text())[
+        "private_key"]
+    t = s.get("/api/b2b")
+    ck("and the private key never comes back", key.encode() not in t.raw
+       and t.json()["config"]["private_key"]["set"] is True and t.json()["config"]["user_id"] == me)
+    ck("a second identity needs force", refused(s.post("/api/b2b-identity", {}), 400, "--force"))
+    b = s.post("/api/b2b-broker", {"url": "http://127.0.0.1:9", "name": "Home"})
+    ck("b2b-broker adds one", b.status == 200
+       and b.json()["config"]["brokers"][0]["id"] == "home", str(b.raw[:200]))
+    b = s.post("/api/b2b-broker", {"url": "http://127.0.0.1:8", "name": "Team"})
+    ck("and a second", b.status == 200 and len(b.json()["config"]["brokers"]) == 2)
+    ck("a bad URL is refused", refused(s.post("/api/b2b-broker", {"url": "ftp://x"}), 400))
+    b = s.post("/api/b2b-broker", {"id": "team", "enabled": False})
+    ck("a broker is switched off", b.status == 200
+       and b.json()["config"]["brokers"][1]["enabled"] is False)
+    ck("checking a broker that is down says so", refused(
+        s.post("/api/b2b-broker-check", {"id": "home"}), 400, "could not reach"))
+    c = s.post("/api/b2b-config", {"poll_seconds": 120})
+    ck("b2b-config saves", c.status == 200 and c.json()["config"]["poll_seconds"] == 120,
+       str(c.raw[:200]))
+    ck("a bad interval is refused", refused(s.post("/api/b2b-config", {"poll_seconds": 1}),
+                                            400, "poll_seconds"))
+    peer = "yPN6TVrC4gH1oFJpWqrGSGtVkXO8wJ0uD7jM3rC8dFg"     # a real X25519 public key
+    ck("with two brokers a peer needs one", refused(s.post("/api/b2b-peer", {
+        "peer_id": peer, "enabled": True}), 400, "which broker"))
+    p = s.post("/api/b2b-peer", {"peer_id": peer, "name": "Ana", "broker_id": "home",
+                                 "enabled": True})
+    ck("b2b-peer connects one", p.status == 200 and p.json()["peers"][0]["name"] == "Ana"
+       and p.json()["peers"][0]["broker_id"] == "home", str(p.raw[:200]))
+    ck("and allows it to send back", [a["user_id"] for a in p.json()["allowed"]] == [peer]
+       and p.json()["allowed"][0]["is_peer"])
+    ck("enabled must be a boolean", refused(s.post("/api/b2b-peer", {"peer_id": peer}),
+                                            400, "true or false"))
+    a = s.post("/api/b2b-allowed", {"user_id": peer, "enabled": False})
+    ck("b2b-allowed blocks a sender, keeping the row", a.status == 200
+       and a.json()["allowed"][0]["removed_at"], str(a.raw[:200]))
+    a = s.post("/api/b2b-allowed", {"user_id": peer, "name": "Ana", "enabled": True})
+    ck("and allows them again", a.status == 200 and not a.json()["allowed"][0]["removed_at"])
+    ck("an allowed id must be a key", refused(s.post("/api/b2b-allowed", {
+        "user_id": "nope", "enabled": True}), 400, "public key"))
+    ck("allowing needs enabled", refused(s.post("/api/b2b-allowed", {"user_id": peer}),
+                                         400, "true or false"))
+    ck("the status lists who is allowed",
+       [x["user_id"] for x in s.get("/api/b2b").json()["allowed"]] == [peer])
+    ck("own id cannot be a peer", refused(s.post("/api/b2b-peer", {
+        "peer_id": me, "broker_id": "home", "enabled": True}), 400))
+    ck("a send to an unreachable broker says so", refused(s.post("/api/b2b-send", {
+        "to": "Ana", "text": "hi"}), 400, "could not reach"))
+    ck("a send to a stranger is refused", refused(s.post("/api/b2b-send", {
+        "to": "nobody", "text": "hi"}), 400, "not a connected peer"))
+    p = s.post("/api/b2b-peer", {"peer_id": peer, "enabled": False})
+    ck("b2b-peer disconnects, keeping the row", p.status == 200
+       and p.json()["peers"][0]["removed_at"])
+    b = s.post("/api/b2b-broker", {"id": "team", "remove": True})
+    ck("a broker is removed", b.status == 200 and len(b.json()["config"]["brokers"]) == 1)
 
 
 # ============================================================ usage report
@@ -1064,6 +1137,7 @@ def main():
         test_learned_rules(s)
         test_scripts(s)
         test_trigger_routes(s)
+        test_b2b_routes(s)
         test_usage_report(s)
     finally:
         s.stop()

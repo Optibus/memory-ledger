@@ -8,3 +8,6 @@ uvicorn==0.53.0
 # The Slack trigger's Socket Mode websocket (brain_api/trigger_runtime.py).
 # Pure Python, no transitive dependencies.
 slack_sdk==3.44.1
+# B2B's keys (scripts/b2b_crypto.py): X25519, HKDF and AES-GCM for the brain's identity
+# and the messages it seals and opens.
+cryptography==50.0.2

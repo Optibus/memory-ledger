@@ -258,6 +258,10 @@ class TriggerDecline(Body):
     rule: Text = T("The rule or guardrail it breaks.")
 
 
+class TriggerReprocess(Body):
+    request_id: Text = T("The blocked or failed request to run again.")
+
+
 class TriggerCheck(Body):
     only: Text = T("`claude`, `slack`, `jira` or `github`; empty checks everything switched on.")
     offline: Any = Field(False, description="true skips the calls to Slack and Jira.")
@@ -268,6 +272,65 @@ class TriggerAction(Body):
     kind: Text = T("What was done: `reply`, `jira-transition`, `slack-message`, ...")
     target: Text = T("Where: a permalink, an issue key, a channel.")
     detail: Text = T("What, in a sentence a person could audit.")
+
+
+# -------------------------------------------------------------------- b2b
+class B2BConfig(Body):
+    """A patch of `<home>/b2b.json`: only the keys sent change. The private key
+    is write-only."""
+    enabled: Any = Field(None, description="Poll the brokers (needs the trigger master "
+                                           "switch on, an identity and an enabled broker).")
+    brokers: Optional[list[Any]] = Field(None, description="The whole broker list, "
+                                         "`[{id?, name, url, enabled}]`; replaces the stored one.")
+    private_key: Any = Field(None, description="An X25519 private key (base64url) to use as "
+                                               "this brain's identity. Write-only.")
+    poll_seconds: Any = Field(None, description="How often to read the brokers, 30 to 86400.")
+    do: Any = Field(None, description="The run command for a received message; "
+                                      "`{variables}` as for triggers, plus `b2b_*`.")
+    action: Any = Field(None, description="`claude`, `http` or `script`.")
+    http: _obj = Field(None, description="`method`, `url`, `headers`, `body`.")
+    script: _obj = Field(None, description="`name`, `args`.")
+    clear: Optional[list[LooseStr]] = Field(None, description="`[\"private_key\"]` removes it.")
+
+
+class B2BIdentity(Body):
+    force: Any = Field(False, description="Replace the identity already stored. Messages "
+                                          "waiting for the old id can no longer be opened.")
+
+
+class B2BBroker(Body):
+    id: Text = T("The broker to change; empty adds a new one.")
+    url: Text = T("Its base URL, http(s).")
+    name: Text = T("How to call it.")
+    enabled: Any = Field(None, description="Poll it, and send through it.")
+    remove: Any = Field(False, description="true drops the broker.")
+
+
+class B2BBrokerCheck(Body):
+    id: Text = T("The broker to log in to now.")
+
+
+class B2BPeer(Body):
+    peer_id: Text = T("The other brain's user id: their X25519 public key.")
+    name: Text = T("How to call them.")
+    broker_id: Text = T("The broker that reaches them; may be empty when there is only one.")
+    person_id: Text = T("The person node they are: a node id, or a name that resolves to one.")
+    enabled: Any = Field(None, description="true connects the peer, false disconnects it "
+                                           "(the row is kept, marked removed).")
+    allow: Any = Field(True, description="With enabled, also put the peer on the allowed "
+                                         "list (default true); false leaves the list as is.")
+
+
+class B2BAllowed(Body):
+    user_id: Text = T("The other brain's user id: their X25519 public key.")
+    name: Text = T("How to call them.")
+    enabled: Any = Field(None, description="true lets them send to this brain, false blocks "
+                                           "them (the row is kept, marked removed).")
+
+
+class B2BSend(Body):
+    to: Text = T("A connected peer's user id, name, or person.")
+    text: Text = T("The message.")
 
 
 # -------------------------------------------------------------- contracts

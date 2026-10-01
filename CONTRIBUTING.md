@@ -5,7 +5,7 @@ install.** `python3 scripts/graph.py` runs on a clean machine, and so do the
 hooks. Please keep that true — a dependency here is a dependency in everyone's
 shell startup path.
 
-There are two fenced-off exceptions, and neither is on that path.
+There are three fenced-off exceptions, and none is on that path.
 
 The web server's API (`scripts/brain_api/`) is a FastAPI app. It earns the
 dependency by being the one part of the brain nothing else imports: `serve.py`
@@ -20,6 +20,14 @@ place by not costing anyone anything at runtime: the compiled bundle is
 the UI from `serve.py`. The toolchain is a contributor's problem, never a user's
 — and `serve.py` rebuilds the bundle for a contributor whose source has moved
 ahead of it. See [the frontend](docs/frontend.md).
+
+The third is the B2B relay in `services/b2b/`, a separate service other brains
+talk to over HTTP (FastAPI, uvicorn, cryptography). Nothing in `scripts/` or
+`hooks/` imports it: `scripts/b2b.py` reaches it with `urllib`. The brain seals
+and opens messages itself with `scripts/b2b_crypto.py`, the one engine module
+that needs `cryptography` (from `requirements-server.txt`). Its launcher,
+`serve_b2b.py`, is stdlib and builds its own venv from
+`services/b2b/requirements.txt`, like `serve.py`. See [B2B](docs/b2b.md).
 
 ## Ground rules
 
@@ -77,6 +85,9 @@ claude --plugin-dir ~/dev/memory-ledger
 | `scripts/graph.py` | the engine — schema, commands, recall, consolidation (~2.6k lines) |
 | `scripts/brain_query.py` | read-only date views, no writes |
 | `scripts/trigger.py` | the Slack/Jira trigger engine — gate, audit log, checkpoints, Jira poll, `claude -p` dispatch ([triggers](docs/trigger.md)) |
+| `scripts/b2b.py` | B2B, this brain's side: its key pair, the brokers, peers (`b2b_peer`, linked to people), send, and the poll that turns each message into a trigger request ([B2B](docs/b2b.md)) |
+| `scripts/b2b_crypto.py` | B2B's sealing and opening (X25519, HKDF, AES-GCM); the one engine module that needs `cryptography`, from the server's venv |
+| `services/b2b/` | the B2B relay: an in-memory FastAPI service, with its own stdlib launcher and pinned `requirements.txt` |
 | `scripts/usage_ingest.py` | parses Claude Code's local session logs into one `usage-week` node per ISO week, token-free and incremental (checkpoint under the brain home); the price table lives here |
 | `scripts/usage_report.py` | "Where the Quota Went" — renders those nodes as a deterministic HTML report |
 | `scripts/restore.py` | restore a `--with-brain` zip or a `.db` snapshot, checked first, never over a brain without `--replace` |

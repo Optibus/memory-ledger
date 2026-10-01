@@ -13,6 +13,7 @@ from typing import Optional
 from fastapi import APIRouter, Query
 from fastapi.responses import FileResponse, JSONResponse
 
+import b2b
 import brain_query
 import graph
 import trigger
@@ -210,6 +211,16 @@ def status():
                         "and the newest requests.")
 def trigger_status(limit: int = Query(10, ge=1, le=200)):
     return {**trigger.status_payload(limit), "runtime": trigger_runtime.status(),
+            "watching": state.TRIGGERS}
+
+
+@router.get("/b2b", tags=["b2b"], summary="B2B: identity, brokers, peers and messages",
+            description="What `<home>/b2b.json` configures (the user id, never the private "
+                        "key, only whether one is set), the brokers, the peers, the "
+                        "messages sent, the received ones by status, and what the poller "
+                        "in this process is doing (docs/b2b.md).")
+def b2b_status():
+    return {**b2b.status_payload(), "runtime": trigger_runtime.status().get("b2b", {}),
             "watching": state.TRIGGERS}
 
 

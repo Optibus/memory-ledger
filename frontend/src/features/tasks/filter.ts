@@ -9,11 +9,16 @@ export const STATUS_ORDER = [
   "interrupted",
   "declined",
   "refused",
+  "blocked",
   "done",
 ];
 
 /** Tasks still moving: their card polls its detail while open. */
 export const ACTIVE = new Set(["running", "queued"]);
+
+/** Tasks the card offers to run again: what went wrong, or what the B2B
+ * allowed list stopped. The server checks the same list. */
+export const REPROCESSABLE = new Set(["blocked", "failed", "timeout", "interrupted"]);
 
 export type Facet = "status" | "source" | "requester" | "name";
 
