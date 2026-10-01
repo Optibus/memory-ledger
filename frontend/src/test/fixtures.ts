@@ -824,3 +824,63 @@ export const b2bFixture: import("@/api/types").B2BStatus = {
   received: { done: 2 },
   runtime: { state: "polling", last_ok: "2026-09-30T09:00:00Z", every_s: 60 },
 };
+
+export const b2bConversationsFixture: import("@/api/types").B2BConversations = {
+  ok: true,
+  conversations: [
+    {
+      peer_id: "A".repeat(43),
+      name: "Dana",
+      person_id: "person_alex",
+      connected: true,
+      allowed: true,
+      messages: 2,
+      last: { direction: "in", text: "Sure, after lunch.", at: "2026-09-29T11:00:00Z", human: true },
+    },
+    {
+      peer_id: "D".repeat(43),
+      name: "Spammer",
+      person_id: "",
+      connected: false,
+      allowed: false,
+      messages: 1,
+      last: { direction: "in", text: "buy now", at: "2026-09-20T08:00:00Z", human: false },
+    },
+    {
+      peer_id: "E".repeat(43),
+      name: "Eli",
+      person_id: "",
+      connected: true,
+      allowed: true,
+      messages: 0,
+      last: null,
+    },
+  ],
+};
+
+export const b2bThreadFixture: import("@/api/types").B2BThread = {
+  ok: true,
+  peer_id: "A".repeat(43),
+  messages: [
+    {
+      id: "m1",
+      peer_id: "A".repeat(43),
+      direction: "out",
+      text: "Can you review my PR?",
+      at: "2026-09-29T10:00:00Z",
+      human: false,
+      status: "sent",
+      request_id: "r1",
+    },
+    {
+      id: "m9",
+      peer_id: "A".repeat(43),
+      direction: "in",
+      text: "Sure, after lunch.",
+      at: "2026-09-29T11:00:00Z",
+      human: true,
+      status: "done",
+      request_id: "r9",
+    },
+  ],
+};

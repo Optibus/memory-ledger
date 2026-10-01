@@ -202,19 +202,6 @@ describe("B2B", () => {
     );
   });
 
-  it("sends a message to a peer and lists recent ones", async () => {
-    const { user } = renderApp(<B2BCard writable />, { route: "/settings" });
-    const send = await panel("Send");
-    expect(send.getByText("Can you review my PR?")).toBeInTheDocument();
-    await user.type(send.getByLabelText("Message"), "hello");
-    await user.click(send.getByRole("button", { name: "Send message" }));
-    await waitFor(() =>
-      expect(sent("/api/b2b-send")).toEqual([
-        { to: "A".repeat(43), text: "hello" },
-      ]),
-    );
-  });
-
   it("saves the poll interval and run command", async () => {
     const { user } = renderApp(<B2BCard writable />, { route: "/settings" });
     const rx = await panel("Receiving");

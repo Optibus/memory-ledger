@@ -521,6 +521,11 @@ hamburger menu on the left (`m` toggles it):
   replacement, so a capture that said "Mari" still resolves to Maria. The engine
   proposes the most connected node as canonical — a radio overrules it, because
   only a human can say which spelling is the real person.
+- **Messages** — [brain-to-brain](docs/b2b.md) messages as conversations: the
+  brains you talked to on the left, with search and a new-conversation button,
+  and the thread on the right. Every message is stamped with when it was sent
+  and flagged 🧬 when a person typed it in the chat or 🤖 when a session or a
+  script sent it.
 - **Capabilities** — skills, rules, processes and scripts, in that order. The
   two contract trees (built-in and learned), nested by the
   `requires` edge, beside the rule catalogue, the processes, and your local
@@ -671,10 +676,10 @@ python3 scripts/serve.py --no-open --host 0.0.0.0 --port 8770 &   # reachable on
 ```
 
 The UI is a React single-page app (`frontend/`) over a FastAPI backend
-(`scripts/brain_api/`). The UI's build is **committed**, so the command above
-needs no node; the backend's dependencies are installed by `serve.py` itself,
-into its own venv, on the first start; if you do have node and
-change the source, the server rebuilds the bundle for you on the next start. See
+(`scripts/brain_api/`). The UI is **built by the server** on the first start
+and rebuilt when the source changes, so it needs `npm` on the machine — the API
+never does; the backend's dependencies are installed by `serve.py` itself, into
+its own venv, on the first start. See
 [the frontend](docs/frontend.md) to work on it. The API describes itself at
 **`/api/docs`**: Swagger UI over an OpenAPI 3.1 document the running process
 builds, so it can never describe a server other than the one answering you.

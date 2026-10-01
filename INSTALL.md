@@ -283,8 +283,10 @@ python3 scripts/graph.py recheck               # what became possible again (§2
 python3 scripts/serve.py                 # http://127.0.0.1:8770
 python3 scripts/serve.py --no-write      # read-only
 ```
-**No install step.** It is a React app, but the compiled bundle ships with the
-plugin, so this works on a machine with no node and nothing to `npm install`.
+**No install step by hand, but the UI needs Node.js.** It is a React app, and
+its bundle is not in git: the first start builds it (`npm` must be on PATH) and
+later starts rebuild it when the source is newer. Without node the server still
+starts and the API answers; only the page is a 503 saying how to build it.
 The API behind it is a FastAPI app: the **first** start builds a venv for it
 under `~/.cache/memory-ledger/` (this needs the network once; on Debian/Ubuntu,
 `python3 -m venv` needs the `python3-venv` package). Every start after that is

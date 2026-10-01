@@ -25,8 +25,9 @@ skills to my other machine", "change the timezone", "run prune".
   ```
 
   It prints a URL, defaulting to `http://127.0.0.1:8770/`, and runs until Ctrl-C.
-  **Nothing needs installing.** The UI is a React app whose build ships with the
-  plugin, so this runs on a machine with no node.
+  **Nothing needs installing by hand, but the page needs Node.js.** The UI is a
+  React app that is not in git: the server builds it on first start (`npm` must
+  be on PATH). Without node the server still runs and the API answers.
   Because it is long-running, start it in the background and give the person the
   URL. It binds to 127.0.0.1 only unless `--host 0.0.0.0` is passed.
 - **Five sections behind the hamburger menu** (`m` toggles it), each with its own
@@ -113,9 +114,10 @@ See [`docs/skill-dependencies.md`](../../docs/skill-dependencies.md) (CONVENTION
   `--no-write`, the editing controls are hidden and writes return 403. Say so and
   say to restart without the flag.
 - **A blank page is diagnosed as a missing bundle, not a broken server.**
-  `frontend/dist` ships in git, so a 503 on the page while `/api/docs` answers
-  means the bundle was deleted from the checkout: `git checkout -- frontend/dist`
-  restores it, and `npm run build` in `frontend/` rebuilds it.
+  `frontend/dist` is not in git; the server builds it on first start. A 503 on
+  the page while `/api/docs` answers means it could not (the page names why,
+  usually no Node.js): install node and restart, or run
+  `cd frontend && npm install && npm run build`.
 - **A request about the API itself is answered with `/api/docs`**, the Swagger UI
   the server builds from its own routes. Describing the endpoints from memory is
   how a stale answer gets into someone's client.

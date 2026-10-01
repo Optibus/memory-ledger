@@ -10,10 +10,11 @@ builds a venv for the server from `scripts/requirements-server.txt` (see
 [The server's environment](#the-servers-environment)) and re-enters it on every
 start after that. The engine, the hooks and the CLI never import any of it.
 
-The UI needs no toolchain to run: `frontend/dist` is committed, so a machine
-with no `npm` serves the same page as any other. When the source IS newer than
-the bundle and npm is there, the server rebuilds it before binding the port;
-`--no-build` skips that and `--rebuild` forces it.
+The UI needs npm; the API does not. `frontend/dist` is not in git, so the
+server builds it before binding the port on first start, and rebuilds it when
+the source is newer than the bundle; `--no-build` skips that and `--rebuild`
+forces it. With no `npm`, every endpoint still answers and only the page is a
+503 naming the reason.
 
 ```bash
 python3 scripts/serve.py                    # http://127.0.0.1:8770
@@ -134,6 +135,8 @@ Every response is `Cache-Control: no-store`.
 | `/api/ui-prefs` | the browser's stored view state, and whether syncing it is on |
 | `/api/trigger?limit=N` | the [trigger](trigger.md) config (whether each token is set, never the token), what this process's watchers are doing, request counts by status, enabled conversations, the open and closed Slack `channels`, and the newest requests |
 | `/api/trigger-request?id=<uuid>` | one request and every action taken for it |
+| `/api/b2b-conversations` | every brain this one messaged or heard from, newest first, plus connected peers not talked to yet: name, whether it is connected and allowed, the message count and the last message |
+| `/api/b2b-thread?peer=` | both directions with one peer, oldest first; each message carries `at` (when it was sent), `human` (typed in the Messages chat, rather than by a session or a script), and for a received one its request and status |
 | `/api/b2b` | the [B2B](b2b.md) config (the user id; whether the private key is set, never the key), the brokers and their sessions, the peers, the messages sent, the received ones by status, and what this process's poller is doing |
 | `/api/tasks?limit=N` | every trigger task, newest first (default 200, max 500), for the Tasks section: who fired it, the source, a `name` (command, title or event kind), the status and timings, `cost_usd` (with `cost_estimated` when it was worked out from the transcript because the run failed or timed out before claude reported it), `counts` by status. A running task carries `progress`: the subagents, actions and latest answer the hooks have written to the database, plus the tool calls from its transcript. `text` and `result` are clipped |
 | `/api/task?id=<uuid>` | one task in full: the request with its `command`, `cwd`, `session_id` and `stderr`, every action, `activity` (the session's conversation, agents and a timeline, read live from the database) and `transcript` (the session's text and tool calls with input and result; the newest 400 events, each field clipped to 4000 characters) |
@@ -228,7 +231,7 @@ since the dashboard lists tasks and a kind with none would be dead UI.
 | `/api/b2b-broker-check` | `{id}` | answers that broker's challenge now and opens a one-hour session |
 | `/api/b2b-peer` | `{peer_id, name?, broker_id?, person_id?, enabled, allow?}` | connects (`true`) or disconnects a peer, through a broker, linked to a person node. Connecting also puts it on the allowed list unless `allow` is false. Disconnecting keeps the row; returns the whole lists as `peers` and `allowed` |
 | `/api/b2b-allowed` | `{user_id, name?, enabled}` | allows (`true`) a user id to send to this brain, or blocks it again (`false`, the row is kept). Only an allowed sender's messages run anything; anyone else's are logged `blocked`. Returns the whole list as `allowed` |
-| `/api/b2b-send` | `{to, text}` | seals and sends to a connected peer, by id, name or person, through its broker, and logs it |
+| `/api/b2b-send` | `{to, text, human?}` | seals and sends to a connected peer, by id, name or person, through its broker, and logs it. `human: true` (the Messages chat) marks it as a person's; it is sealed with the text, so the peer sees it too |
 | `/api/trigger-action` | `{request_id, kind, target?, detail?}` | appends an action to a request's audit log (what `trigger.py action` does). Refused for an unknown request or an empty `kind` |
 | `/api/export-scripts` | `{names[]}` | `graph.py export-scripts` — the named scripts (all, when empty) as one zip under `<home>/bundles`, executable bits kept; returns `path`, `name`, `count`, `scripts` and a `download` URL through `/api/bundle` |
 | `/api/upload-scripts` | `{filename, data}` | base64, ≤32MB: a scripts zip, or one loose script (a name not ending in `.zip`), staged as a zip of one. Returns a one-shot `token`, the target `dir`, and every script with `exists` and `identical`. **Reads only — nothing is written** |

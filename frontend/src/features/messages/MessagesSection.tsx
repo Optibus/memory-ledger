@@ -1,0 +1,270 @@
+import { useMemo, useRef, useState } from "react";
+import type { KeyboardEvent } from "react";
+import { Link, useSearchParams } from "react-router-dom";
+import { api } from "@/api/client";
+import { useMeta } from "@/api/MetaContext";
+import { usePolling } from "@/hooks/usePolling";
+import { Badge, Button, EmptyState, SearchInput, Spinner, StatusMessage, TextArea } from "@/components";
+import { Section } from "@/features/shell/Section";
+import { formatDate, truncate } from "@/lib/format";
+import type { B2BConversation, B2BMessage } from "@/api/types";
+import "./MessagesSection.css";
+
+/**
+ * Brain-to-brain messages as conversations (docs/b2b.md).
+ *
+ * On the left, every brain this one wrote to or heard from, plus connected
+ * peers not talked to yet, with a search and a way to start a conversation. On
+ * the right, the thread with the one picked, both directions, and a box to
+ * write in.
+ *
+ * Every message says who wrote it: 🧬 a person, 🤖 a session or a script.
+ * Only what is typed here counts as a person's; the flag is sealed with the
+ * text, so the other brain shows it the same way.
+ */
+export function MessagesSection() {
+  const { writable } = useMeta();
+  const [params, setParams] = useSearchParams();
+  const selected = params.get("peer") ?? "";
+  const [q, setQ] = useState("");
+  const [picking, setPicking] = useState(false);
+
+  const convs = usePolling((signal) => api.b2bConversations(signal), { intervalMs: 15_000 });
+  const thread = usePolling((signal) => api.b2bThread(selected, signal), {
+    intervalMs: 10_000,
+    enabled: !!selected,
+    key: selected,
+  });
+
+  const all = useMemo(() => convs.data?.conversations ?? [], [convs.data]);
+  const needle = q.trim().toLowerCase();
+  const matches = (c: B2BConversation) =>
+    !needle ||
+    c.name.toLowerCase().includes(needle) ||
+    c.peer_id.toLowerCase().includes(needle) ||
+    (c.last?.text ?? "").toLowerCase().includes(needle);
+  const shown = picking ? all.filter((c) => c.connected).filter(matches) : all.filter((c) => c.messages && matches(c));
+
+  const open = (peer: string) => {
+    setPicking(false);
+    setQ("");
+    setParams(peer ? { peer } : {});
+  };
+
+  const current = all.find((c) => c.peer_id === selected);
+  // The previous peer's thread stays in state until the new one lands.
+  const messages = thread.data?.peer_id === selected ? thread.data.messages : null;
+
+  return (
+    <Section
+      title="Messages"
+      lead="Conversations with other second brains. 🧬 a person wrote it, 🤖 a session or a script did."
+      width={1120}
+    >
+      {convs.error ? <StatusMessage tone="error">{convs.error}</StatusMessage> : null}
+      <div className="ml-msg">
+        <aside className="ml-msg__side" aria-label="conversations">
+          <div className="ml-msg__tools">
+            <SearchInput
+              value={q}
+              onChange={setQ}
+              placeholder={picking ? "find a peer" : "search conversations"}
+              aria-label={picking ? "find a peer" : "search conversations"}
+            />
+            <Button
+              size="sm"
+              variant={picking ? "default" : "primary"}
+              active={picking}
+              onClick={() => {
+                setPicking((v) => !v);
+                setQ("");
+              }}
+              title="Start a new conversation"
+            >
+              {picking ? "Cancel" : "＋ New"}
+            </Button>
+          </div>
+          {picking ? <p className="ml-msg__hint">Start a conversation with a connected peer.</p> : null}
+          {!convs.data && !convs.error ? <Spinner label="reading conversations" /> : null}
+          {convs.data && !shown.length ? (
+            <EmptyState
+              title={needle ? "Nothing matches" : picking ? "No connected peers" : "No conversations yet"}
+              hint={
+                needle ? undefined : picking ? (
+                  <>
+                    Connect one in <Link to="/settings">Settings → B2B</Link>.
+                  </>
+                ) : (
+                  "Start one with ＋ New."
+                )
+              }
+            />
+          ) : null}
+          <ul className="ml-msg__list" aria-label={picking ? "peers" : "conversation list"}>
+            {shown.map((c) => (
+              <li key={c.peer_id}>
+                <button
+                  type="button"
+                  className={`ml-msg__conv${c.peer_id === selected ? " is-active" : ""}`}
+                  aria-current={c.peer_id === selected ? "true" : undefined}
+                  onClick={() => open(c.peer_id)}
+                >
+                  <span className="ml-msg__conv-top">
+                    <span className="ml-msg__name">{displayName(c)}</span>
+                    {c.last ? (
+                      <time className="ml-msg__when" dateTime={c.last.at} title={c.last.at}>
+                        {formatDate(c.last.at)}
+                      </time>
+                    ) : null}
+                  </span>
+                  <span className="ml-msg__preview">
+                    {c.last ? (
+                      <>
+                        <AuthorIcon human={c.last.human} />
+                        {c.last.direction === "out" ? "You: " : ""}
+                        {truncate(c.last.text, 70)}
+                      </>
+                    ) : (
+                      "no messages yet"
+                    )}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </aside>
+
+        <section className="ml-msg__main" aria-label="conversation">
+          {!selected ? (
+            <EmptyState title="Pick a conversation" hint="Or start a new one with ＋ New." />
+          ) : (
+            <Thread
+              key={selected}
+              peer={selected}
+              conversation={current}
+              messages={messages}
+              error={thread.error}
+              writable={writable}
+              onSent={() => {
+                thread.refresh();
+                convs.refresh();
+              }}
+            />
+          )}
+        </section>
+      </div>
+    </Section>
+  );
+}
+
+function displayName(c: Pick<B2BConversation, "name" | "peer_id">): string {
+  return c.name || `${c.peer_id.slice(0, 10)}…`;
+}
+
+/** 🧬 for a person, 🤖 for anything automated. */
+export function AuthorIcon({ human }: { human: boolean }) {
+  const label = human ? "written by a person" : "automated";
+  return (
+    <span className="ml-msg__author" role="img" aria-label={label} title={label}>
+      {human ? "🧬" : "🤖"}
+    </span>
+  );
+}
+
+interface ThreadProps {
+  peer: string;
+  conversation: B2BConversation | undefined;
+  messages: B2BMessage[] | null;
+  error: string | null;
+  writable: boolean;
+  onSent: () => void;
+}
+
+function Thread({ peer, conversation, messages, error, writable, onSent }: ThreadProps) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const box = useRef<HTMLTextAreaElement>(null);
+  const connected = !!conversation?.connected;
+  const canSend = writable && connected && !busy && !!text.trim();
+
+  const send = async () => {
+    if (!canSend) return;
+    setBusy(true);
+    setSendError(null);
+    try {
+      await api.sendB2B(peer, text.trim(), true);
+      setText("");
+      onSent();
+      box.current?.focus();
+    } catch (err) {
+      setSendError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // Enter sends, Shift+Enter is a new line, as in every chat.
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+      e.preventDefault();
+      void send();
+    }
+  };
+
+  const why = !writable
+    ? "This server is read-only (--no-write)."
+    : !connected
+      ? "Not a connected peer, so this brain cannot write to them. Connect them in Settings → B2B."
+      : "";
+
+  return (
+    <>
+      <header className="ml-msg__head">
+        <span className="ml-msg__name">{conversation ? displayName(conversation) : displayName({ name: "", peer_id: peer })}</span>
+        <code className="ml-msg__id" title={peer}>
+          {truncate(peer, 18)}
+        </code>
+        {conversation && !conversation.allowed ? <Badge tone="warn">not allowed to send to you</Badge> : null}
+      </header>
+
+      <ol className="ml-msg__thread" aria-label="messages">
+        {error ? <StatusMessage tone="error">{error}</StatusMessage> : null}
+        {!messages && !error ? <Spinner label="reading messages" /> : null}
+        {messages && !messages.length ? <EmptyState title="No messages yet" hint="Say hello below." /> : null}
+        {messages?.map((m) => (
+          <li key={`${m.direction}-${m.id}`} className={`ml-msg__item ml-msg__item--${m.direction}`}>
+            <div className="ml-msg__bubble">{m.text}</div>
+            <div className="ml-msg__meta">
+              <AuthorIcon human={m.human} />
+              <time dateTime={m.at} title={m.at}>
+                {formatDate(m.at)}
+              </time>
+              {m.direction === "in" && m.status === "blocked" ? <Badge tone="warn">blocked</Badge> : null}
+            </div>
+          </li>
+        ))}
+      </ol>
+
+      <div className="ml-msg__compose">
+        {why ? <p className="ml-msg__hint">{why}</p> : null}
+        {sendError ? <StatusMessage tone="error">{sendError}</StatusMessage> : null}
+        <div className="ml-msg__compose-row">
+          <TextArea
+            ref={box}
+            rows={2}
+            value={text}
+            disabled={!writable || !connected}
+            placeholder="Write a message. Enter sends, Shift+Enter for a new line."
+            aria-label="message"
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={onKey}
+          />
+          <Button variant="primary" disabled={!canSend} onClick={() => void send()}>
+            {busy ? "sending…" : "Send"}
+          </Button>
+        </div>
+      </div>
+    </>
+  );
+}

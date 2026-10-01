@@ -44,6 +44,7 @@ GET_ROUTES = [
     "/api/person-duplicates", "/api/kinds", "/api/skills", "/api/bundle",
     "/api/rule", "/api/rule-proposals", "/api/settings", "/api/timezones", "/api/status", "/api/meta",
     "/api/suggest-links", "/api/search", "/api/trigger", "/api/trigger-request", "/api/b2b",
+    "/api/b2b-conversations", "/api/b2b-thread",
     "/api/scripts", "/api/script", "/api/tasks", "/api/task", "/api/usage-report",
 ]
 POST_ROUTES = [
@@ -1062,6 +1063,17 @@ def test_b2b_routes(s: Server):
         "to": "Ana", "text": "hi"}), 400, "could not reach"))
     ck("a send to a stranger is refused", refused(s.post("/api/b2b-send", {
         "to": "nobody", "text": "hi"}), 400, "not a connected peer"))
+    ck("a send flagged human is taken, and fails only on the broker", refused(s.post(
+        "/api/b2b-send", {"to": "Ana", "text": "hi", "human": True}), 400, "could not reach"))
+    cv = s.get("/api/b2b-conversations").json()
+    ck("conversations list a connected peer before any message",
+       cv.get("ok") and [(c["peer_id"], c["name"], c["connected"], c["messages"], c["last"])
+                         for c in cv["conversations"]] == [(peer, "Ana", True, 0, None)],
+       str(cv)[:300])
+    th = s.get(f"/api/b2b-thread?peer={peer}").json()
+    ck("and the thread with them is empty", th.get("ok") and th["messages"] == []
+       and th["peer_id"] == peer)
+    ck("a thread needs a peer", refused(s.get("/api/b2b-thread"), 200, "missing peer"))
     p = s.post("/api/b2b-peer", {"peer_id": peer, "enabled": False})
     ck("b2b-peer disconnects, keeping the row", p.status == 200
        and p.json()["peers"][0]["removed_at"])

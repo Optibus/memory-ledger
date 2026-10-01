@@ -671,7 +671,8 @@ def b2b_allowed(data: m.B2BAllowed = body(m.B2BAllowed)):
              description="Sealed here, to the peer's key and signed by this brain's, then "
                          "left on the peer's broker, and logged.")
 def b2b_send(data: m.B2BSend = body(m.B2BSend)):
-    return reply(b2b.send(clip(data.to, 100), clip(data.text, b2b.TEXT_MAX)))
+    return reply(b2b.send(clip(data.to, 100), clip(data.text, b2b.TEXT_MAX),
+                          human=data.human is True))
 
 
 # ------------------------------------------- authoring skills and rules
