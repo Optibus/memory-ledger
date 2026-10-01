@@ -2,6 +2,9 @@ import { setupServer } from "msw/node";
 import { http, HttpResponse } from "msw";
 import {
   agendaFixture,
+  agentsFixture,
+  agentConversationsFixture,
+  agentThreadFixture,
   b2bFixture,
   b2bConversationsFixture,
   b2bThreadFixture,
@@ -87,6 +90,16 @@ export const handlers = [
   http.get("/api/rule-proposals", () => HttpResponse.json(ruleProposalsFixture)),
   http.get("/api/status", () => HttpResponse.json(statusFixture)),
   http.get("/api/trigger", () => HttpResponse.json(triggerFixture)),
+  http.get("/api/agents", () => HttpResponse.json(agentsFixture)),
+  http.get("/api/agent-conversations", () => HttpResponse.json(agentConversationsFixture)),
+  http.get("/api/agent-thread", ({ request }) => {
+    const id = new URL(request.url).searchParams.get("id") ?? "";
+    const c = agentConversationsFixture.conversations.find((x) => x.id === id);
+    if (id === agentThreadFixture.conversation.id) return HttpResponse.json(agentThreadFixture);
+    return c
+      ? HttpResponse.json({ ok: true, conversation: c, messages: [] })
+      : HttpResponse.json({ ok: false, error: `no conversation ${id}` }, { status: 200 });
+  }),
   http.get("/api/b2b", () => HttpResponse.json(b2bFixture)),
   http.get("/api/b2b-conversations", () => HttpResponse.json(b2bConversationsFixture)),
   http.get("/api/b2b-thread", ({ request }) => {
@@ -170,6 +183,19 @@ export const handlers = [
   write("/api/trigger-reprocess", (body: { request_id?: string }) =>
     ok({ request_id: body.request_id, status: "queued", was: "failed" }),
   ),
+  write("/api/agent-send", (body: { conversation?: string }) =>
+    ok({
+      conversation: agentConversationsFixture.conversations.find((c) => c.id === body.conversation) ??
+        { ...agentConversationsFixture.conversations[2]!, id: "c9", title: "New one" },
+      message_id: "u9",
+      reply_id: "a9",
+    }),
+  ),
+  write("/api/agent-conversation", (body: { id?: string }) =>
+    ok({ conversation: agentConversationsFixture.conversations.find((c) => c.id === body.id), created: false }),
+  ),
+  write("/api/agent-retry", (body: { id?: string }) => ok({ reply_id: body.id })),
+  write("/api/agent-config", () => HttpResponse.json(agentsFixture)),
   write("/api/b2b-send", () =>
     ok({ id: "m2", to: "A".repeat(43), name: "Dana", broker: "b1", sent_at: "2026-09-30T10:00:00Z" }),
   ),

@@ -4823,8 +4823,18 @@ def cmd_recall(args):
     """Associative recall: seed on full-text, spread activation across edges,
     modulate by memory strength, return a SLIM ranked payload inside a char
     budget. One call replaces search + neighbors, and costs fewer tokens."""
-    con = connect()
-    q = args.query or ""
+    out(api_recall(connect(), args.query or "", limit=args.limit, depth=args.depth,
+                   budget=args.budget, include_all=args.all,
+                   include_captures=args.include_captures, wire=args.wire))
+
+
+def api_recall(con, q: str, *, limit=8, depth=None, budget=None, include_all=False,
+               include_captures=False, wire=True, exclude=()) -> dict:
+    """`recall` as a function: the same ranking, returned instead of printed.
+    `exclude` drops ids from the results (a caller that already holds them)."""
+    depth = ACTIVATION_DEPTH if depth is None else depth
+    budget = RECALL_BUDGET if budget is None else budget
+    exclude = set(exclude or ())
     words = _fts_terms(q)
     seeds = {}
     if words:
@@ -4848,7 +4858,7 @@ def cmd_recall(args):
     # individual links weak while a sparse, specific link stays strong.
     act = dict(seeds)
     frontier = dict(seeds)
-    for _ in range(max(0, int(args.depth))):
+    for _ in range(max(0, int(depth))):
         nxt = {}
         for nid, a in frontier.items():
             nbrs = con.execute(
@@ -4867,7 +4877,7 @@ def cmd_recall(args):
         if not frontier:
             break
     if not act:
-        out({"ok": True, "query": q, "count": 0, "results": []}); return
+        return {"ok": True, "query": q, "count": 0, "results": []}
 
     ids = list(act)
     ph = ",".join("?" * len(ids))
@@ -4883,13 +4893,13 @@ def cmd_recall(args):
     scored = []
     for nid, a in act.items():
         d = nodes.get(nid)
-        if not d:
+        if not d or nid in exclude:
             continue
-        if d["type"] == "capture" and not args.include_captures:
+        if d["type"] == "capture" and not include_captures:
             continue          # the day's digest covers these (see `consolidate`)
         if d["type"] == "context-event":
             continue          # bookkeeping, never prose — read it with `context-at`
-        if not args.all and (d.get("status") or "").lower() in DONE_STATUSES:
+        if not include_all and (d.get("status") or "").lower() in DONE_STATUSES:
             continue
         s = _strength(d["props"])
         score = a * (0.55 + 0.45 * s)
@@ -4908,15 +4918,15 @@ def cmd_recall(args):
     results, used = [], 0
     for _, row in scored:
         cost = len(json.dumps(row, ensure_ascii=False))
-        if len(results) >= int(args.limit) or (used + cost) > int(args.budget):
+        if len(results) >= int(limit) or (used + cost) > int(budget):
             break
         results.append(row); used += cost
 
     top = [r["id"] for r in results]
     _touch(con, top)                                  # reading reinforces
-    wired = _hebbian(con, top) if args.wire else []
-    out({"ok": True, "query": q, "count": len(results), "payload_chars": used,
-         "activated": len(act), "wired": wired, "results": results})
+    wired = _hebbian(con, top) if wire else []
+    return {"ok": True, "query": q, "count": len(results), "payload_chars": used,
+            "activated": len(act), "wired": wired, "results": results}
 
 
 def _hebbian(con, ids) -> list:

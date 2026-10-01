@@ -19,6 +19,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Body as BodyParam, Depends
 from fastapi.responses import JSONResponse
 
+import agents
 import b2b
 import graph
 import trigger
@@ -723,6 +724,56 @@ def b2b_allowed(data: m.B2BAllowed = body(m.B2BAllowed)):
 def b2b_send(data: m.B2BSend = body(m.B2BSend)):
     return reply(b2b.send(clip(data.to, 100), clip(data.text, b2b.TEXT_MAX),
                           human=data.human is True))
+
+
+# ------------------------------------------------------------------ agents
+# The one family of routes that starts a model call: a reply is a headless
+# Claude session or an Ollama chat, run in this process (docs/agents.md).
+def _bool_or_none(v):
+    return None if v is None else v is True
+
+
+@router.post("/agent-send", tags=["agents"], summary="Say something to an agent",
+             description="Stores the message and queues the reply, which runs in the "
+                         "background: poll `/api/agent-thread`. **Starts a model call.**")
+def agent_send(data: m.AgentSend = body(m.AgentSend)):
+    turns = data.context_turns
+    return reply(agents.send(agents.db(), clip(data.text, agents.TEXT_MAX),
+                             clip(data.conversation, 80), connector_id=clip(data.connector, 40),
+                             model=clip(data.model, 120), full_tools=_bool_or_none(data.full_tools),
+                             context_turns=None if turns is None else turns))
+
+
+@router.post("/agent-conversation", tags=["agents"], summary="Create or change a conversation",
+             description="Rename, hide or unhide it, or switch its connector, model, tools "
+                         "or context window. Only the keys sent change.")
+def agent_conversation(data: m.AgentConversation = body(m.AgentConversation)):
+    changes = {k: getattr(data, k) for k in ("title", "connector", "model", "full_tools",
+                                             "context_turns", "hidden")
+               if getattr(data, k) is not None}
+    for k in ("title", "connector", "model"):
+        if k in changes:
+            changes[k] = clip(changes[k], 200)
+    for k in ("full_tools", "hidden"):
+        if k in changes:
+            changes[k] = changes[k] is True
+    return reply(agents.save_conversation(agents.db(), clip(data.id, 80), **changes))
+
+
+@router.post("/agent-retry", tags=["agents"], summary="Run a failed reply again",
+             description="With the conversation's current connector and model. "
+                         "**Starts a model call.**")
+def agent_retry(data: m.AgentRetry = body(m.AgentRetry)):
+    return reply(agents.retry(agents.db(), clip(data.id, 80)))
+
+
+@router.post("/agent-config", tags=["agents"], summary="Change the agents configuration")
+def agent_config(data: m.AgentConfig = body(m.AgentConfig)):
+    patch = {k: v for k, v in data.model_dump().items() if v is not None}
+    res = agents.save_config(patch)
+    if res.get("ok"):
+        res = agents.status_payload()
+    return reply(res)
 
 
 # ------------------------------------------- authoring skills and rules

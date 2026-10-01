@@ -155,6 +155,12 @@ export const api = {
     get<import("./types").UsageReportPayload>("/api/usage-report", range, signal),
   trigger: (signal?: AbortSignal) =>
     get<import("./types").TriggerStatus>("/api/trigger", { limit: 5 }, signal),
+  agents: (signal?: AbortSignal) =>
+    get<import("./types").AgentsStatus>("/api/agents", undefined, signal),
+  agentConversations: (signal?: AbortSignal) =>
+    get<import("./types").AgentConversations>("/api/agent-conversations", undefined, signal),
+  agentThread: (id: string, signal?: AbortSignal) =>
+    get<import("./types").AgentThread>("/api/agent-thread", { id }, signal),
   b2b: (signal?: AbortSignal) =>
     get<import("./types").B2BStatus>("/api/b2b", undefined, signal),
   b2bConversations: (signal?: AbortSignal) =>
@@ -265,6 +271,38 @@ export const api = {
   /** `human`: typed in the Messages chat. Every other sender is shown as automated. */
   sendB2B: (to: string, text: string, human = false) =>
     post<import("./types").B2BSendResult>("/api/b2b-send", human ? { to, text, human } : { to, text }),
+  /** Starts a model call: the reply runs in the background, poll the thread. */
+  sendAgent: (body: {
+    text: string;
+    conversation?: string;
+    connector?: string;
+    model?: string;
+    full_tools?: boolean;
+    context_turns?: number;
+  }) => post<import("./types").AgentSendResult>("/api/agent-send", body),
+  /** Create (no id) or change a conversation; only the keys sent change. */
+  saveAgentConversation: (body: {
+    id?: string;
+    title?: string;
+    connector?: string;
+    model?: string;
+    full_tools?: boolean;
+    context_turns?: number;
+    hidden?: boolean;
+  }) =>
+    post<{ ok: boolean; conversation: import("./types").AgentConversation; created: boolean }>(
+      "/api/agent-conversation",
+      body,
+    ),
+  retryAgent: (id: string) => post<{ ok: boolean; reply_id: string }>("/api/agent-retry", { id }),
+  saveAgentsConfig: (body: Partial<{
+    connectors: Partial<import("./types").AgentConnector>[];
+    default_connector: string;
+    context_turns: number;
+    recall_limit: number;
+    recall_budget: number;
+    max_concurrent: number;
+  }>) => post<import("./types").AgentsStatus>("/api/agent-config", body),
   flush: () => post("/api/flush", {}),
   /**
    * Consolidate. Refused without `confirm`, by the server — the preview is not

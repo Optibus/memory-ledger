@@ -364,6 +364,46 @@ class B2BSend(Body):
                                           "else is shown as automated.")
 
 
+# ------------------------------------------------------------------ agents
+class AgentSend(Body):
+    text: Text = T("The person's message.")
+    conversation: Text = T("The conversation to add it to; empty starts one, titled "
+                           "from the message.")
+    connector: Text = T("The connector to answer with; empty keeps the conversation's.")
+    model: Text = T("The model; empty is the connector's default.")
+    full_tools: Any = Field(None, description="Tools on (`true`) or read-only (`false`) "
+                                              "from this turn on; omitted keeps it.")
+    context_turns: Any = Field(None, description="Earlier exchanges each turn carries, "
+                                                 "0 to 10; omitted keeps it.")
+
+
+class AgentConversation(Body):
+    """A patch of one conversation, or a new empty one when `id` is empty."""
+    id: Text = T("The conversation; empty creates one.")
+    title: Any = Field(None, description="Its name in the list.")
+    connector: Any = Field(None, description="The connector its next turn uses.")
+    model: Any = Field(None, description="The model its next turn uses.")
+    full_tools: Any = Field(None, description="Tools on, or read-only.")
+    context_turns: Any = Field(None, description="Earlier exchanges each turn carries, 0 to 10.")
+    hidden: Any = Field(None, description="Hidden from the active list.")
+
+
+class AgentRetry(Body):
+    id: Text = T("A reply that failed.")
+
+
+class AgentConfig(Body):
+    """A patch of `<home>/agents.json`: only the keys sent change."""
+    connectors: Optional[list[Any]] = Field(None, description="The whole connector list, "
+                                            "`[{id?, name, kind, enabled, ...}]`; replaces "
+                                            "the stored one.")
+    default_connector: Any = Field(None, description="The connector a new conversation uses.")
+    context_turns: Any = Field(None, description="The default for a new conversation, 0 to 10.")
+    recall_limit: Any = Field(None, description="How many recalled nodes a turn gets, 0 to 30.")
+    recall_budget: Any = Field(None, description="Their total size cap, in characters.")
+    max_concurrent: Any = Field(None, description="Replies running at once, 1 to 8.")
+
+
 # -------------------------------------------------------------- contracts
 _sections = Annotated[Optional[dict[str, Any]], BeforeValidator(_dict_or_none)]
 

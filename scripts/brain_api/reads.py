@@ -13,6 +13,7 @@ from typing import Optional
 from fastapi import APIRouter, Query
 from fastapi.responses import FileResponse, JSONResponse
 
+import agents
 import b2b
 import brain_query
 import graph
@@ -243,6 +244,30 @@ def b2b_thread(peer: str = Query("", description="The peer's user id."),
     if not peer:
         return {"ok": False, "error": "missing peer"}
     return {"ok": True, "peer_id": peer, "messages": b2b.thread(b2b.db(), peer, limit)}
+
+
+@router.get("/agents", tags=["agents"], summary="Agents: the connectors and their models",
+            description="What `<home>/agents.json` configures, with the models each "
+                        "connector offers now (an Ollama host is asked for its own).")
+def agents_status():
+    return agents.status_payload()
+
+
+@router.get("/agent-conversations", tags=["agents"], summary="Agents: every conversation",
+            description="Newest first, hidden ones included (`hidden`). `state` is what "
+                        "its badge shows: `pending`, `question`, `done`, `error` or `empty`.")
+def agent_conversations():
+    return {"ok": True, "conversations": agents.conversations(agents.db())}
+
+
+@router.get("/agent-thread", tags=["agents"], summary="Agents: one conversation's messages",
+            description="Oldest first. A reply carries its event log (tools, skills, "
+                        "subagents, thinking), the recalled node ids it was given, its "
+                        "tokens and its cost, live while it runs.")
+def agent_thread(id: str = Query("", description="The conversation id.")):
+    if not id:
+        return {"ok": False, "error": "missing id"}
+    return agents.thread(agents.db(), id) or {"ok": False, "error": f"no conversation {id}"}
 
 
 @router.get("/trigger-request", tags=["trigger"],

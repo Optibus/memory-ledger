@@ -14,6 +14,8 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
+import agents
+
 from . import errors, reads, state, sync_runtime, trigger_runtime, writes
 
 TAGS = [
@@ -35,6 +37,10 @@ TAGS = [
     {"name": "trigger", "description": "Slack, Jira and GitHub events that summon the brain: "
                                        "the request log, its actions, and the "
                                        "per-conversation gate (docs/trigger.md)."},
+    {"name": "agents", "description": "Conversations with Claude or Ollama from the brain UI: "
+                                      "one stateless call per turn, its context recalled "
+                                      "from the graph (docs/agents.md). The only routes "
+                                      "that start a model call."},
     {"name": "b2b", "description": "Brain 2 Brain: this brain's account on the B2B relay, "
                                    "its peers, and the messages sent (docs/b2b.md)."},
 ]
@@ -44,6 +50,8 @@ TAGS = [
 async def lifespan(_app):
     """The trigger watchers and the master sync live as long as the server
     does, and only when serve.py asked for them."""
+    if state.WRITABLE:
+        agents.recover()
     if state.TRIGGERS:
         trigger_runtime.start()
     if state.SYNC:
@@ -59,9 +67,11 @@ async def lifespan(_app):
 DESCRIPTION = """\
 The local HTTP API over one person's memory graph.
 
-**It calls no model.** Every endpoint here is the graph engine behind a socket:
-plain SQL through `graph.py`'s `api_*` helpers, so everything it does is
-token-free. Leaving a client polling it costs nothing.
+**It calls no model**, with one family of exceptions. Every endpoint is the graph
+engine behind a socket: plain SQL through `graph.py`'s `api_*` helpers, so
+everything it does is token-free and leaving a client polling it costs nothing.
+The exceptions are `POST /api/agent-send` and `/api/agent-retry`, which start a
+model call by design (the Agents tab); reading their threads stays free.
 
 ## Security — read this before changing `--host`
 

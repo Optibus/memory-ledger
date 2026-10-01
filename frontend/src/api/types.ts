@@ -1234,3 +1234,116 @@ export interface B2BSendResult extends Envelope {
   sent_at: string;
   human?: boolean;
 }
+
+// ------------------------------------------------------------------ agents
+export type AgentKind = "claude" | "ollama";
+
+export interface AgentConnector {
+  id: string;
+  name: string;
+  kind: AgentKind;
+  enabled: boolean;
+  default_model: string;
+  timeout_s: number;
+  /** claude: the configured list; ollama: what the host has pulled right now. */
+  models: string[];
+  bin?: string;
+  url?: string;
+  max_rounds?: number;
+  /** False when the host could not be asked (an Ollama that is down). */
+  available: boolean;
+  problem: string;
+}
+
+export interface AgentsStatus extends Envelope {
+  config: {
+    default_connector: string;
+    context_turns: number;
+    recall_limit: number;
+    recall_budget: number;
+    max_concurrent: number;
+    _problem?: string;
+  };
+  connectors: AgentConnector[];
+  running: number;
+  question_mark: string;
+}
+
+/** The badge: a spinner, a ?, a check, a cross, or nothing yet. */
+export type AgentConvState = "pending" | "question" | "done" | "error" | "empty";
+
+export interface AgentConversation {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  connector: string;
+  model: string;
+  full_tools: boolean;
+  context_turns: number;
+  hidden: boolean;
+  node_id: string;
+  state?: AgentConvState;
+  last?: { role: "user" | "agent"; text: string; at: string } | null;
+  messages?: number;
+  cost_usd?: number;
+  cost_estimated?: boolean;
+  tokens_in?: number;
+  tokens_out?: number;
+}
+
+export type AgentEventKind = "tool" | "skill" | "agent" | "mcp" | "thinking" | "text" | "note";
+
+export interface AgentEvent {
+  id?: string;
+  kind: AgentEventKind;
+  name: string;
+  tool?: string;
+  input?: string;
+  output?: string;
+  error?: boolean;
+  parent?: string;
+  at?: string;
+}
+
+export type AgentMsgStatus = "queued" | "running" | "done" | "question" | "error";
+
+export interface AgentMessage {
+  id: string;
+  conv_id: string;
+  role: "user" | "agent";
+  text: string;
+  at: string;
+  status: AgentMsgStatus;
+  reply_to: string;
+  connector: string;
+  model: string;
+  full_tools: boolean;
+  events: AgentEvent[];
+  context: string[];
+  error: string;
+  session_id: string;
+  /** null: not known; 0: free (a local model). */
+  cost_usd: number | null;
+  cost_estimated: boolean;
+  tokens_in: number;
+  tokens_out: number;
+  started_at: string;
+  finished_at: string;
+  node_id: string;
+}
+
+export interface AgentConversations extends Envelope {
+  conversations: AgentConversation[];
+}
+
+export interface AgentThread extends Envelope {
+  conversation: AgentConversation;
+  messages: AgentMessage[];
+}
+
+export interface AgentSendResult extends Envelope {
+  conversation: AgentConversation;
+  message_id: string;
+  reply_id: string;
+}
