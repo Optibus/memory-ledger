@@ -32,6 +32,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import trigger  # noqa: E402
 
+REAL_HTTP_JSON = trigger.http_json
+
 FAILS: list[str] = []
 
 
@@ -1635,9 +1637,55 @@ def test_tasks(cfg):
         os.environ.pop("CLAUDE_CONFIG_DIR", None)
 
 
+def test_http_transport():
+    print("\n== http_json: a connection that breaks in transit ==")
+    import http.client
+    import urllib.request
+
+    class Resp:
+        def __init__(self, raw):
+            self.raw = raw
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            if isinstance(self.raw, Exception):
+                raise self.raw
+            return self.raw
+
+    real_urlopen = urllib.request.urlopen
+    script = []
+    urllib.request.urlopen = lambda req, timeout=30: Resp(script.pop(0))
+    try:
+        script[:] = [http.client.IncompleteRead(b"[{"), b'[{"accountId": "a"}]']
+        ck("a GET cut off mid-body is read again, once",
+           REAL_HTTP_JSON("GET", "https://x/y") == [{"accountId": "a"}] and not script)
+        script[:] = [http.client.IncompleteRead(b""), ConnectionResetError()]
+        try:
+            REAL_HTTP_JSON("GET", "https://x/y?q=1")
+            broke = ""
+        except trigger.TriggerError as e:
+            broke = str(e)
+        ck("twice is a TriggerError, never a crash", "connection broke" in broke and "q=1" not in broke, broke)
+        script[:] = [http.client.IncompleteRead(b""), b"{}"]
+        try:
+            REAL_HTTP_JSON("POST", "https://x/y", body={})
+            posted = "no error"
+        except trigger.TriggerError as e:
+            posted = str(e)
+        ck("a POST is never sent twice", "connection broke" in posted and len(script) == 1, posted)
+    finally:
+        urllib.request.urlopen = real_urlopen
+
+
 def main():
     try:
         test_config()
+        test_http_transport()
         cfg = write_cfg()
         test_gate(cfg)
         test_loops(cfg)

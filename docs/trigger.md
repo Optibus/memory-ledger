@@ -433,6 +433,10 @@ the brain" — e.g. `@Your Name @brain can you move this to review?`.
 
 It is plain HTTPS with an API token, so it is stdlib and can also run without the
 server: `python3 scripts/trigger.py poll-jira` does one pass (useful from cron).
+A connection that breaks mid-response (Jira's chunked bodies are sometimes cut
+off) is read again once for a GET, which changes nothing; a second break, or any
+break on a write, is an error the caller reports, never a crash and never a
+comment posted twice.
 
 ### GitHub — polling
 
@@ -586,15 +590,17 @@ the first time the Tasks section lists it.
 
 ### Reprocessing a task
 
-A task that went wrong (`failed`, `timeout`, `interrupted`), or a B2B message
-that the allowed list stopped (`blocked`), has a **Reprocess** button on its
-Tasks card. A blocked one asks first, because running it means you vouch for a
-sender who is not on the list. Reprocess puts the request back to `queued` and
+A task that went wrong (`failed`, `timeout`, `interrupted`), a B2B message
+that the allowed list stopped (`blocked`), or a mention the gate turned away
+(`refused`) has a **Reprocess** button on its Tasks card. A blocked or refused
+one asks first, because running it means you vouch for someone the gate did not
+let in. A refused Jira mention also offers **Allow <name> to tag the brain**,
+which puts its author on the people list so the next one needs no vouching. Reprocess puts the request back to `queued` and
 runs it right away. It runs on the trigger pool, or on its own thread when the
 watchers are off, with the action the request was stamped with when it came
 in. The last run's session, result, exit code, stderr and cost are cleared.
 The actions it logged stay, and a `reprocess` action records who asked and
-what the status was before. `done`, `declined`, `refused` and live requests
+what the status was before. `done`, `declined` and live requests
 cannot be reprocessed.
 
 ```bash

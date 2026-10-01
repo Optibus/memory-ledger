@@ -26,6 +26,7 @@ dependency — the Slack Socket Mode websocket — lives in the server
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import logging
 import logging.handlers
@@ -2133,14 +2134,22 @@ def http_json(method: str, url: str, *, headers=None, body=None, form=None,
         headers.setdefault("Content-Type", "application/json; charset=utf-8")
     headers.setdefault("Accept", "application/json")
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            raw = r.read()
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", "replace")[:300]
-        raise TriggerError(f"{method} {url.split('?')[0]} -> {e.code}: {detail}") from None
-    except urllib.error.URLError as e:
-        raise TriggerError(f"{method} {url.split('?')[0]}: {e.reason}") from None
+    # A GET changes nothing, so a connection that drops mid-body is read again
+    # once; anything else that breaks in transit is a TriggerError, never a crash.
+    for attempt in range(2 if method == "GET" else 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                raw = r.read()
+            break
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", "replace")[:300]
+            raise TriggerError(f"{method} {url.split('?')[0]} -> {e.code}: {detail}") from None
+        except urllib.error.URLError as e:
+            raise TriggerError(f"{method} {url.split('?')[0]}: {e.reason}") from None
+        except (http.client.HTTPException, OSError) as e:
+            if attempt or method != "GET":
+                raise TriggerError(f"{method} {url.split('?')[0]}: the connection broke "
+                                   f"({type(e).__name__})") from None
     if not raw:
         return {}
     try:
