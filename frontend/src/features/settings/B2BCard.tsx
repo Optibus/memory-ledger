@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "@/api/client";
 import { useAsync } from "@/hooks/useAsync";
 import {
@@ -11,7 +12,6 @@ import {
   Select,
   Spinner,
   StatusMessage,
-  TextArea,
   TextInput,
 } from "@/components";
 import type { BadgeTone } from "@/components";
@@ -71,7 +71,8 @@ export function B2BCard({ writable }: { writable: boolean }) {
       <p className="ml-settings__hint">
         Send a message to someone else&rsquo;s second brain, and receive theirs.
         Messages are encrypted with your key before they reach a broker. Saved
-        to <code>{config.path}</code>, mode 600.
+        to <code>{config.path}</code>, mode 600. Write and read them in{" "}
+        <Link to="/messages">Messages</Link>.
       </p>
 
       {!watching ? (
@@ -108,12 +109,6 @@ export function B2BCard({ writable }: { writable: boolean }) {
         allowed={status.data.allowed ?? []}
         writable={writable}
         onSaved={reload}
-      />
-      <SendPanel
-        peers={status.data.peers}
-        sent={status.data.sent}
-        writable={writable}
-        onSent={reload}
       />
 
       {!writable ? (
@@ -942,85 +937,6 @@ function AllowedPanel({
         </Button>
       </div>
       {out ? <StatusMessage tone={out.tone}>{out.text}</StatusMessage> : null}
-    </section>
-  );
-}
-
-// ---------------------------------------------------------------- sending
-function SendPanel({
-  peers,
-  sent,
-  writable,
-  onSent,
-}: {
-  peers: B2BPeer[];
-  sent: B2BStatus["sent"];
-  writable: boolean;
-  onSent: () => void;
-}) {
-  const { busy, out, run } = useWrite(onSent);
-  const live = peers.filter((p) => !p.removed_at);
-  const [to, setTo] = useState("");
-  const [text, setText] = useState("");
-  const target = to || live[0]?.peer_id || "";
-  const nameOf = (id: string) =>
-    peers.find((p) => p.peer_id === id)?.name || id.slice(0, 8);
-
-  const send = async () => {
-    if (await run(() => api.sendB2B(target, text), "Sent.")) setText("");
-  };
-
-  return (
-    <section className="ml-settings__preview" aria-label="Send">
-      <h3 className="ml-settings__h3">Send</h3>
-      <div className="ml-settings__grid">
-        <Field label="To">
-          {(id) => (
-            <Select
-              id={id}
-              value={target}
-              onChange={(e) => setTo(e.target.value)}
-              options={live.map((p) => ({
-                value: p.peer_id,
-                label: p.name || p.peer_id,
-              }))}
-            />
-          )}
-        </Field>
-      </div>
-      <Field label="Message">
-        {(id) => (
-          <TextArea
-            id={id}
-            rows={3}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-          />
-        )}
-      </Field>
-      <div className="ml-settings__foot">
-        <Button
-          variant="primary"
-          disabled={!writable || busy || !target || !text.trim()}
-          onClick={send}
-        >
-          {busy ? "sending…" : "Send message"}
-        </Button>
-      </div>
-      {out ? <StatusMessage tone={out.tone}>{out.text}</StatusMessage> : null}
-      {sent.length ? (
-        <>
-          <h3 className="ml-settings__h3">Recent</h3>
-          <ul className="ml-settings__list">
-            {sent.map((m) => (
-              <li key={m.id}>
-                <strong>{nameOf(m.peer_id)}</strong>{" "}
-                <span className="ml-settings__note">{m.sent_at}</span> {m.text}
-              </li>
-            ))}
-          </ul>
-        </>
-      ) : null}
     </section>
   );
 }

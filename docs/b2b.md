@@ -148,7 +148,8 @@ read from; never the private key.
 | `action`, `http`, `script` | `claude` | what a message runs, as for a [trigger event](trigger.md#actions) |
 
 The settings page (**Settings → B2B**) does all of this: identity, the broker
-list, peers with the person each is, and a send box.
+list, peers with the person each is, and the allowed list. Writing and
+reading messages is the **Messages** section.
 
 ### What a message runs
 
@@ -238,9 +239,8 @@ name or person, through that peer's broker. Every sent message is kept in
 Every message says whether a person wrote it. The flag (`human`) is sealed
 with the text, so the recipient sees the same thing the sender does. Only a
 message typed in the **Messages** chat is a person's. Everything else is
-automated: a headless session's reply, a script, `b2b.py send`, and the send box
-under **Settings → B2B**. A message from a brain older than the flag carries
-none, and reads as automated.
+automated: a headless session's reply, a script, and `b2b.py send`. A message
+from a brain older than the flag carries none, and reads as automated.
 
 ### The Messages section
 
