@@ -36,6 +36,7 @@ venv. Run from a plain `python3`, this command line re-runs itself there.
     python3 scripts/b2b.py status
     python3 scripts/b2b.py identity [--generate [--force] | --import KEY]
     python3 scripts/b2b.py config [--interval S] [--enable | --disable] [--do TEXT]
+                                  [--action claude|script] [--script NAME] [--arg A ...]
     python3 scripts/b2b.py brokers [--add URL [--name NAME] | --remove ID
                                     | --enable ID | --disable ID | --check ID]
     python3 scripts/b2b.py peers [--add USER_ID [--name NAME] [--broker ID]
@@ -887,6 +888,13 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("config", help="the poll interval, the switch, the run command")
     p.add_argument("--interval", type=int, default=None, help="poll every N seconds")
     p.add_argument("--do", default=None, help="the run command for a received message")
+    p.add_argument("--action", choices=trigger.ACTIONS, default=None,
+                   help="what a received message runs: a Claude session (the default), "
+                        "an API call or a script, as for the other triggers")
+    p.add_argument("--script", default=None,
+                   help="the script to run, a bare filename in <brain>/scripts")
+    p.add_argument("--arg", action="append", default=None,
+                   help="one argument for the script, variables filled in; repeat it")
     g = p.add_mutually_exclusive_group()
     g.add_argument("--enable", action="store_true")
     g.add_argument("--disable", action="store_true")
@@ -936,7 +944,11 @@ def main(argv: list[str] | None = None) -> int:
                    "private_key": config_summary(cfg)["private_key"]}
     elif args.cmd == "config":
         patch: dict[str, Any] = {k: v for k, v in (
-            ("poll_seconds", args.interval), ("do", args.do)) if v is not None}
+            ("poll_seconds", args.interval), ("do", args.do), ("action", args.action))
+            if v is not None}
+        if args.script is not None or args.arg is not None:
+            patch["script"] = {k: v for k, v in (("name", args.script), ("args", args.arg))
+                               if v is not None}
         if args.enable or args.disable:
             patch["enabled"] = bool(args.enable)
         res = save_config(patch) if patch else {"ok": True, "config": config_summary()}

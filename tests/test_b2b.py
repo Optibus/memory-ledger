@@ -47,6 +47,7 @@ except ImportError:
 
 import b2b  # noqa: E402
 import b2b_crypto as bc  # noqa: E402
+import graph  # noqa: E402
 import trigger  # noqa: E402
 
 FAILS: list[str] = []
@@ -238,13 +239,13 @@ def test_brain(base: str, base2: str) -> None:
        and b2b.load_config()["private_key"] not in json.dumps(summary))
     ck("generating again needs --force", b2b.generate_identity().get("ok") is False)
     ck("a broker needs a URL", b2b.add_broker("nope").get("ok") is False)
-    res = b2b.add_broker(base, "Home relay")
+    res = b2b.add_broker(base, "Team A relay")
     ck("a broker is added, with an id from its name",
-       res.get("ok") and res["config"]["brokers"][0]["id"] == "home-relay", str(res))
-    res = b2b.add_broker(base2, "Team relay")
+       res.get("ok") and res["config"]["brokers"][0]["id"] == "team-a-relay", str(res))
+    res = b2b.add_broker(base2, "Team B relay")
     ck("and a second one", res.get("ok") and len(res["config"]["brokers"]) == 2)
     ck("the same URL twice is refused", b2b.add_broker(base).get("ok") is False)
-    res = b2b.check_broker("home-relay")
+    res = b2b.check_broker("team-a-relay")
     ck("checking a broker logs in to it", res.get("ok") and res["session"]["open"], str(res))
     ck("an unknown broker cannot be checked", b2b.check_broker("nope").get("ok") is False)
     ck("an interval under the floor is refused",
@@ -266,29 +267,29 @@ def test_brain(base: str, base2: str) -> None:
         c.login()
     con = b2b.db()
     ana = b2b.graph.api_create_person(con, "Ana Souza")["node"]["id"]
-    ck("own id cannot be a peer", b2b.add_peer(con, me, broker_id="home-relay").get("ok")
+    ck("own id cannot be a peer", b2b.add_peer(con, me, broker_id="team-a-relay").get("ok")
        is False)
     ck("a malformed id is refused", b2b.add_peer(con, "not an id!").get("ok") is False)
     ck("with two brokers, a peer needs one named",
        "which broker" in b2b.add_peer(con, peer.id).get("error", ""))
     ck("an unknown person is refused", b2b.add_peer(
-        con, peer.id, broker_id="home-relay", person_id="Nobody Here").get("ok") is False)
-    res = b2b.add_peer(con, peer.id, broker_id="home-relay", person_id="Ana Souza")
+        con, peer.id, broker_id="team-a-relay", person_id="Nobody Here").get("ok") is False)
+    res = b2b.add_peer(con, peer.id, broker_id="team-a-relay", person_id="Ana Souza")
     ck("a peer connects, linked to a person by name, named after them",
        res.get("ok") and res["peer"]["person_id"] == ana
        and res["peer"]["name"] == "Ana Souza", str(res))
     ck("a peer on the other broker connects",
-       b2b.add_peer(con, far.id, "Bo", "team-relay").get("ok"))
+       b2b.add_peer(con, far.id, "Bo", "team-b-relay").get("ok"))
     ck("sending to someone who is not a peer is refused",
        b2b.send(stranger.id, "hey").get("ok") is False)
 
     print("\n== brain: send ==")
     res = b2b.send(ana, "lunch on friday?")
     ck("send reaches a peer by their person", res.get("ok") and res["to"] == peer.id
-       and res["broker"] == "home-relay", str(res))
+       and res["broker"] == "team-a-relay", str(res))
     res = b2b.send("bo", "and you?")
     ck("and the other peer through the other broker", res.get("ok")
-       and res["broker"] == "team-relay", str(res))
+       and res["broker"] == "team-b-relay", str(res))
     ck("both are logged", sorted(s["text"] for s in b2b.list_sent(con))
        == ["and you?", "lunch on friday?"])
     ck("the peer reads it, from this brain, signed",
@@ -321,7 +322,7 @@ def test_brain(base: str, base2: str) -> None:
     v = trigger.request_variables(req, trigger.load_config())
     ck("the b2b variables are filled in", v["b2b_peer_name"] == "Ana Souza"
        and v["b2b_peer_id"] == peer.id and v["b2b_person_id"] == ana
-       and v["b2b_broker"] == "home-relay" and v["trigger_source"] == "b2b")
+       and v["b2b_broker"] == "team-a-relay" and v["trigger_source"] == "b2b")
     ck("a second pass finds nothing: the relays deleted them",
        b2b.poll(dispatch=dispatched.append).get("received") == 0)
     forged = bc.seal(stranger.key, me, {"text": "tampered"})
@@ -350,7 +351,7 @@ def test_brain(base: str, base2: str) -> None:
     res = b2b.poll(dispatch=dispatched.append)
     ck("so their next one is blocked", len(res["blocked"]) == 1 and not res["queued"])
     ck("a peer added with allow off is not allowed", b2b.add_peer(
-        con, stranger.id, "Carla", "home-relay", allow=False).get("ok")
+        con, stranger.id, "Carla", "team-a-relay", allow=False).get("ok")
        and not b2b.is_allowed(con, stranger.id))
     b2b.remove_peer(con, stranger.id)
 
@@ -387,13 +388,45 @@ def test_brain(base: str, base2: str) -> None:
     ck("it is told how to answer, to that peer",
        f"send --to {peer.id}" in prompt and "From Ana Souza (" in prompt)
 
+    print("\n== brain: a script instead of Claude ==")
+    sdir = graph.scripts_dir()
+    sdir.mkdir(parents=True, exist_ok=True)
+    (sdir / "b2b-note.sh").write_text(
+        '#!/bin/sh\nprintf "%s|%s|%s\\n" "$1" "$BRAIN_TRIGGER_CONTENT" "$BRAIN_B2B_BROKER"'
+        ' >> "$SECOND_BRAIN_HOME/b2b-script.log"\n')
+    (sdir / "b2b-note.sh").chmod(0o755)
+    ck("a script with no name is refused", b2b.save_config(
+        {"action": "script", "script": {"name": ""}}).get("ok") is False)
+    ck("an unknown variable in its arguments is refused", b2b.save_config(
+        {"action": "script", "script": {"name": "b2b-note.sh", "args": ["{nope}"]}}).get("ok")
+       is False)
+    res = b2b.save_config({"action": "script",
+                           "script": {"name": "b2b-note.sh", "args": ["{b2b_peer_name}"]}})
+    ck("a received message can run a script", res.get("ok")
+       and res["config"]["action"] == "script"
+       and res["config"]["script"]["name"] == "b2b-note.sh", str(res))
+    n_calls = len((Path(HOME) / "claude-calls.jsonl").read_text().splitlines())
+    peer.send(me, "ship it")
+    res = b2b.poll(dispatch=dispatched.append)
+    sreq = trigger.get_request(con, res["queued"][0]) if res.get("queued") else {}
+    ck("the request carries the script action",
+       (sreq.get("meta") or {}).get("action", {}).get("type") == "script", str(sreq))
+    run = trigger.run_request(sreq.get("id", ""))
+    ck("it runs the script", run.get("ok") and run["status"] == "done", str(run))
+    log = (Path(HOME) / "b2b-script.log").read_text() if (Path(HOME) / "b2b-script.log").exists() else ""
+    ck("with the variables filled in", log.strip() == "Ana Souza|ship it|team-a-relay", log)
+    ck("and no Claude session", len((Path(HOME) / "claude-calls.jsonl").read_text()
+                                    .splitlines()) == n_calls)
+    ck("back to Claude", b2b.save_config({"action": "claude"}).get("ok")
+       and b2b.load_config()["action"] == "claude")
+
     print("\n== brain: a broker that forgot us, and one that is down ==")
     b2b._SESSIONS[(base, me)] = ("stale-token", time.time() + 3000)
     peer.send(me, "after a restart")
     res = b2b.poll(dispatch=dispatched.append)
     ck("a stale token logs in again by itself", res.get("ok") and len(res["queued"]) == 1,
        str(res))
-    ck("a broker disables", b2b.update_broker("team-relay", enabled=False).get("ok"))
+    ck("a broker disables", b2b.update_broker("team-b-relay", enabled=False).get("ok"))
     res = b2b.add_broker("http://127.0.0.1:9", "Down")
     res = b2b.poll(dispatch=dispatched.append)
     ck("a broker that is down is reported, the others still read",

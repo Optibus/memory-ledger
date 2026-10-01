@@ -118,11 +118,14 @@ venv (`scripts/requirements-server.txt`).
 
 ```bash
 python3 scripts/b2b.py identity --generate                          # the key pair; prints your user id
-python3 scripts/b2b.py brokers --add http://relay.example:8780 --name Home
-python3 scripts/b2b.py brokers --add https://b2b.team.example --name Team
-python3 scripts/b2b.py brokers --check home                         # log in now
+python3 scripts/b2b.py brokers --add https://b2b.team-a.example --name "Team A relay"
+python3 scripts/b2b.py brokers --add https://b2b.team-b.example --name "Team B relay"
+python3 scripts/b2b.py brokers --check team-a-relay                 # log in now
 python3 scripts/b2b.py config --interval 120 --enable               # poll every 2 minutes
-python3 scripts/b2b.py peers --add <their user id> --broker team --person "Ana Souza"
+python3 scripts/b2b.py config --action script --script b2b-note.sh \
+    --arg '{b2b_peer_name}' --arg '{trigger_content}'               # run a script, not Claude
+python3 scripts/b2b.py config --action claude                       # back to a Claude session
+python3 scripts/b2b.py peers --add <their user id> --broker team-b-relay --person "Ana Souza"
 python3 scripts/b2b.py allowed --add <their user id> --name Carla    # let a non-peer send to you
 python3 scripts/b2b.py allowed --remove <their user id>              # block them again
 python3 scripts/b2b.py allowed                                       # who is allowed, and who was
@@ -146,6 +149,22 @@ read from; never the private key.
 
 The settings page (**Settings → B2B**) does all of this: identity, the broker
 list, peers with the person each is, and a send box.
+
+### What a message runs
+
+Like every [trigger event](trigger.md#actions), a received message runs one of
+three actions, picked under **Receiving** or with `b2b.py config --action`:
+
+- **`claude`** (the default): a headless Claude session, told the run command
+  (`do`).
+- **`script`**: a file in `<brain>/scripts`, with the arguments you set,
+  variables filled in. No model is called. Every variable is also in the
+  script's environment as `BRAIN_<NAME>`: the message is
+  `BRAIN_TRIGGER_CONTENT`, the sender `BRAIN_B2B_PEER_ID`.
+- **`http`**: one API call, as for the other triggers.
+
+Only an allowed sender's message runs any of them; a blocked one runs nothing,
+whatever the action.
 
 ### Peers, and who gets through
 
