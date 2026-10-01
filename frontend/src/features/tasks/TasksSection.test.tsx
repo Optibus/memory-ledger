@@ -50,6 +50,45 @@ describe("Tasks", () => {
     );
   });
 
+  it("lets the author of a refused Jira mention tag the brain from then on, and can run that one", async () => {
+    resetWrites();
+    const refused = {
+      ...tasksFixture.tasks[3],
+      id: "t-refused",
+      source: "jira",
+      requester_name: "Isadora",
+      requester_id: "62f3dd0ce50f2f2a39573991",
+      status: "refused",
+      reason: "not-enabled",
+      name: "mention",
+      text: "@Gabriel can the brain help here?",
+    };
+    server.use(http.get("/api/tasks", () => HttpResponse.json({ ...tasksFixture, tasks: [refused] })));
+    const { user } = renderApp(<TasksSection />, { route: "/tasks", withMeta: false });
+    const card = within((await within(await screen.findByRole("list", { name: "tasks" })).findAllByRole("listitem"))[0]);
+    await user.click(card.getByRole("button", { name: "Allow Isadora to tag the brain" }));
+    await waitFor(() =>
+      expect(writes.filter((w) => w.path === "/api/trigger-person").map((w) => w.body)).toEqual([
+        { source: "jira", user_id: "62f3dd0ce50f2f2a39573991", enabled: true, name: "Isadora" },
+      ]),
+    );
+    expect(await card.findByText(/Isadora may now tag the brain/)).toBeInTheDocument();
+    await user.click(card.getByRole("button", { name: /^Reprocess/ }));
+    expect(card.getByText(/in a conversation nobody opened/)).toBeInTheDocument();
+    await user.click(card.getByRole("button", { name: "Run it" }));
+    await waitFor(() =>
+      expect(writes.filter((w) => w.path === "/api/trigger-reprocess").map((w) => w.body)).toEqual([
+        { request_id: "t-refused" },
+      ]),
+    );
+  });
+
+  it("offers no allow button on a task that was not refused", async () => {
+    renderApp(<TasksSection />, { route: "/tasks", withMeta: false });
+    await screen.findByRole("list", { name: "tasks" });
+    expect(screen.queryByRole("button", { name: /to tag the brain/ })).toBeNull();
+  });
+
   it("shows a running task's progress on its card", async () => {
     renderApp(<TasksSection />, { route: "/tasks", withMeta: false });
     expect(await screen.findByText(/3 tool calls · 1\/2 subagents running · 1 action \(last: reply\)/)).toBeInTheDocument();

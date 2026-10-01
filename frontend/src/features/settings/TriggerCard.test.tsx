@@ -230,6 +230,61 @@ describe("Triggers", () => {
     expect(slack.getByRole("button", { name: "Open channel" })).toBeDisabled();
   });
 
+  it("lists the Jira people who may tag the brain, each with its own switch", async () => {
+    const { user } = renderApp(<TriggerCard writable />, { route: "/settings" });
+    const jira = await panel("Jira");
+    const toggle = jira.getByRole("button", { name: /People who may tag the brain/ });
+    expect(within(toggle).getByText("1")).toBeInTheDocument();
+    await user.click(toggle);
+    const list = jira.getByRole("list", { name: "allowed people" });
+    const [isadora, former] = within(list).getAllByRole("checkbox", { name: "May tag the brain" });
+    expect(isadora).toBeChecked();
+    expect(former).not.toBeChecked();
+    expect(within(list).getByText(/off since 2026-09-10 by web-ui/)).toBeInTheDocument();
+    await user.click(isadora);
+    await waitFor(() =>
+      expect(sent("/api/trigger-person")).toContainEqual({
+        source: "jira", user_id: "62f3dd0ce50f2f2a39573991", enabled: false, name: "Isadora",
+      }),
+    );
+    await user.click(former);
+    await waitFor(() =>
+      expect(sent("/api/trigger-person")).toContainEqual({
+        source: "jira", user_id: "557058:aaaa-bbbb", enabled: true, name: "Former",
+      }),
+    );
+  });
+
+  it("finds a Jira person by name and allows them", async () => {
+    const { user } = renderApp(<TriggerCard writable />, { route: "/settings" });
+    const jira = await panel("Jira");
+    await user.click(jira.getByRole("button", { name: /People who may tag the brain/ }));
+    await user.type(jira.getByLabelText("Find a person"), "isa");
+    expect(jira.queryByRole("button", { name: "Allow this account id" })).toBeNull();
+    await user.click(jira.getByRole("button", { name: "Search Jira" }));
+    const found = await jira.findByRole("list", { name: "people found" });
+    expect(within(found).getByRole("button", { name: "Allow Isadora" })).toBeDisabled();
+    await user.click(within(found).getByRole("button", { name: "Allow Isaac" }));
+    await waitFor(() =>
+      expect(sent("/api/trigger-person")).toContainEqual({
+        source: "jira", user_id: "557058:cccc-dddd", enabled: true, name: "Isaac",
+      }),
+    );
+  });
+
+  it("allows a pasted account id without a search", async () => {
+    const { user } = renderApp(<TriggerCard writable />, { route: "/settings" });
+    const jira = await panel("Jira");
+    await user.click(jira.getByRole("button", { name: /People who may tag the brain/ }));
+    await user.type(jira.getByLabelText("Find a person"), "712020:0f1e2d3c-4b5a");
+    await user.click(jira.getByRole("button", { name: "Allow this account id" }));
+    await waitFor(() =>
+      expect(sent("/api/trigger-person")).toContainEqual({
+        source: "jira", user_id: "712020:0f1e2d3c-4b5a", enabled: true,
+      }),
+    );
+  });
+
   it("lists the newest requests", async () => {
     renderApp(<TriggerCard writable />, { route: "/settings" });
     const list = await screen.findByRole("list", { name: "recent requests" });

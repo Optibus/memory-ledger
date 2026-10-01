@@ -67,9 +67,10 @@ SOURCES = ("slack", "jira", "github")
 # `refused` never reached a session, because the conversation was not open;
 # `blocked` is a B2B message from a brain that is not on the allowed list.
 FINISHED = ("done", "declined", "failed", "timeout", "interrupted", "refused", "blocked")
-# What `reprocess` may put back in the queue: a run that went wrong, or a
-# message the allowed list stopped.
-REPROCESSABLE = ("blocked", "failed", "timeout", "interrupted")
+# What `reprocess` may put back in the queue: a run that went wrong, a message
+# the allowed list stopped, or a mention the gate refused. The last two are the
+# owner vouching for that one request.
+REPROCESSABLE = ("blocked", "refused", "failed", "timeout", "interrupted")
 STATUSES = ("queued", "running") + FINISHED
 
 # Actions a node keeps a copy of. The table keeps every one; the node is what
@@ -365,6 +366,16 @@ CREATE TABLE IF NOT EXISTS trigger_channel (
     removed_by  TEXT NOT NULL DEFAULT '',
     removed_at  TEXT NOT NULL DEFAULT ''     -- kept, never deleted: '' = open
 );
+CREATE TABLE IF NOT EXISTS trigger_person (
+    source      TEXT NOT NULL,              -- jira
+    user_id     TEXT NOT NULL,              -- the source's own id: a Jira accountId
+    name        TEXT NOT NULL DEFAULT '',
+    added_by    TEXT NOT NULL DEFAULT '',
+    added_at    TEXT NOT NULL,
+    removed_by  TEXT NOT NULL DEFAULT '',
+    removed_at  TEXT NOT NULL DEFAULT '',   -- kept, never deleted: '' = allowed
+    PRIMARY KEY (source, user_id)
+);
 CREATE TABLE IF NOT EXISTS trigger_checkpoint (
     source  TEXT PRIMARY KEY,
     cursor  TEXT NOT NULL,
@@ -617,6 +628,94 @@ def remove_channel(con, channel: str, by: str = "") -> dict:
     return {"ok": True, "channel": dict(con.execute(
         "SELECT * FROM trigger_channel WHERE channel_id=?", (cid,)).fetchone()),
         "enabled": False, "scope": f"slack:{cid}"}
+
+
+# The people who may tag the brain anywhere on a source, as an open channel
+# would let them: a Jira colleague, so you need not open each issue for them.
+# Slack keeps its allowed and blocked lists in the config file instead.
+PERSON_SOURCES = ("jira",)
+JIRA_ACCOUNT_RE = r"[A-Za-z0-9:_-]{3,128}"
+
+
+def list_people(con, source: str = "") -> dict:
+    rows = [dict(r) for r in con.execute(
+        "SELECT * FROM trigger_person" + (" WHERE source=?" if source else "")
+        + " ORDER BY removed_at != '', lower(name), user_id", (source,) if source else ())]
+    return {"active": [r for r in rows if not r["removed_at"]],
+            "removed": [r for r in rows if r["removed_at"]]}
+
+
+def person_allowed(con, source: str, user_id: str) -> bool:
+    return bool(user_id) and con.execute(
+        "SELECT 1 FROM trigger_person WHERE source=? AND user_id=? AND removed_at=''",
+        (source, user_id)).fetchone() is not None
+
+
+def _person_key(source: str, user_id: str) -> tuple[str, str, str]:
+    """(source, user_id, error). Only an id the source could have issued."""
+    source, uid = (source or "").strip().lower(), (user_id or "").strip()
+    if source not in PERSON_SOURCES:
+        return source, uid, f"people are allowed per source: {', '.join(PERSON_SOURCES)}"
+    if not re.fullmatch(JIRA_ACCOUNT_RE, uid):
+        return source, uid, "a Jira person is their account id, as a refused task shows it"
+    return source, uid, ""
+
+
+def allow_person(con, source: str, user_id: str, name: str = "", by: str = "",
+                 cfg: dict | None = None) -> dict:
+    """Let one person tag the brain in any conversation on `source`. Allowing a
+    removed one restores its row; a name given replaces the stored one."""
+    source, uid, err = _person_key(source, user_id)
+    if err:
+        return {"ok": False, "error": err}
+    owner = str(((cfg or {}).get(source) or {}).get("owner_account_id") or "")
+    if owner and uid == owner:
+        return {"ok": False, "error": "that is you: your own mentions always run"}
+    name = (name or "").strip()[:80]
+    con.execute(
+        "INSERT INTO trigger_person(source, user_id, name, added_by, added_at) VALUES(?,?,?,?,?) "
+        "ON CONFLICT(source, user_id) DO UPDATE SET removed_at='', removed_by='', "
+        "added_by=excluded.added_by, added_at=excluded.added_at, "
+        "name=CASE WHEN excluded.name != '' THEN excluded.name ELSE trigger_person.name END",
+        (source, uid, name, by, now_iso()))
+    con.commit()
+    row = dict(con.execute("SELECT * FROM trigger_person WHERE source=? AND user_id=?",
+                           (source, uid)).fetchone())
+    return {"ok": True, "person": row, "enabled": True}
+
+
+def find_people(cfg: dict, source: str, query: str) -> dict:
+    """Who `query` names on `source`, to pick from instead of typing an id.
+    Reads only; a person is allowed with `allow_person`."""
+    query = (query or "").strip()[:100]
+    if source not in PERSON_SOURCES:
+        return {"ok": False, "error": f"people are allowed per source: {', '.join(PERSON_SOURCES)}"}
+    if len(query) < 2:
+        return {"ok": False, "error": "type at least two letters of a name or an email"}
+    jira = Jira(cfg)
+    missing = jira.ready()
+    if missing:
+        return {"ok": False, "error": f"Jira is not set up: {missing}"}
+    try:
+        return {"ok": True, "people": jira.find_people(query)}
+    except TriggerError as e:
+        return {"ok": False, "error": str(e)}
+
+
+def disallow_person(con, source: str, user_id: str, by: str = "") -> dict:
+    """Take one person off again. The row stays, marked removed, as history."""
+    source, uid, err = _person_key(source, user_id)
+    if err:
+        return {"ok": False, "error": err}
+    cur = con.execute("UPDATE trigger_person SET removed_at=?, removed_by=? "
+                      "WHERE source=? AND user_id=? AND removed_at=''",
+                      (now_iso(), by, source, uid))
+    con.commit()
+    if not cur.rowcount:
+        return {"ok": False, "error": f"{uid} is not allowed on {source}"}
+    row = dict(con.execute("SELECT * FROM trigger_person WHERE source=? AND user_id=?",
+                           (source, uid)).fetchone())
+    return {"ok": True, "person": row, "enabled": False}
 
 
 def gate_enabled(con, *scopes) -> bool:
@@ -1178,9 +1277,12 @@ def intake(event: dict, cfg: dict, *, notify=None) -> dict:
     return res
 
 
-def access_of(cfg: dict, source: str, user_id: str) -> str:
-    """"blocked", "allowed" or "" for one requester, from the source's lists.
-    Only Slack has them; the owner is decided before this is asked."""
+def access_of(cfg: dict, source: str, user_id: str, con=None) -> str:
+    """"blocked", "allowed" or "" for one requester, from the source's lists:
+    Slack's in the config file, the others' in `trigger_person`. The owner is
+    decided before this is asked."""
+    if source in PERSON_SOURCES:
+        return "allowed" if con is not None and person_allowed(con, source, user_id) else ""
     sc = cfg.get(source) or {}
     uid = (user_id or "").strip().upper()
     if not uid or source != "slack":
@@ -1214,7 +1316,7 @@ def _intake(event: dict, cfg: dict, core: str, notify) -> dict:
                      request_id=req["id"])
         return {"action": "run", "request_id": req["id"], "enabled_now": event.get("opens", True),
                 "why": "owner"}
-    access = access_of(cfg, event["source"], event.get("requester_id", ""))
+    access = access_of(cfg, event["source"], event.get("requester_id", ""), con)
     if access == "blocked" or event.get("owner_only"):
         return _refuse(con, event, cfg, notify, "not_allowed",
                        "blocked" if access == "blocked" else "owner-only command")
@@ -1967,7 +2069,7 @@ def decline(con, request_id: str, reason: str, rule: str = "", cfg: dict | None 
 
 
 def reprocess(con, request_id: str, dispatch=None, by: str = "") -> dict:
-    """Put a blocked or failed request back in the queue, and hand it to
+    """Put a blocked, refused or failed request back in the queue, and hand it to
     `dispatch`. What the last run left (its session, result, exit code) is
     cleared; the actions it logged stay, and a `reprocess` action says who
     asked and what the request was before."""
@@ -2354,6 +2456,16 @@ class Jira:
         if not self._owner:
             self._owner = self.call("GET", "/rest/api/3/myself").get("accountId", "")
         return self._owner
+
+    def find_people(self, query: str, limit: int = 10) -> list:
+        """Active human accounts whose name or email matches `query`."""
+        res = self.call("GET", "/rest/api/3/user/search?" + urllib.parse.urlencode(
+            {"query": query, "maxResults": limit}))
+        return [{"user_id": u.get("accountId", ""), "name": u.get("displayName", ""),
+                 "email": u.get("emailAddress", "")}
+                for u in (res if isinstance(res, list) else [])
+                if u.get("accountId") and u.get("active", True)
+                and u.get("accountType", "atlassian") == "atlassian"]
 
     def search(self, jql: str, max_pages: int = 10, expand: str = ""):
         token = ""
@@ -3313,7 +3425,7 @@ def status_payload(limit: int = 10) -> dict:
     checkpoints = {r["source"]: {"cursor": r["cursor"], "updated": r["updated"]}
                    for r in con.execute("SELECT * FROM trigger_checkpoint")}
     return {"ok": True, "config": config_summary(cfg), "counts": counts,
-            "enabled_scopes": gates, "channels": list_channels(con),
+            "enabled_scopes": gates, "channels": list_channels(con), "people": list_people(con),
             "checkpoints": checkpoints, "recent": list_requests(con, limit)}
 
 
@@ -3511,6 +3623,12 @@ def main(argv=None) -> int:
     g.add_argument("--add", default="", help="a channel id or a link to it")
     g.add_argument("--remove", default="")
     p.add_argument("--name", default="")
+    p = sub.add_parser("people", help="the people who may tag the brain anywhere on a source")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--add", default="", help="their account id")
+    g.add_argument("--remove", default="")
+    p.add_argument("--source", default="jira", choices=PERSON_SOURCES)
+    p.add_argument("--name", default="")
     p = sub.add_parser("decline", help="decline a request that breaks a rule; prints the notice")
     p.add_argument("--request", default=os.environ.get("MEMORY_LEDGER_REQUEST_ID", ""))
     p.add_argument("--reason", required=True)
@@ -3569,6 +3687,16 @@ def main(argv=None) -> int:
             res = remove_channel(con, args.remove, by="cli")
         else:
             res = {"ok": True, **list_channels(con)}
+        out(res)
+        return 0 if res["ok"] else 1
+    elif args.cmd == "people":
+        con = db()
+        if args.add:
+            res = allow_person(con, args.source, args.add, args.name, by="cli", cfg=load_config())
+        elif args.remove:
+            res = disallow_person(con, args.source, args.remove, by="cli")
+        else:
+            res = {"ok": True, **list_people(con, args.source)}
         out(res)
         return 0 if res["ok"] else 1
     elif args.cmd == "decline":

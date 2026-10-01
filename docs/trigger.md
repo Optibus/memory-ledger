@@ -59,6 +59,7 @@ A conversation is **closed until you open it**.
 | someone else | not enabled | **refused**: nothing runs, and one short notice says so |
 | someone else, in a DM with you (`slack.dms`) | a DM you opened with your own tag, or any DM with `slack.dms_open` | runs, and answers in the DM as you |
 | Slack: someone on `allowed_users` | anywhere | runs, and opens nothing for anyone else |
+| Jira: someone on the people list | any issue, with the marker and a mention of you | runs, and opens nothing for anyone else |
 | Slack: someone on `blocked_users` | anywhere, open channels included | **refused** with the not-allowed notice. The owner is never blocked |
 | Slack: someone else's command | wherever the gate lets them in | runs only if the command is marked `anyone`; else **refused** with the not-allowed notice |
 | a change you switched on (GitHub, Jira, Slack) | anywhere the token sees | runs, **as a subscription**. It opens nothing for anyone else, even when you made the change |
@@ -68,7 +69,11 @@ A conversation is a Slack thread (`slack:<channel>:<thread_ts>`), a Jira issue
 **whole Slack channel**. Threads and issues are opened by
 your own mention and live in `trigger_gate`. Whole channels are a list you keep
 by hand, in `trigger_channel`: an open channel runs everyone's mentions in every
-thread. Both are in `graph.db`, so they survive restarts.
+thread. Jira's equivalent is per person, not per issue: `trigger_person` lists
+the colleagues whose marked mentions of you run on any issue (Settings → Jira →
+*People who may tag the brain*, a switch each, or the **Allow** button on their
+refused task in Tasks; `trigger.py people --add <accountId>` from the CLI). All
+of them are in `graph.db`, so they survive restarts.
 
 **Deciding costs nothing.** Who may summon the brain is decided by the engine
 from the gate, the lists and the command's `anyone` flag, before any session
@@ -555,6 +560,7 @@ Two tables in `graph.db`, and one node per request:
 | `trigger_request` | one row per mention or GitHub event noticed: `id` (UUID), `source`, `event_id`, `scope`, requester id and name, permalink, text, `received_at`, `status` (`queued` → `running` → `done` / `declined` / `failed` / `timeout` / `interrupted`, or `refused`, or `blocked` for a B2B message from a brain off the allowed list), exit code, result, stderr, cost, and what ran: `session_id`, `command` (JSON argv; for an `http` action only the method and URL, never the headers) and `cwd` |
 | `trigger_action` | append-only: every action taken for a request — `kind` (`reply`, `reply-dm`, `declined`, `refusal-notice`, `refusal-notice-dm`, `jira-transition`, …), `target`, `detail`, `at` |
 | `trigger_channel` | the Slack channels open to everyone, with who opened and closed each and when. Closed ones are kept |
+| `trigger_person` | the Jira people who may tag the brain on any issue, keyed by `(source, user_id)`, with who allowed and took off each and when. Switched-off ones are kept |
 | a `request` node | the same request in the graph, so `recall "who asked me to …"` finds it, and it mirrors to neo4j like any other node |
 
 Refused mentions are logged too. A mention that was never logged never ran.

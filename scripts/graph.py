@@ -704,6 +704,7 @@ MIRROR_TABLES = {
     "trigger_action": ("id",),
     "trigger_gate": ("scope",),
     "trigger_channel": ("channel_id",),
+    "trigger_person": ("source", "user_id"),
     "trigger_checkpoint": ("source",),
 }
 

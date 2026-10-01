@@ -252,6 +252,14 @@ class TriggerChannel(Body):
                                            "(the row is kept, marked removed).")
 
 
+class TriggerPerson(Body):
+    source: Text = T("Whose list: `jira` (the default).")
+    user_id: Text = T("Their id on that source: a Jira account id.")
+    name: Text = T("How to show them. Optional; a name given replaces the stored one.")
+    enabled: Any = Field(None, description="true lets them tag the brain anywhere on the source, "
+                                           "false takes them off again (the row is kept).")
+
+
 class TriggerDecline(Body):
     request_id: Text = T("The request the session will not do.")
     reason: Text = T("One short line, safe to show the requester.")

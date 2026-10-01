@@ -544,8 +544,28 @@ def trigger_channel(data: m.TriggerChannel = body(m.TriggerChannel)):
     return reply(res)
 
 
+@router.post("/trigger-person", tags=["trigger"], summary="Let a person tag the brain, or stop them",
+             description="An allowed person's mentions run in every conversation on that source, "
+                         "as if each were open: no need to open issue by issue. Only `jira` keeps "
+                         "this list; Slack's is `slack.allowed_users`. Taking someone off keeps "
+                         "their row, marked removed.")
+def trigger_person(data: m.TriggerPerson = body(m.TriggerPerson)):
+    if not isinstance(data.enabled, bool):
+        return reply({"ok": False, "error": "enabled must be true or false"})
+    con = trigger.db()
+    source = clip(data.source, 20) or "jira"
+    if data.enabled:
+        res = trigger.allow_person(con, source, clip(data.user_id, 200), clip(data.name, 80),
+                                   by="web-ui", cfg=trigger.load_config())
+    else:
+        res = trigger.disallow_person(con, source, clip(data.user_id, 200), by="web-ui")
+    if res.get("ok"):
+        res["people"] = trigger.list_people(con)
+    return reply(res)
+
+
 @router.post("/trigger-reprocess", tags=["trigger"], summary="Run a blocked or failed request again",
-             description="Puts a `blocked`, `failed`, `timeout` or `interrupted` request back "
+             description="Puts a `blocked`, `refused`, `failed`, `timeout` or `interrupted` request back "
                          "in the queue and runs it now, with the action it was stamped with. "
                          "What the last run left is cleared; its logged actions stay, and a "
                          "`reprocess` action is added.")

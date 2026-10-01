@@ -4,7 +4,7 @@ import { usePolling } from "@/hooks/usePolling";
 import { Badge, Button, Spinner, StatusMessage } from "@/components";
 import { formatDate } from "@/lib/format";
 import type { ActivityEvent, TaskActivity, TaskDetail, TriggerTask, TranscriptEvent } from "@/api/types";
-import { ACTIVE, REPROCESSABLE, ago, duration, requesterOf } from "./filter";
+import { ACTIVE, PERSON_SOURCES, REPROCESSABLE, ago, duration, requesterOf } from "./filter";
 
 export interface TaskRunCardProps {
   task: TriggerTask;
@@ -94,14 +94,40 @@ export function TaskRunCard({ task, open, onToggle, now, onChanged }: TaskRunCar
   );
 }
 
-/** Run a blocked or failed task again, with the action it was stamped with.
- * A blocked one is a B2B message from someone off the allowed list: running it
- * is the owner vouching for that one message, so it asks first. */
+/** Run a blocked, refused or failed task again, with the action it was
+ * stamped with. A blocked one is a B2B message from someone off the allowed
+ * list, a refused one a mention in a conversation nobody opened: running
+ * either is the owner vouching for that one request, so it asks first.
+ *
+ * A refused Jira mention also offers to let its author in for good, so their
+ * next one runs on any issue without this. */
 function Reprocess({ task, onDone }: { task: TriggerTask; onDone?: () => void }) {
   const [busy, setBusy] = useState(false);
   const [sure, setSure] = useState(false);
   const [err, setErr] = useState("");
-  const blocked = task.status === "blocked";
+  const [allowed, setAllowed] = useState(false);
+  const blocked = task.status === "blocked" || task.status === "refused";
+  const canAllow = task.status === "refused" && !task.is_owner && !!task.requester_id
+    && PERSON_SOURCES.has(task.source);
+
+  const allow = async () => {
+    setBusy(true);
+    setErr("");
+    try {
+      await api.setTriggerPerson({
+        source: task.source,
+        user_id: task.requester_id,
+        enabled: true,
+        ...(task.requester_name ? { name: task.requester_name } : {}),
+      });
+      setAllowed(true);
+      onDone?.();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const go = async () => {
     setBusy(true);
@@ -122,7 +148,9 @@ function Reprocess({ task, onDone }: { task: TriggerTask; onDone?: () => void })
       {blocked && sure ? (
         <>
           <span className="ml-run__dim">
-            Run this message from {requesterOf(task)}, who is not on the allowed list?
+            {task.status === "refused"
+              ? `Run this mention from ${requesterOf(task)}, in a conversation nobody opened?`
+              : `Run this message from ${requesterOf(task)}, who is not on the allowed list?`}
           </span>
           <Button size="sm" variant="primary" disabled={busy} onClick={go}>Run it</Button>
           <Button size="sm" disabled={busy} onClick={() => setSure(false)}>Cancel</Button>
@@ -137,6 +165,15 @@ function Reprocess({ task, onDone }: { task: TriggerTask; onDone?: () => void })
           {busy ? "Reprocessing…" : "Reprocess"}
         </Button>
       )}
+      {canAllow && !sure ? (
+        allowed ? (
+          <span className="ml-run__dim">{requesterOf(task)} may now tag the brain on any issue.</span>
+        ) : (
+          <Button size="sm" disabled={busy} onClick={allow} aria-label={`Allow ${requesterOf(task)} to tag the brain`}>
+            Allow {requesterOf(task)} to tag the brain
+          </Button>
+        )
+      ) : null}
       {err ? <StatusMessage tone="error">{err}</StatusMessage> : null}
     </div>
   );

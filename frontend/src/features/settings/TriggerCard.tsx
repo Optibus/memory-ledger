@@ -15,6 +15,9 @@ import type {
   TriggerCheck,
   TriggerConfig,
   TriggerEventSetting,
+  TriggerPeople,
+  TriggerPersonMatch,
+  TriggerPersonRow,
   TriggerSecret,
   TriggerService,
   TriggerStatus,
@@ -90,7 +93,14 @@ export function TriggerCard({ writable }: { writable: boolean }) {
         onSaved={reload}
         scripts={scripts}
       />
-      <JiraPanel config={config} watcher={runtime.jira} writable={writable} onSaved={reload} scripts={scripts} />
+      <JiraPanel
+        config={config}
+        people={status.data.people}
+        watcher={runtime.jira}
+        writable={writable}
+        onSaved={reload}
+        scripts={scripts}
+      />
       <GitHubPanel config={config} watcher={runtime.github} writable={writable} onSaved={reload} scripts={scripts} />
       <ClaudePanel config={config} writable={writable} onSaved={reload} />
       <Recent status={status.data} />
@@ -719,12 +729,14 @@ const JIRA_EVENTS: EventKindInfo<JiraEventKind>[] = [
 
 function JiraPanel({
   config,
+  people,
   watcher,
   writable,
   onSaved,
   scripts,
 }: {
   config: TriggerConfig;
+  people: TriggerPeople;
   watcher: TriggerWatcher;
   writable: boolean;
   onSaved: () => void;
@@ -783,18 +795,21 @@ function JiraPanel({
       onSave={submit}
       out={out}
       after={
-        <EventsEditor
-          source="jira"
-          title="Jira events"
-          intro="A change counts on the issues the watch JQL above picks. Each is its own switch, with what happens when it does."
-          kinds={JIRA_EVENTS}
-          events={events}
-          onChange={setEvent}
-          variables={config.variables}
-          writable={writable}
-          busy={busy}
-          scripts={scripts}
-        />
+        <>
+          <PeopleCard people={people} writable={writable} onChanged={onSaved} />
+          <EventsEditor
+            source="jira"
+            title="Jira events"
+            intro="A change counts on the issues the watch JQL above picks. Each is its own switch, with what happens when it does."
+            kinds={JIRA_EVENTS}
+            events={events}
+            onChange={setEvent}
+            variables={config.variables}
+            writable={writable}
+            busy={busy}
+            scripts={scripts}
+          />
+        </>
       }
     >
       {txt("Site URL", baseUrl, setBaseUrl, "Your Atlassian site.", "https://your-site.atlassian.net")}
@@ -1160,6 +1175,181 @@ export function ChannelsCard({
       ) : null}
       {out ? <StatusMessage tone={out.tone}>{out.text}</StatusMessage> : null}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------- people
+/** What a pasted Jira account id looks like: long, with digits, so a name never reads as one. */
+const JIRA_ACCOUNT = /^(?=.*\d)[A-Za-z0-9:_-]{10,128}$/;
+
+/**
+ * The Jira people who may tag the brain on any issue, without your opening
+ * each one first. Their comment still needs the marker and a mention of you.
+ *
+ * One switch per person: off keeps the row, so turning someone back on is one
+ * click and the list is also the history of who was let in.
+ */
+export function PeopleCard({
+  people,
+  writable,
+  onChanged,
+}: {
+  people: TriggerPeople;
+  writable: boolean;
+  onChanged: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [found, setFound] = useState<TriggerPersonMatch[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [out, setOut] = useState<Out>(null);
+  const rows = [...people.active, ...people.removed];
+  const known = new Set(people.active.map((p) => p.user_id));
+
+  const change = async (user_id: string, enabled: boolean, name = "") => {
+    setBusy(true);
+    setOut(null);
+    try {
+      await api.setTriggerPerson({ user_id, enabled, ...(name ? { name } : {}) });
+      const shown = name || user_id;
+      setOut({ text: enabled ? `${shown} may tag the brain.` : `${shown} may no longer tag the brain.`, tone: "success" });
+      onChanged();
+    } catch (err) {
+      setOut({ text: err instanceof Error ? err.message : String(err), tone: "error" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const search = async () => {
+    setBusy(true);
+    setOut(null);
+    try {
+      setFound((await api.findTriggerPeople(query.trim())).people);
+    } catch (err) {
+      setFound(null);
+      setOut({ text: err instanceof Error ? err.message : String(err), tone: "error" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const typedId = JIRA_ACCOUNT.test(query.trim()) ? query.trim() : "";
+  return (
+    <div className="ml-settings__preview ml-trigger__channels">
+      <button
+        type="button"
+        className="ml-trigger__toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span aria-hidden="true">{open ? "▾" : "▸"}</span> People who may tag the brain{" "}
+        <Badge tone={people.active.length ? "accent" : "neutral"}>{people.active.length}</Badge>
+      </button>
+      <p className="ml-settings__hint">
+        Their marked comments that mention you run on any issue, as if you had opened it. Anyone
+        else&rsquo;s run only on an issue you opened with your own marked comment.
+      </p>
+
+      {open ? (
+        <>
+          {rows.length ? (
+            <ul className="ml-trigger__rows" aria-label="allowed people">
+              {rows.map((p) => (
+                <PersonRow key={p.user_id} row={p}>
+                  <Checkbox
+                    label="May tag the brain"
+                    checked={!p.removed_at}
+                    disabled={!writable || busy}
+                    onChange={(v) => change(p.user_id, v, p.name)}
+                  />
+                </PersonRow>
+              ))}
+            </ul>
+          ) : (
+            <p className="ml-settings__hint">
+              Nobody yet. Find someone below, or allow them from their refused task in Tasks.
+            </p>
+          )}
+
+          <div className="ml-settings__grid">
+            <Field label="Find a person" hint="Part of their name or email, or paste their account id.">
+              {(id) => (
+                <TextInput
+                  id={id}
+                  value={query}
+                  placeholder="Isadora, or 62f3dd0ce50f…"
+                  onChange={(e) => {
+                    setQuery(e.target.value);
+                    setFound(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && query.trim().length >= 2) void search();
+                  }}
+                />
+              )}
+            </Field>
+          </div>
+          <div className="ml-settings__foot">
+            <Button disabled={!writable || busy || query.trim().length < 2} onClick={search}>
+              Search Jira
+            </Button>
+            {typedId ? (
+              <Button
+                disabled={!writable || busy || known.has(typedId)}
+                onClick={() => change(typedId, true)}
+              >
+                Allow this account id
+              </Button>
+            ) : null}
+          </div>
+          {found ? (
+            found.length ? (
+              <ul className="ml-trigger__rows" aria-label="people found">
+                {found.map((m) => (
+                  <li key={m.user_id} className="ml-trigger__row">
+                    <span>
+                      <strong>{m.name || m.user_id}</strong> {m.email ? <span className="ml-settings__note">{m.email}</span> : null}
+                    </span>
+                    <code>{m.user_id}</code>
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      disabled={!writable || busy || known.has(m.user_id)}
+                      onClick={() => change(m.user_id, true, m.name)}
+                      aria-label={`Allow ${m.name || m.user_id}`}
+                    >
+                      {known.has(m.user_id) ? "Allowed" : "Allow"}
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="ml-settings__hint">Nobody in Jira matches that.</p>
+            )
+          ) : null}
+        </>
+      ) : null}
+      {out ? <StatusMessage tone={out.tone}>{out.text}</StatusMessage> : null}
+    </div>
+  );
+}
+
+function PersonRow({ row, children }: { row: TriggerPersonRow; children: ReactNode }) {
+  const off = !!row.removed_at;
+  const when = (off ? row.removed_at : row.added_at).slice(0, 10);
+  const who = off ? row.removed_by : row.added_by;
+  return (
+    <li className="ml-trigger__row">
+      <span>
+        <strong>{row.name || "unnamed"}</strong> <code>{row.user_id}</code>
+      </span>
+      <span className="ml-settings__note">
+        {off ? "off since" : "allowed"} {when}
+        {who ? ` by ${who}` : ""}
+      </span>
+      {children}
+    </li>
   );
 }
 

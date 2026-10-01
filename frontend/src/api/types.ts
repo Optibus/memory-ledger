@@ -842,6 +842,30 @@ export interface TriggerChannels {
   removed: TriggerChannelRow[];
 }
 
+/** Someone who may tag the brain in any conversation on a source. */
+export interface TriggerPersonRow {
+  source: "jira" | string;
+  /** Their id on the source: a Jira account id. */
+  user_id: string;
+  name: string;
+  added_by: string;
+  added_at: string;
+  removed_by: string;
+  removed_at: string;
+}
+
+export interface TriggerPeople {
+  active: TriggerPersonRow[];
+  removed: TriggerPersonRow[];
+}
+
+/** A Jira account the search found, to allow. */
+export interface TriggerPersonMatch {
+  user_id: string;
+  name: string;
+  email: string;
+}
+
 export interface TriggerStatus extends Envelope {
   config: TriggerConfig;
   runtime: TriggerRuntime;
@@ -850,6 +874,7 @@ export interface TriggerStatus extends Envelope {
   counts: Record<string, number>;
   enabled_scopes: { scope: string; by: string; at: string }[];
   channels: TriggerChannels;
+  people: TriggerPeople;
   recent: TriggerRequestRow[];
 }
 

@@ -778,6 +778,58 @@ def test_jira(cfg):
        len(posted) == 1 and "\"em\"" in sig and "sent by Owner's second brain" in sig
        and "rebro" not in sig)
 
+    # An allowed person: their marked mentions run on any issue, none opened.
+    ck("a person is allowed by their account id",
+       trigger.allow_person(con, "jira", "acc-x", "X", by="test", cfg=cfg)["ok"])
+    ck("an id Jira could not have issued is refused",
+       trigger.allow_person(con, "jira", "x y", by="test")["ok"] is False)
+    ck("only Jira keeps a people list", trigger.allow_person(con, "slack", "U0ABC")["ok"] is False)
+    ck("the owner is never on it",
+       trigger.allow_person(con, "jira", "acc-owner", cfg={"jira": {"owner_account_id": "acc-owner"}}
+                            )["ok"] is False)
+    comments3 = {"comments": [
+        {"id": "21", "created": ts(20), "author": {"accountId": "acc-x", "displayName": "X"},
+         "body": adf(("m", "acc-owner", "@Owner"), " @cérebro please")}]}
+    fake.on("POST", base + "/rest/api/3/search/jql",
+            lambda body, **_: {"issues": [{"key": "PROJ-9"}], "isLast": True})
+    fake.on("GET", base + "/rest/api/3/issue/PROJ-9/comment", lambda **_: comments3)
+    posted9 = []
+    fake.on("POST", base + "/rest/api/3/issue/PROJ-9/comment",
+            lambda body, **_: posted9.append(body) or {"id": "22"})
+    trigger.jira_poll(cfg, dispatch, now=now + timedelta(minutes=21), jira=jira)
+    r = {x["event_id"]: x for x in trigger.list_requests(con, 100)}["PROJ-9:21"]
+    ck("an allowed person's mention runs on an issue nobody opened, with no refusal posted",
+       r["status"] == "queued" and r["reason"] == "allowed user" and not posted9, r["reason"])
+    ck("and opens nothing for anyone else", not trigger.gate_enabled(con, "jira:PROJ-9"))
+    res = trigger.disallow_person(con, "jira", "acc-x", by="test")
+    lst = trigger.list_people(con, "jira")
+    ck("taking them off keeps the row, marked removed, with who",
+       res["ok"] and not lst["active"] and lst["removed"][0]["removed_by"] == "test"
+       and not trigger.person_allowed(con, "jira", "acc-x"))
+    ck("taking off someone not on it says so", trigger.disallow_person(con, "jira", "acc-x")["ok"] is False)
+    ck("allowing them again restores the same row",
+       trigger.allow_person(con, "jira", "acc-x", by="again")["ok"]
+       and con.execute("SELECT count(*) FROM trigger_person").fetchone()[0] == 1
+       and trigger.list_people(con)["active"][0]["name"] == "X")
+    ck("status carries the list", trigger.status_payload()["people"]["active"][0]["user_id"] == "acc-x")
+    trigger.disallow_person(con, "jira", "acc-x")
+
+    refused = trigger.list_requests(con, 100)
+    rid8 = next(x["id"] for x in refused if x["event_id"] == "PROJ-8:11")
+    res = trigger.reprocess(con, rid8)
+    ck("a refused request can be reprocessed: the owner vouching for that one",
+       res["ok"] and res["was"] == "refused" and trigger.get_request(con, rid8)["status"] == "queued")
+
+    fake.on("GET", base + "/rest/api/3/user/search",
+            lambda **_: [{"accountId": "acc-i", "displayName": "Isa", "active": True,
+                          "accountType": "atlassian"},
+                         {"accountId": "acc-app", "displayName": "Bot", "accountType": "app"},
+                         {"accountId": "acc-old", "displayName": "Gone", "active": False}])
+    found = trigger.find_people(cfg, "jira", "isa")
+    ck("finding people returns active humans only",
+       found["ok"] and [x["user_id"] for x in found["people"]] == ["acc-i"], str(found))
+    ck("a one-letter search is refused", trigger.find_people(cfg, "jira", "i")["ok"] is False)
+
     ck("without a base url it says what is missing",
        "jira.base_url" in trigger.jira_poll({**cfg, "jira": {**cfg["jira"], "base_url": ""}},
                                             dispatch)["error"])

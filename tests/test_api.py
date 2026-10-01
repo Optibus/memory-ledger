@@ -43,7 +43,7 @@ GET_ROUTES = [
     "/api/backups", "/api/doctor", "/api/consolidate-preview",
     "/api/person-duplicates", "/api/kinds", "/api/skills", "/api/bundle",
     "/api/rule", "/api/rule-proposals", "/api/settings", "/api/timezones", "/api/status", "/api/meta",
-    "/api/suggest-links", "/api/search", "/api/trigger", "/api/trigger-request", "/api/b2b",
+    "/api/suggest-links", "/api/search", "/api/trigger", "/api/trigger-request", "/api/trigger-people", "/api/b2b",
     "/api/b2b-conversations", "/api/b2b-thread",
     "/api/scripts", "/api/script", "/api/tasks", "/api/task", "/api/usage-report",
 ]
@@ -58,7 +58,7 @@ POST_ROUTES = [
     "/api/export-skills", "/api/ingest-skills", "/api/export-bundle",
     "/api/upload-bundle", "/api/import-bundle", "/api/delete-contracts",
     "/api/trigger-gate", "/api/trigger-action", "/api/trigger-config", "/api/trigger-check",
-    "/api/trigger-channel", "/api/trigger-decline", "/api/trigger-reprocess",
+    "/api/trigger-channel", "/api/trigger-person", "/api/trigger-decline", "/api/trigger-reprocess",
     "/api/b2b-config", "/api/b2b-identity", "/api/b2b-broker", "/api/b2b-broker-check",
     "/api/b2b-peer", "/api/b2b-allowed", "/api/b2b-send",
     "/api/export-scripts", "/api/upload-scripts", "/api/import-scripts", "/api/create-script",
@@ -985,6 +985,21 @@ def test_trigger_routes(s: Server):
         s.post("/api/trigger-channel", {"channel": "#general", "enabled": True}), 400, "its id"))
     ck("enabled must be a boolean", refused(
         s.post("/api/trigger-channel", {"channel": "C0ABC123"}), 400, "true or false"))
+
+    pp = s.post("/api/trigger-person", {"source": "jira", "user_id": "62f3dd0ce50f2f2a39573991",
+                                        "name": "Isadora", "enabled": True})
+    ck("trigger-person allows a Jira person", pp.status == 200
+       and [x["name"] for x in pp.json()["people"]["active"]] == ["Isadora"], str(pp.raw[:200]))
+    pp = s.post("/api/trigger-person", {"user_id": "62f3dd0ce50f2f2a39573991", "enabled": False}).json()
+    ck("taking them off keeps the row, marked removed, Jira by default",
+       pp.get("ok") and pp["people"]["removed"][0]["user_id"] == "62f3dd0ce50f2f2a39573991")
+    ck("and status lists them that way",
+       s.get("/api/trigger").json()["people"]["removed"][0]["name"] == "Isadora")
+    ck("a person needs an id their source could have issued", refused(
+        s.post("/api/trigger-person", {"user_id": "Isadora Martini", "enabled": True}), 400, "account id"))
+    ck("enabled must be a boolean here too", refused(
+        s.post("/api/trigger-person", {"user_id": "62f3dd0ce50f2f2a39573991"}), 400, "true or false"))
+    ck("finding people needs Jira set up", s.get("/api/trigger-people", q="isa").json()["ok"] is False)
 
     dcl = s.post("/api/trigger-decline", {"request_id": rid, "reason": "It is personal.",
                                           "rule": "rule_x"})

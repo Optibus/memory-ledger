@@ -213,6 +213,15 @@ export const api = {
       name,
       enabled,
     }),
+  /** Let a person tag the brain anywhere on `source` (`enabled: true`), or take them off. */
+  setTriggerPerson: (body: { user_id: string; enabled: boolean; name?: string; source?: string }) =>
+    post<{ ok: boolean; people: import("./types").TriggerPeople }>("/api/trigger-person", {
+      source: "jira",
+      ...body,
+    }),
+  /** Jira accounts whose name or email matches `q`. */
+  findTriggerPeople: (q: string, source = "jira") =>
+    get<{ ok: boolean; people: import("./types").TriggerPersonMatch[] }>("/api/trigger-people", { q, source }),
   checkTrigger: (only: import("./types").TriggerService) =>
     post<import("./types").TriggerCheck>("/api/trigger-check", { only }),
   /** Make this brain's key pair. Refused when one exists, unless `force`. */

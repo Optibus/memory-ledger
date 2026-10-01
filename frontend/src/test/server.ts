@@ -175,6 +175,11 @@ export const handlers = [
   ),
   write("/api/trigger-config", () => ok({ config: triggerFixture.config, runtime: triggerFixture.runtime })),
   write("/api/trigger-channel", () => ok({ channels: triggerFixture.channels })),
+  write("/api/trigger-person", () => ok({ people: triggerFixture.people })),
+  http.get("/api/trigger-people", () =>
+    ok({ people: [{ user_id: "62f3dd0ce50f2f2a39573991", name: "Isadora", email: "isa@example.com" },
+                  { user_id: "557058:cccc-dddd", name: "Isaac", email: "" }] }),
+  ),
   write("/api/trigger-check", (body: { only?: string }) =>
     ok({ ready: true, target: body.only || "all", problems: [], notes: [`${body.only}: fine`] }),
   ),

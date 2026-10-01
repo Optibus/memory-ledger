@@ -537,6 +537,14 @@ export const triggerFixture: import("@/api/types").TriggerStatus = {
       { channel_id: "C0OLD", name: "old-project", added_by: "cli", added_at: "2026-09-01T10:00:00+00:00", removed_by: "web-ui", removed_at: "2026-09-10T10:00:00+00:00" },
     ],
   },
+  people: {
+    active: [
+      { source: "jira", user_id: "62f3dd0ce50f2f2a39573991", name: "Isadora", added_by: "web-ui", added_at: "2026-09-25T10:00:00+00:00", removed_by: "", removed_at: "" },
+    ],
+    removed: [
+      { source: "jira", user_id: "557058:aaaa-bbbb", name: "Former", added_by: "cli", added_at: "2026-09-01T10:00:00+00:00", removed_by: "web-ui", removed_at: "2026-09-10T10:00:00+00:00" },
+    ],
+  },
   recent: [
     {
       id: "0b7c6f2e-1111-4222-8333-944455556666", source: "slack", scope: "slack:C1:1.0",

@@ -251,6 +251,15 @@ def trigger_request(id: str = Query("", description="The request id (UUID).")):
     return trigger.request_detail(id)
 
 
+@router.get("/trigger-people", tags=["trigger"],
+            summary="Find people on a source by name or email, to allow one",
+            description="Asks Jira with the stored token. Reads only: allowing someone is "
+                        "`POST /api/trigger-person`.")
+def trigger_people(q: str = Query("", description="Part of a name or an email."),
+                   source: str = Query("jira", description="Only `jira` for now.")):
+    return trigger.find_people(trigger.load_config(), source, q)
+
+
 @router.get("/tasks", tags=["trigger"],
             summary="Every trigger task, newest first, for the Tasks panel",
             description="One row per request: who fired it, from where, what it is "

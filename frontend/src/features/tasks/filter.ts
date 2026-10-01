@@ -16,9 +16,13 @@ export const STATUS_ORDER = [
 /** Tasks still moving: their card polls its detail while open. */
 export const ACTIVE = new Set(["running", "queued"]);
 
-/** Tasks the card offers to run again: what went wrong, or what the B2B
- * allowed list stopped. The server checks the same list. */
-export const REPROCESSABLE = new Set(["blocked", "failed", "timeout", "interrupted"]);
+/** Tasks the card offers to run again: what went wrong, what the B2B
+ * allowed list stopped, or a mention the gate refused. The server checks the
+ * same list. */
+export const REPROCESSABLE = new Set(["blocked", "refused", "failed", "timeout", "interrupted"]);
+
+/** The sources whose people the Jira settings list can let in. */
+export const PERSON_SOURCES = new Set(["jira"]);
 
 export type Facet = "status" | "source" | "requester" | "name";
 
