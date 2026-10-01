@@ -57,9 +57,9 @@ POST_ROUTES = [
     "/api/export-skills", "/api/ingest-skills", "/api/export-bundle",
     "/api/upload-bundle", "/api/import-bundle", "/api/delete-contracts",
     "/api/trigger-gate", "/api/trigger-action", "/api/trigger-config", "/api/trigger-check",
-    "/api/trigger-channel", "/api/trigger-decline",
+    "/api/trigger-channel", "/api/trigger-decline", "/api/trigger-reprocess",
     "/api/b2b-config", "/api/b2b-identity", "/api/b2b-broker", "/api/b2b-broker-check",
-    "/api/b2b-peer", "/api/b2b-send",
+    "/api/b2b-peer", "/api/b2b-allowed", "/api/b2b-send",
     "/api/export-scripts", "/api/upload-scripts", "/api/import-scripts", "/api/create-script",
 ]
 VIEWS = ["agenda", "open", "today", "tomorrow", "week", "closed", "range"]
@@ -992,6 +992,10 @@ def test_trigger_routes(s: Server):
        str(dcl.raw[:200]))
     ck("a decline needs a reason", refused(s.post("/api/trigger-decline", {"request_id": rid}),
                                            400, "missing reason"))
+    ck("a declined request cannot be reprocessed", refused(
+        s.post("/api/trigger-reprocess", {"request_id": rid}), 400, "can be reprocessed"))
+    ck("a reprocess needs a request", refused(s.post("/api/trigger-reprocess", {}),
+                                              400, "missing request_id"))
 
     ck("a malformed scope is refused", refused(s.post("/api/trigger-gate",
                                                       {"scope": "bogus", "enabled": True}),
@@ -1037,8 +1041,21 @@ def test_b2b_routes(s: Server):
                                  "enabled": True})
     ck("b2b-peer connects one", p.status == 200 and p.json()["peers"][0]["name"] == "Ana"
        and p.json()["peers"][0]["broker_id"] == "home", str(p.raw[:200]))
+    ck("and allows it to send back", [a["user_id"] for a in p.json()["allowed"]] == [peer]
+       and p.json()["allowed"][0]["is_peer"])
     ck("enabled must be a boolean", refused(s.post("/api/b2b-peer", {"peer_id": peer}),
                                             400, "true or false"))
+    a = s.post("/api/b2b-allowed", {"user_id": peer, "enabled": False})
+    ck("b2b-allowed blocks a sender, keeping the row", a.status == 200
+       and a.json()["allowed"][0]["removed_at"], str(a.raw[:200]))
+    a = s.post("/api/b2b-allowed", {"user_id": peer, "name": "Ana", "enabled": True})
+    ck("and allows them again", a.status == 200 and not a.json()["allowed"][0]["removed_at"])
+    ck("an allowed id must be a key", refused(s.post("/api/b2b-allowed", {
+        "user_id": "nope", "enabled": True}), 400, "public key"))
+    ck("allowing needs enabled", refused(s.post("/api/b2b-allowed", {"user_id": peer}),
+                                         400, "true or false"))
+    ck("the status lists who is allowed",
+       [x["user_id"] for x in s.get("/api/b2b").json()["allowed"]] == [peer])
     ck("own id cannot be a peer", refused(s.post("/api/b2b-peer", {
         "peer_id": me, "broker_id": "home", "enabled": True}), 400))
     ck("a send to an unreachable broker says so", refused(s.post("/api/b2b-send", {

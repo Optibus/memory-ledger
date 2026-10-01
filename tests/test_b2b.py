@@ -304,7 +304,7 @@ def test_brain(base: str, base2: str) -> None:
        str(res))
     ck("the peers' are queued and dispatched", len(res["queued"]) == 2
        and dispatched == res["queued"])
-    ck("the stranger's is refused and runs nothing", len(res["refused"]) == 1)
+    ck("the stranger's is blocked and runs nothing", len(res["blocked"]) == 1)
     reqs = [trigger.get_request(con, r) for r in res["queued"]]
     req = next(r for r in reqs if r["requester_id"] == peer.id)
     ck("the request is a b2b one, from the peer by name",
@@ -312,8 +312,9 @@ def test_brain(base: str, base2: str) -> None:
        and req["scope"] == f"b2b:{peer.id}" and req["text"] == "yes, 12:30")
     ck("it carries the run command it was told",
        "{b2b_peer_name}" in req["meta"]["do"] and req["meta"]["action"]["type"] == "claude")
-    bad = trigger.get_request(con, res["refused"][0])
-    ck("the refused one is finished", bad["status"] == "refused" and bad["finished_at"])
+    bad = trigger.get_request(con, res["blocked"][0])
+    ck("the blocked one is finished, and says why", bad["status"] == "blocked"
+       and bad["finished_at"] and "allowed list" in bad["reason"])
     ck("all are in Tasks", {t["id"] for t in trigger.tasks_payload()["tasks"]}
        >= {req["id"], bad["id"]})
     v = trigger.request_variables(req, trigger.load_config())
@@ -328,6 +329,51 @@ def test_brain(base: str, base2: str) -> None:
     res = b2b.poll(dispatch=dispatched.append)
     ck("an envelope that does not open is dropped, not believed",
        res.get("ok") and len(res["unreadable"]) == 1 and not res["queued"], str(res))
+
+    print("\n== brain: the allowed list ==")
+    allowed = {a["user_id"]: a for a in b2b.list_allowed(con)}
+    ck("connecting a peer allowed it to send", set(allowed) == {peer.id, far.id}
+       and allowed[peer.id]["is_peer"] and allowed[peer.id]["name"] == "Ana Souza", str(allowed))
+    ck("a malformed id is not allowed", b2b.allow_sender(con, "nope").get("ok") is False)
+    ck("nor is this brain's own", b2b.allow_sender(con, me).get("ok") is False)
+    ck("the stranger is allowed, without being a peer",
+       b2b.allow_sender(con, stranger.id, "Carla").get("ok")
+       and not b2b.get_peer(con, stranger.id))
+    stranger.send(me, "hi again")
+    res = b2b.poll(dispatch=dispatched.append)
+    ck("and their next message is queued", len(res["queued"]) == 1 and not res["blocked"],
+       str(res))
+    ck("they are blocked again", b2b.disallow_sender(con, stranger.id).get("ok"))
+    ck("blocking twice says so", b2b.disallow_sender(con, stranger.id).get("ok") is False)
+    stranger.send(me, "and again")
+    res = b2b.poll(dispatch=dispatched.append)
+    ck("so their next one is blocked", len(res["blocked"]) == 1 and not res["queued"])
+    ck("a peer added with allow off is not allowed", b2b.add_peer(
+        con, stranger.id, "Carla", "home-relay", allow=False).get("ok")
+       and not b2b.is_allowed(con, stranger.id))
+    b2b.remove_peer(con, stranger.id)
+
+    print("\n== brain: reprocess ==")
+    again: list[str] = []
+    ck("a queued request cannot be reprocessed",
+       trigger.reprocess(con, req["id"], again.append).get("ok") is False and not again)
+    res = trigger.reprocess(con, bad["id"], again.append, by="test")
+    ck("a blocked one goes back in the queue and is dispatched", res.get("ok")
+       and res["was"] == "blocked" and again == [bad["id"]], str(res))
+    back = trigger.get_request(con, bad["id"])
+    ck("with what it ended with cleared", back["status"] == "queued"
+       and not back["finished_at"] and back["reason"] == "reprocess: was blocked")
+    ck("and the reprocess logged", any(a["kind"] == "reprocess"
+                                       for a in trigger.actions_for(con, bad["id"])))
+    run = trigger.run_request(bad["id"])
+    ck("it runs", run.get("ok") and run["status"] == "done", str(run))
+    trigger._set_request(con, bad["id"], status="failed", finished_at=trigger.now_iso(),
+                         exit_code=1, result="boom")
+    res = trigger.reprocess(con, bad["id"])
+    back = trigger.get_request(con, bad["id"])
+    ck("a failed one can be reprocessed too", res.get("ok") and res["was"] == "failed"
+       and back["exit_code"] is None and back["result"] == "")
+    trigger._set_request(con, bad["id"], status="done", finished_at=trigger.now_iso())
 
     print("\n== brain: the session ==")
     run = trigger.run_request(req["id"])
@@ -359,7 +405,14 @@ def test_brain(base: str, base2: str) -> None:
                                   for p in b2b.list_peers(con, True)))
     peer.send(me, "still there?")
     res = b2b.poll(dispatch=dispatched.append)
-    ck("a former peer's message is refused", len(res["refused"]) == 1 and not res["queued"])
+    ck("a former peer still on the allowed list can send", len(res["queued"]) == 1)
+    b2b.disallow_sender(con, peer.id)
+    peer.send(me, "and now?")
+    res = b2b.poll(dispatch=dispatched.append)
+    ck("once off the list, their message is blocked", len(res["blocked"]) == 1
+       and not res["queued"])
+    ck("and the list keeps them, marked removed", any(
+        a["user_id"] == peer.id and a["removed_at"] for a in b2b.list_allowed(con, True)))
 
 
 def main() -> int:

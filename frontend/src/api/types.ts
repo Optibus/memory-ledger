@@ -1073,6 +1073,17 @@ export interface B2BPeer {
   person_title: string;
 }
 
+/** A user id allowed to send to this brain, like a friend. */
+export interface B2BAllowed {
+  user_id: string;
+  name: string;
+  added_at: string;
+  /** Set when they were blocked again; the row is kept. */
+  removed_at: string;
+  /** Also a connected peer: this brain can send to them. */
+  is_peer: boolean;
+}
+
 export interface B2BSent {
   id: string;
   peer_id: string;
@@ -1092,6 +1103,7 @@ export interface B2BRuntime {
 export interface B2BStatus extends Envelope {
   config: B2BConfig;
   peers: B2BPeer[];
+  allowed: B2BAllowed[];
   sent: B2BSent[];
   /** Received messages by status. */
   received: Record<string, number>;

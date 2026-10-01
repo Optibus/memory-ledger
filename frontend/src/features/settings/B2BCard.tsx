@@ -15,7 +15,7 @@ import {
   TextInput,
 } from "@/components";
 import type { BadgeTone } from "@/components";
-import type { B2BBroker, B2BConfig, B2BPeer, B2BStatus, Person } from "@/api/types";
+import type { B2BAllowed, B2BBroker, B2BConfig, B2BPeer, B2BStatus, Person } from "@/api/types";
 import "./SettingsSection.css";
 
 type Out = { text: string; tone: "info" | "error" | "success" } | null;
@@ -72,6 +72,7 @@ export function B2BCard({ writable }: { writable: boolean }) {
         writable={writable}
         onSaved={reload}
       />
+      <AllowedPanel allowed={status.data.allowed ?? []} writable={writable} onSaved={reload} />
       <SendPanel peers={status.data.peers} sent={status.data.sent} writable={writable} onSent={reload} />
 
       {!writable ? <span className="ml-settings__note">read-only server</span> : null}
@@ -596,6 +597,85 @@ function PeersPanel({
       <div className="ml-settings__foot">
         <Button disabled={!writable || busy || !PEER_ID.test(peerId.trim())} onClick={add}>
           Add peer
+        </Button>
+      </div>
+      {out ? <StatusMessage tone={out.tone}>{out.text}</StatusMessage> : null}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------- allowed list
+function AllowedPanel({
+  allowed,
+  writable,
+  onSaved,
+}: {
+  allowed: B2BAllowed[];
+  writable: boolean;
+  onSaved: () => void;
+}) {
+  const { busy, out, run } = useWrite(onSaved);
+  const [userId, setUserId] = useState("");
+  const [name, setName] = useState("");
+  const active = allowed.filter((a) => !a.removed_at).length;
+
+  const add = async () => {
+    const body: { user_id: string; enabled: boolean; name?: string } = { user_id: userId.trim(), enabled: true };
+    if (name.trim()) body.name = name.trim();
+    if (await run(() => api.setB2BAllowed(body), "Sender allowed.")) {
+      setUserId("");
+      setName("");
+    }
+  };
+
+  return (
+    <section className="ml-settings__preview" aria-label="Allowed senders">
+      <h3 className="ml-settings__h3">
+        Allowed senders <Badge tone="neutral">{active}</Badge>
+      </h3>
+      <p className="ml-settings__hint">
+        Like friends: only these brains' messages run anything. Adding a peer allows it too. A message from anyone
+        else is logged as blocked in Tasks, where you can reprocess it.
+      </p>
+      {allowed.length ? (
+        <ul className="ml-trigger__rows">
+          {allowed.map((a) => (
+            <li key={a.user_id} className="ml-b2b__row" aria-label={`Sender ${a.name || a.user_id}`}>
+              <div className="ml-trigger__event-head">
+                <strong>{a.name || "unnamed"}</strong>
+                {a.removed_at ? <Badge tone="neutral">blocked</Badge> : <Badge tone="success">allowed</Badge>}
+                {a.is_peer ? <Badge tone="accent">peer</Badge> : null}
+                <Button
+                  size="sm"
+                  disabled={!writable || busy}
+                  onClick={() =>
+                    run(
+                      () => api.setB2BAllowed({ user_id: a.user_id, enabled: !!a.removed_at }),
+                      a.removed_at ? "Sender allowed." : "Sender blocked.",
+                    )
+                  }
+                >
+                  {a.removed_at ? "Allow" : "Block"}
+                </Button>
+              </div>
+              <code className="ml-b2b__id">{a.user_id}</code>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="ml-settings__hint">Nobody yet: every message is blocked.</p>
+      )}
+      <div className="ml-settings__grid">
+        <Field label="Sender user id" hint="Their 43-character public key.">
+          {(id) => <TextInput id={id} value={userId} onChange={(e) => setUserId(e.target.value)} />}
+        </Field>
+        <Field label="Sender name" hint="Optional.">
+          {(id) => <TextInput id={id} value={name} onChange={(e) => setName(e.target.value)} />}
+        </Field>
+      </div>
+      <div className="ml-settings__foot">
+        <Button disabled={!writable || busy || !PEER_ID.test(userId.trim())} onClick={add}>
+          Allow sender
         </Button>
       </div>
       {out ? <StatusMessage tone={out.tone}>{out.text}</StatusMessage> : null}

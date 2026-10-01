@@ -655,6 +655,22 @@ export const tasksFixture: import("@/api/types").TasksPayload = {
       cost_usd: 1.234,
       cost_estimated: true,
     },
+    {
+      ...taskBase,
+      id: "t-blocked",
+      source: "b2b",
+      requester_name: "Stranger",
+      requester_id: "E".repeat(43),
+      is_owner: false,
+      status: "blocked",
+      reason: "b2b: not on the allowed list",
+      name: "message",
+      text: "hello from nowhere",
+      received_at: "2026-09-23T10:00:00+00:00",
+      result: "",
+      cost_usd: null,
+      cost_estimated: false,
+    },
   ],
 };
 
@@ -790,6 +806,10 @@ export const b2bFixture: import("@/api/types").B2BStatus = {
       person_id: "",
       person_title: "",
     },
+  ],
+  allowed: [
+    { user_id: "A".repeat(43), name: "Dana", added_at: "2026-09-01T09:00:00Z", removed_at: "", is_peer: true },
+    { user_id: "D".repeat(43), name: "Spammer", added_at: "2026-08-01T09:00:00Z", removed_at: "2026-09-12T09:00:00Z", is_peer: false },
   ],
   sent: [
     {

@@ -23,6 +23,11 @@
 .ml-run--interrupted { --tone: var(--task-interrupted); }
 .ml-run--declined { --tone: var(--task-declined); }
 .ml-run--refused { --tone: var(--task-refused); }
+.ml-run--blocked { --tone: var(--task-blocked); }
+.ml-run__actions {
+  display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap;
+  padding: 0 var(--space-4) var(--space-3);
+}
 .ml-run.is-open { border-color: var(--tone); }
 
 .ml-run__head {

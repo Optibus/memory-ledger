@@ -212,6 +212,11 @@ export const api = {
   checkTrigger: (only: import("./types").TriggerService) =>
     post<import("./types").TriggerCheck>("/api/trigger-check", { only }),
   /** Make this brain's key pair. Refused when one exists, unless `force`. */
+  /** Put a blocked or failed task back in the queue and run it now. */
+  reprocessTask: (request_id: string) =>
+    post<{ ok: boolean; request_id: string; status: string; was: string }>("/api/trigger-reprocess", {
+      request_id,
+    }),
   b2bIdentity: (force = false) =>
     post<{ ok: boolean; user_id: string; note: string }>("/api/b2b-identity", force ? { force } : {}),
   /** A patch. The private key is write-only: send one to import it, list it
@@ -238,6 +243,9 @@ export const api = {
       "/api/b2b-peer",
       body,
     ),
+  /** Let a user id send to this brain (`enabled: true`), or block it again. */
+  setB2BAllowed: (body: { user_id: string; enabled: boolean; name?: string }) =>
+    post<{ ok: boolean; allowed: import("./types").B2BAllowed[] }>("/api/b2b-allowed", body),
   sendB2B: (to: string, text: string) =>
     post<import("./types").B2BSendResult>("/api/b2b-send", { to, text }),
   flush: () => post("/api/flush", {}),

@@ -12,8 +12,12 @@ brain does with them:
   with a name, a URL and its own switch;
 * keeps the **peers**, the other brains this one talks to, in `graph.db`
   (`b2b_peer`): each is a user id, the broker that reaches it, and optionally
-  the `person` node it belongs to. Only a peer's message runs anything: one
-  from anyone else is logged `refused` and goes no further;
+  the `person` node it belongs to;
+* keeps the **allowed list** (`b2b_allowed`), the user ids that may send to
+  this brain, like friends on a social network. Adding a peer adds it here
+  too; either list can change without the other. Only an allowed sender's
+  message runs anything: one from anyone else is logged `blocked`, with its
+  text, and goes no further unless the owner reprocesses it from Tasks;
 * **logs in** to a broker by answering its challenge: the broker seals a secret
   to the user id, this brain opens it with the private key and sends it back,
   and gets a retrieval token for an hour, kept in this process's memory;
@@ -35,7 +39,8 @@ venv. Run from a plain `python3`, this command line re-runs itself there.
     python3 scripts/b2b.py brokers [--add URL [--name NAME] | --remove ID
                                     | --enable ID | --disable ID | --check ID]
     python3 scripts/b2b.py peers [--add USER_ID [--name NAME] [--broker ID]
-                                  [--person PERSON] | --remove USER_ID]
+                                  [--person PERSON] [--no-allow] | --remove USER_ID]
+    python3 scripts/b2b.py allowed [--add USER_ID [--name NAME] | --remove USER_ID]
     python3 scripts/b2b.py send --to ID-name-or-person --text "..."
     python3 scripts/b2b.py poll
 """
@@ -113,6 +118,12 @@ CREATE TABLE IF NOT EXISTS b2b_sent (
     text        TEXT NOT NULL,
     sent_at     TEXT NOT NULL,
     request_id  TEXT NOT NULL DEFAULT ''    -- the trigger request it was sent for, if any
+);
+CREATE TABLE IF NOT EXISTS b2b_allowed (
+    user_id     TEXT PRIMARY KEY,           -- a brain that may send to this one
+    name        TEXT NOT NULL DEFAULT '',
+    added_at    TEXT NOT NULL,
+    removed_at  TEXT NOT NULL DEFAULT ''    -- kept, never deleted: '' = allowed
 );
 """
 # Added after the first version of the tables; `db()` adds them when missing.
@@ -524,12 +535,18 @@ def check_broker(broker_id: str) -> dict[str, Any]:
 def db() -> sqlite3.Connection:
     """The brain, with the trigger tables and B2B's own."""
     con = trigger.db()
+    fresh = not con.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                            "AND name='b2b_allowed'").fetchone()
     con.executescript(SCHEMA)
     for table, cols in LATE_COLUMNS.items():
         have = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
         for col, decl in cols.items():
             if col not in have:
                 con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+    if fresh:
+        # Before the allowed list, every connected peer could send: keep that.
+        con.execute("INSERT OR IGNORE INTO b2b_allowed(user_id, name, added_at) "
+                    "SELECT peer_id, name, added_at FROM b2b_peer WHERE removed_at=''")
     con.commit()
     return con
 
@@ -584,11 +601,12 @@ def resolve_peer(con: sqlite3.Connection, who: str) -> dict[str, Any] | None:
 
 
 def add_peer(con: sqlite3.Connection, peer_id: str, name: str = "", broker_id: str = "",
-             person_id: str = "") -> dict[str, Any]:
+             person_id: str = "", allow: bool = True) -> dict[str, Any]:
     """Connect a peer by user id, reached through `broker_id` (the only broker
     when there is one), linked to a person node when `person_id` is given (an
     id, or a name that resolves to one person). Reconnecting a removed one
-    restores its row; what is given replaces what is stored."""
+    restores its row; what is given replaces what is stored. Unless `allow`
+    is False, the peer also goes on the allowed list, so it can send back."""
     peer_id = (peer_id or "").strip()
     if not re.fullmatch(USER_ID_RE, peer_id):
         return {"ok": False, "error": "a peer's user id is their public key: 43 base64url "
@@ -626,6 +644,8 @@ def add_peer(con: sqlite3.Connection, peer_id: str, name: str = "", broker_id: s
         "ELSE b2b_peer.person_id END",
         (peer_id, name, graph.now(), broker_id, person_id))
     con.commit()
+    if allow:
+        allow_sender(con, peer_id, get_peer(con, peer_id)["name"])  # type: ignore[index]
     return {"ok": True, "peer": get_peer(con, peer_id)}
 
 
@@ -637,6 +657,53 @@ def remove_peer(con: sqlite3.Connection, peer_id: str) -> dict[str, Any]:
     if not cur.rowcount:
         return {"ok": False, "error": f"no connected peer {peer_id}"}
     return {"ok": True, "peer_id": peer_id}
+
+
+# ---------------------------------------------------------------- allowed list
+def list_allowed(con: sqlite3.Connection, include_removed: bool = False) -> list[dict[str, Any]]:
+    """Who may send to this brain, allowed ones first, then by name. Each says
+    whether it is also a connected peer."""
+    q = ("SELECT a.*, p.peer_id IS NOT NULL AS is_peer FROM b2b_allowed a "
+         "LEFT JOIN b2b_peer p ON p.peer_id=a.user_id AND p.removed_at=''"
+         + ("" if include_removed else " WHERE a.removed_at=''")
+         + " ORDER BY a.removed_at!='', a.name, a.user_id")
+    return [{**dict(r), "is_peer": bool(r["is_peer"])} for r in con.execute(q)]
+
+
+def is_allowed(con: sqlite3.Connection, uid: str) -> bool:
+    return con.execute("SELECT 1 FROM b2b_allowed WHERE user_id=? AND removed_at=''",
+                       (uid,)).fetchone() is not None
+
+
+def allow_sender(con: sqlite3.Connection, uid: str, name: str = "") -> dict[str, Any]:
+    """Let `uid` send to this brain. Allowing a removed one restores it; a name
+    given replaces the stored one."""
+    uid = (uid or "").strip()
+    if not re.fullmatch(USER_ID_RE, uid):
+        return {"ok": False, "error": "a user id is a public key: 43 base64url characters"}
+    if uid == user_id(load_config()):
+        return {"ok": False, "error": "that is this brain's own user id"}
+    name = (name or "").strip()[:80]
+    if not name:
+        name = (get_peer(con, uid) or {}).get("name", "")
+    con.execute(
+        "INSERT INTO b2b_allowed(user_id, name, added_at) VALUES(?,?,?) "
+        "ON CONFLICT(user_id) DO UPDATE SET removed_at='', "
+        "name=CASE WHEN excluded.name!='' THEN excluded.name ELSE b2b_allowed.name END",
+        (uid, name, graph.now()))
+    con.commit()
+    return {"ok": True, "user_id": uid}
+
+
+def disallow_sender(con: sqlite3.Connection, uid: str) -> dict[str, Any]:
+    """Stop `uid` from sending: its next messages are logged `blocked`. A peer
+    it is stays a peer, so this brain can still send to it."""
+    cur = con.execute("UPDATE b2b_allowed SET removed_at=? WHERE user_id=? AND removed_at=''",
+                      (graph.now(), (uid or "").strip()))
+    con.commit()
+    if not cur.rowcount:
+        return {"ok": False, "error": f"{uid} is not on the allowed list"}
+    return {"ok": True, "user_id": uid}
 
 
 # ---------------------------------------------------------------- send
@@ -730,8 +797,8 @@ def _poll_broker(cfg: dict[str, Any], broker: dict[str, Any], con: sqlite3.Conne
                "sent_at": payload.get("sent_at") or item.get("at", "")}
         peer = get_peer(con, msg["from"])
         ev = message_event(msg, peer, cfg, broker)
-        if peer:
-            req = trigger._new_request(con, ev, "queued", "b2b peer")
+        if is_allowed(con, msg["from"]):
+            req = trigger._new_request(con, ev, "queued", "b2b: allowed sender")
             if req:
                 out["queued"].append(req["id"])
                 trigger.log.info("new request %s  b2b from %s via %s -> queued", req["id"],
@@ -739,18 +806,18 @@ def _poll_broker(cfg: dict[str, Any], broker: dict[str, Any], con: sqlite3.Conne
                 if dispatch:
                     dispatch(req["id"])
         else:
-            req = trigger._new_request(con, ev, "refused", "b2b: not a connected peer")
+            req = trigger._new_request(con, ev, "blocked", "b2b: not on the allowed list")
             if req:
                 trigger._set_request(con, req["id"], finished_at=trigger.now_iso())
-                out["refused"].append(req["id"])
-                trigger.log.info("new request %s  b2b from %s via %s -> refused: not a peer",
+                out["blocked"].append(req["id"])
+                trigger.log.info("new request %s  b2b from %s via %s -> blocked: not allowed",
                                  req["id"], ev["requester_id"], broker["id"])
 
 
 def poll(cfg: dict[str, Any] | None = None,
          dispatch: Callable[[str], None] | None = None) -> dict[str, Any]:
-    """One pass over every enabled broker. A connected peer's message is
-    queued and handed to `dispatch`; anyone else's is logged `refused` and runs
+    """One pass over every enabled broker. An allowed sender's message is
+    queued and handed to `dispatch`; anyone else's is logged `blocked` and runs
     nothing. One broker failing does not stop the others: it is reported in
     `errors`, and the pass is `ok` only when none failed."""
     cfg = cfg or load_config()
@@ -762,14 +829,14 @@ def poll(cfg: dict[str, Any] | None = None,
     if not todo:
         return {"ok": False, "error": "no enabled broker"}
     con = db()
-    out: dict[str, list] = {"queued": [], "refused": [], "unreadable": []}
+    out: dict[str, list] = {"queued": [], "blocked": [], "unreadable": []}
     errors: dict[str, str] = {}
     for broker in todo:
         try:
             _poll_broker(cfg, broker, con, dispatch, out)
         except B2BError as e:
             errors[broker["id"]] = str(e)
-    res: dict[str, Any] = {"ok": not errors, "received": len(out["queued"]) + len(out["refused"]),
+    res: dict[str, Any] = {"ok": not errors, "received": len(out["queued"]) + len(out["blocked"]),
                            **out, "errors": errors}
     if errors:
         res["error"] = "; ".join(f"{k}: {v}" for k, v in errors.items())
@@ -783,6 +850,7 @@ def status_payload() -> dict[str, Any]:
         "SELECT status, count(*) AS n FROM trigger_request WHERE source=? GROUP BY status",
         (SOURCE,))}
     return {"ok": True, "config": config_summary(), "peers": list_peers(con, True),
+            "allowed": list_allowed(con, True),
             "sent": list_sent(con, 20), "received": counts}
 
 
@@ -836,6 +904,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--name", default="")
     p.add_argument("--broker", default="", help="the broker that reaches them")
     p.add_argument("--person", default="", help="the person node they are: an id or a name")
+    p.add_argument("--no-allow", action="store_true",
+                   help="do not also put them on the allowed list")
+    p = sub.add_parser("allowed", help="who may send to this brain; anyone else is blocked")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--add", default="", help="a user id (their public key)")
+    g.add_argument("--remove", default="")
+    p.add_argument("--name", default="")
     p = sub.add_parser("send", help="send a message to a peer")
     p.add_argument("--to", required=True, help="a peer's user id, name, or person")
     p.add_argument("--text", required=True)
@@ -878,11 +953,20 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "peers":
         con = db()
         if args.add:
-            res = add_peer(con, args.add, args.name, args.broker, args.person)
+            res = add_peer(con, args.add, args.name, args.broker, args.person,
+                           allow=not args.no_allow)
         elif args.remove:
             res = remove_peer(con, args.remove)
         else:
             res = {"ok": True, "peers": list_peers(con, True)}
+    elif args.cmd == "allowed":
+        con = db()
+        if args.add:
+            res = allow_sender(con, args.add, args.name)
+        elif args.remove:
+            res = disallow_sender(con, args.remove)
+        else:
+            res = {"ok": True, "allowed": list_allowed(con, True)}
     elif args.cmd == "send":
         res = send(args.to, args.text, args.request)
     else:

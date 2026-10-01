@@ -258,6 +258,10 @@ class TriggerDecline(Body):
     rule: Text = T("The rule or guardrail it breaks.")
 
 
+class TriggerReprocess(Body):
+    request_id: Text = T("The blocked or failed request to run again.")
+
+
 class TriggerCheck(Body):
     only: Text = T("`claude`, `slack`, `jira` or `github`; empty checks everything switched on.")
     offline: Any = Field(False, description="true skips the calls to Slack and Jira.")
@@ -313,6 +317,15 @@ class B2BPeer(Body):
     person_id: Text = T("The person node they are: a node id, or a name that resolves to one.")
     enabled: Any = Field(None, description="true connects the peer, false disconnects it "
                                            "(the row is kept, marked removed).")
+    allow: Any = Field(True, description="With enabled, also put the peer on the allowed "
+                                         "list (default true); false leaves the list as is.")
+
+
+class B2BAllowed(Body):
+    user_id: Text = T("The other brain's user id: their X25519 public key.")
+    name: Text = T("How to call them.")
+    enabled: Any = Field(None, description="true lets them send to this brain, false blocks "
+                                           "them (the row is kept, marked removed).")
 
 
 class B2BSend(Body):

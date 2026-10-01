@@ -118,6 +118,9 @@ python3 scripts/b2b.py brokers --add https://b2b.team.example --name Team
 python3 scripts/b2b.py brokers --check home                         # log in now
 python3 scripts/b2b.py config --interval 120 --enable               # poll every 2 minutes
 python3 scripts/b2b.py peers --add <their user id> --broker team --person "Ana Souza"
+python3 scripts/b2b.py allowed --add <their user id> --name Carla    # let a non-peer send to you
+python3 scripts/b2b.py allowed --remove <their user id>              # block them again
+python3 scripts/b2b.py allowed                                       # who is allowed, and who was
 python3 scripts/b2b.py send --to "Ana Souza" --text "Can you review OS-123 today?"
 python3 scripts/b2b.py status                                       # identity, brokers, peers, sent
 python3 scripts/b2b.py poll                                         # one pass, by hand
@@ -145,9 +148,26 @@ Peers live in `graph.db` (`b2b_peer`): a user id, the **broker** that reaches
 them (needed when there is more than one), a name, and optionally the
 **person** node they are, by id or by a name that resolves to one person; with
 no name, the person's is used. `send --to` takes a peer's id, name, or person.
-**Only a connected peer's message runs anything.** A message from anyone else is logged `refused`, with its text, and
-goes no further. Disconnecting a peer keeps its row, marked removed, and
-reconnecting restores it.
+Disconnecting a peer keeps its row, marked removed, and reconnecting restores
+it.
+
+**The allowed list** (`b2b_allowed`) says who may send to you, like friends on
+a social network. **Only an allowed sender's message runs anything.** A message
+from anyone else is logged **`blocked`**, with its text and the reason `b2b:
+not on the allowed list`, and goes no further. It shows in Tasks, where
+**Reprocess** runs it after all, once you confirm (see
+[reprocessing](trigger.md#reprocessing-a-task)).
+
+- Adding a peer also allows it (`peers --add … --no-allow`, or `allow: false`
+  on the API, to skip that). Reconnecting one allows it again.
+- The two lists are otherwise independent: you can allow a brain you never
+  send to, and block a peer you still send to. Disconnecting a peer leaves it
+  allowed; block it to stop its messages.
+- Blocking keeps the row, marked removed, and allowing it again restores it.
+- The list lives in this brain only. The relay still delivers anything sealed
+  to you from a brain that has logged in to it; the list decides what runs.
+- The first time the list is created, every connected peer goes on it, so
+  peers that could send before still can.
 
 ### Receiving
 
@@ -193,12 +213,14 @@ name or person, through that peer's broker. Every sent message is kept in
 
 | Route | |
 |---|---|
-| `GET /api/b2b` | the config (the user id, never the private key), brokers with their session state, peers, sent messages, received ones by status, and the poller's state |
+| `GET /api/b2b` | the config (the user id, never the private key), brokers with their session state, peers, the allowed list, sent messages, received ones by status, and the poller's state |
 | `POST /api/b2b-config` | a patch of `b2b.json`; restarts the poller |
 | `POST /api/b2b-identity` | `{force?}`: a new key pair |
 | `POST /api/b2b-broker` | `{url, name?}` adds; `{id, url?, name?, enabled?}` changes; `{id, remove: true}` drops |
 | `POST /api/b2b-broker-check` | `{id}`: log in to it now |
-| `POST /api/b2b-peer` | `{peer_id, name?, broker_id?, person_id?, enabled}`: connect or disconnect a peer |
+| `POST /api/b2b-peer` | `{peer_id, name?, broker_id?, person_id?, enabled, allow?}`: connect or disconnect a peer; connecting also allows it unless `allow` is false |
+| `POST /api/b2b-allowed` | `{user_id, name?, enabled}`: allow a sender, or block it again |
+| `POST /api/trigger-reprocess` | `{request_id}`: run a `blocked` (or failed) message again |
 | `POST /api/b2b-send` | `{to, text}`: send to a peer |
 
 See [the API](api.md).

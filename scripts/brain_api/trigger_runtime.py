@@ -77,6 +77,18 @@ def _dispatch(request_id: str) -> None:
         _pool.submit(_run, request_id)
 
 
+def run_soon(request_id: str) -> str:
+    """Run a request the owner asked for by hand (a reprocess): on the pool
+    when the watchers are up, else on a thread of its own, so it runs even
+    with the triggers off. Says which."""
+    if _pool is not None:
+        _pool.submit(_run, request_id)
+        return "pool"
+    threading.Thread(target=_run, args=(request_id,), name=f"reprocess-{request_id[:8]}",
+                     daemon=True).start()
+    return "thread"
+
+
 def _notice(request_id: str, body: str) -> None:
     """A refusal notice, on the pool: translating one is a model call, and a
     watcher must not wait on it."""

@@ -32,6 +32,7 @@
   --task-interrupted: #db6d28;
   --task-declined: #d29922;
   --task-refused: #a371f7;
+  --task-blocked: #8b949e;
 
   --radius-sm: 6px;
   --radius: 7px;

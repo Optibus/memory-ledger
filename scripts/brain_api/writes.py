@@ -544,6 +544,23 @@ def trigger_channel(data: m.TriggerChannel = body(m.TriggerChannel)):
     return reply(res)
 
 
+@router.post("/trigger-reprocess", tags=["trigger"], summary="Run a blocked or failed request again",
+             description="Puts a `blocked`, `failed`, `timeout` or `interrupted` request back "
+                         "in the queue and runs it now, with the action it was stamped with. "
+                         "What the last run left is cleared; its logged actions stay, and a "
+                         "`reprocess` action is added.")
+def trigger_reprocess(data: m.TriggerReprocess = body(m.TriggerReprocess)):
+    rid = clip(data.request_id, 60)
+    if not rid:
+        return reply({"ok": False, "error": "missing request_id"})
+    ran: dict = {}
+    res = trigger.reprocess(trigger.db(), rid, lambda r: ran.update(on=trigger_runtime.run_soon(r)),
+                            by="web-ui")
+    if ran:
+        res["runs_on"] = ran["on"]
+    return reply(res)
+
+
 @router.post("/trigger-decline", tags=["trigger"], summary="Decline a request that breaks a rule",
              description="What the session calls instead of doing the work. Marks the request "
                          "`declined`, logs why, and returns the policy notice and the "
@@ -617,17 +634,36 @@ def b2b_broker_check(data: m.B2BBrokerCheck = body(m.B2BBrokerCheck)):
 
 
 @router.post("/b2b-peer", tags=["b2b"], summary="Connect or disconnect a peer",
-             description="Only a connected peer's messages run anything. Disconnecting "
-                         "keeps the row, marked removed.")
+             description="A peer is a brain this one sends to. Connecting also allows it to "
+                         "send back, unless `allow` is false. Disconnecting keeps the row, "
+                         "marked removed, and leaves the allowed list as it is.")
 def b2b_peer(data: m.B2BPeer = body(m.B2BPeer)):
     if not isinstance(data.enabled, bool):
         return reply({"ok": False, "error": "enabled must be true or false"})
     con = b2b.db()
     res = (b2b.add_peer(con, clip(data.peer_id, 100), clip(data.name, 80),
-                        clip(data.broker_id, 40), clip(data.person_id, 200)) if data.enabled
+                        clip(data.broker_id, 40), clip(data.person_id, 200),
+                        allow=data.allow is not False) if data.enabled
            else b2b.remove_peer(con, clip(data.peer_id, 100)))
     if res.get("ok"):
         res["peers"] = b2b.list_peers(con, True)
+        res["allowed"] = b2b.list_allowed(con, True)
+    return reply(res)
+
+
+@router.post("/b2b-allowed", tags=["b2b"], summary="Allow or block a sender",
+             description="The allowed list, like friends: only these user ids' messages run "
+                         "anything. A message from anyone else is logged `blocked`, and can "
+                         "be reprocessed from Tasks.")
+def b2b_allowed(data: m.B2BAllowed = body(m.B2BAllowed)):
+    if not isinstance(data.enabled, bool):
+        return reply({"ok": False, "error": "enabled must be true or false"})
+    con = b2b.db()
+    uid = clip(data.user_id, 100)
+    res = (b2b.allow_sender(con, uid, clip(data.name, 80)) if data.enabled
+           else b2b.disallow_sender(con, uid))
+    if res.get("ok"):
+        res["allowed"] = b2b.list_allowed(con, True)
     return reply(res)
 
 

@@ -103,6 +103,25 @@ describe("B2B", () => {
     await waitFor(() => expect(sent("/api/b2b-peer")[1]).toMatchObject({ peer_id: "B".repeat(43), enabled: true }));
   });
 
+  it("allows a sender by user id, and blocks or re-allows one", async () => {
+    const { user } = renderApp(<B2BCard writable />, { route: "/settings" });
+    const list = await panel("Allowed senders");
+    const dana = within(list.getByRole("listitem", { name: "Sender Dana" }));
+    expect(dana.getByText("peer")).toBeInTheDocument();
+    await user.click(dana.getByRole("button", { name: "Block" }));
+    await waitFor(() => expect(sent("/api/b2b-allowed")[0]).toEqual({ user_id: "A".repeat(43), enabled: false }));
+    const spam = within(list.getByRole("listitem", { name: "Sender Spammer" }));
+    expect(spam.getByText("blocked")).toBeInTheDocument();
+    await user.click(spam.getByRole("button", { name: "Allow" }));
+    await waitFor(() => expect(sent("/api/b2b-allowed")[1]).toEqual({ user_id: "D".repeat(43), enabled: true }));
+    const id = "F".repeat(43);
+    expect(list.getByRole("button", { name: "Allow sender" })).toBeDisabled();
+    await user.type(list.getByLabelText("Sender user id"), id);
+    await user.type(list.getByLabelText("Sender name"), "Gil");
+    await user.click(list.getByRole("button", { name: "Allow sender" }));
+    await waitFor(() => expect(sent("/api/b2b-allowed")[2]).toEqual({ user_id: id, enabled: true, name: "Gil" }));
+  });
+
   it("sends a message to a peer and lists recent ones", async () => {
     const { user } = renderApp(<B2BCard writable />, { route: "/settings" });
     const send = await panel("Send");

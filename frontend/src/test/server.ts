@@ -157,6 +157,10 @@ export const handlers = [
   ),
   write("/api/b2b-identity", () => ok({ user_id: b2bFixture.config.user_id, note: "Key pair made." })),
   write("/api/b2b-peer", () => ok({ peers: b2bFixture.peers })),
+  write("/api/b2b-allowed", () => ok({ allowed: b2bFixture.allowed })),
+  write("/api/trigger-reprocess", (body: { request_id?: string }) =>
+    ok({ request_id: body.request_id, status: "queued", was: "failed" }),
+  ),
   write("/api/b2b-send", () =>
     ok({ id: "m2", to: "A".repeat(43), name: "Dana", broker: "b1", sent_at: "2026-09-30T10:00:00Z" }),
   ),

@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { api } from "@/api/client";
 import { usePolling } from "@/hooks/usePolling";
-import { Badge, Spinner, StatusMessage } from "@/components";
+import { Badge, Button, Spinner, StatusMessage } from "@/components";
 import { formatDate } from "@/lib/format";
 import type { ActivityEvent, TaskActivity, TaskDetail, TriggerTask, TranscriptEvent } from "@/api/types";
-import { ACTIVE, ago, duration, requesterOf } from "./filter";
+import { ACTIVE, REPROCESSABLE, ago, duration, requesterOf } from "./filter";
 
 export interface TaskRunCardProps {
   task: TriggerTask;
@@ -12,6 +12,8 @@ export interface TaskRunCardProps {
   onToggle: () => void;
   /** The server's clock on the last poll, so "running for" does not drift. */
   now: number;
+  /** Called after the card changed the task (a reprocess), to re-read the list. */
+  onChanged?: () => void;
 }
 
 /**
@@ -23,7 +25,7 @@ export interface TaskRunCardProps {
  * beat only while the task is still moving. A finished task is read once more
  * when it finishes, then left alone.
  */
-export function TaskRunCard({ task, open, onToggle, now }: TaskRunCardProps) {
+export function TaskRunCard({ task, open, onToggle, now, onChanged }: TaskRunCardProps) {
   const active = ACTIVE.has(task.status);
   const took = duration(task.started_at, task.finished_at || undefined, now);
   const p = task.progress;
@@ -86,7 +88,56 @@ export function TaskRunCard({ task, open, onToggle, now }: TaskRunCardProps) {
           <span className="ml-run__result">{oneLine(task.result)}</span>
         ) : null}
       </button>
+      {REPROCESSABLE.has(task.status) ? <Reprocess task={task} onDone={onChanged} /> : null}
       {open ? <TaskRunDetail id={task.id} status={task.status} /> : null}
+    </div>
+  );
+}
+
+/** Run a blocked or failed task again, with the action it was stamped with.
+ * A blocked one is a B2B message from someone off the allowed list: running it
+ * is the owner vouching for that one message, so it asks first. */
+function Reprocess({ task, onDone }: { task: TriggerTask; onDone?: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [sure, setSure] = useState(false);
+  const [err, setErr] = useState("");
+  const blocked = task.status === "blocked";
+
+  const go = async () => {
+    setBusy(true);
+    setErr("");
+    try {
+      await api.reprocessTask(task.id);
+      setSure(false);
+      onDone?.();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="ml-run__actions">
+      {blocked && sure ? (
+        <>
+          <span className="ml-run__dim">
+            Run this message from {requesterOf(task)}, who is not on the allowed list?
+          </span>
+          <Button size="sm" variant="primary" disabled={busy} onClick={go}>Run it</Button>
+          <Button size="sm" disabled={busy} onClick={() => setSure(false)}>Cancel</Button>
+        </>
+      ) : (
+        <Button
+          size="sm"
+          disabled={busy}
+          onClick={blocked ? () => setSure(true) : go}
+          aria-label={`Reprocess ${task.name}`}
+        >
+          {busy ? "Reprocessing…" : "Reprocess"}
+        </Button>
+      )}
+      {err ? <StatusMessage tone="error">{err}</StatusMessage> : null}
     </div>
   );
 }
