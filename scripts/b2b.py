@@ -733,7 +733,8 @@ def send(to: str, text: str, request_id: str = "") -> dict[str, Any]:
             env = c.seal(private_key(cfg), peer["peer_id"], {"text": text, "sent_at": sent_at})
         except (c.BadBox, ValueError) as e:
             raise B2BError(f"cannot seal to {peer['peer_id']}: {e}") from None
-        got = _authed(cfg, broker, "POST", "/messages", {"to": peer["peer_id"], "envelope": env})
+        got = _call("POST", broker["url"] + "/messages",
+                    {"from": env["from"], "to": peer["peer_id"], "envelope": env})
     except B2BError as e:
         return {"ok": False, "error": str(e)}
     rid = request_id or os.environ.get("MEMORY_LEDGER_REQUEST_ID", "")

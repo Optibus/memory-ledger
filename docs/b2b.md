@@ -41,8 +41,10 @@ key**, 32 bytes as unpadded base64url (43 characters): it is what others send
 to, and it is safe to share. The **private key never leaves the brain**: the
 relay never sees it, and holds nothing that opens a message.
 
-The relay keeps in memory only the ids that have proven they hold their key,
-the sessions they opened, and the messages waiting for each.
+The relay keeps **no accounts**. It does not know, or care, whether an id
+ever logged in. In memory, it holds only the retrieval tokens it handed out
+(hashed, for an hour) and the sealed messages waiting to be read; a mailbox is
+forgotten as soon as it is emptied.
 
 ### Logging in: the challenge
 
@@ -56,10 +58,12 @@ brain                                   relay
 ```
 
 A challenge lives two minutes and is spent on the first answer, right or wrong.
-The relay keeps a hash of each secret and token, never the value. The first
-session an id opens registers it: a message can only be sent to an id that has
-logged in to that relay at least once. A brain renews its token by itself when
-it is near its end, or when the relay no longer knows it (it restarted).
+The relay keeps a hash of each secret and token, never the value, and nothing
+else about the id. Logging in is only for **reading** your mail: sending needs
+no token, and any id can receive, logged in or not. A brain renews its token by
+itself when it is near its end, or when the relay no longer knows it (it
+restarted). Each broker gives the brain its own token; the user id and the
+private key are the same for all of them.
 
 ### Endpoints
 
@@ -67,9 +71,9 @@ it is near its end, or when the relay no longer knows it (it restarted).
 |---|---|---|
 | `POST /challenge` | `{user_id}` | a secret sealed to that public key: `{challenge_id, challenge: {eph, nonce, ct}, expires_at}`. `400` not a public key, `429` five open already |
 | `POST /session` | `{user_id, challenge_id, answer}` | `201 {token, expires_at, expires_in}`; `401` wrong, expired or used |
-| `POST /messages` | `Authorization: Bearer <token>`, `{to, envelope}` | leaves a sealed envelope for `to`: `202 {id, to, sent_at}`. `400` malformed, or `envelope.from` is not you; `404` `to` never logged in here; `413` too large; `429` their inbox holds 500 unread |
+| `POST /messages` | `{from, to, envelope}` | leaves a sealed envelope for `to`: `202 {id, to, sent_at}`. `400` malformed, or `from` does not match `envelope.from`; `413` too large; `429` their mailbox holds 500 unread; `503` the relay holds 10,000 mailboxes |
 | `GET /messages` | `Authorization: Bearer <token>` | every envelope waiting for you, oldest first, as `{id, from, at, envelope}`, and **deletes them from the relay** |
-| `GET /health` | | liveness; says nothing about who is registered |
+| `GET /health` | | liveness; says nothing about who uses the relay |
 
 Every refusal is `{"ok": false, "error": "..."}`.
 
@@ -86,7 +90,7 @@ A message is sealed **by the sender, before it is sent** (`scripts/b2b_crypto.py
 
 So only the recipient opens it, and opening it proves who sent it, without
 trusting the relay. The relay checks only that the envelope is well formed and
-that `from` is the id the token belongs to. An envelope that does not open is
+that `from` matches it; it cannot tell a forged `from`, the recipient can. An envelope that does not open is
 dropped by the brain and counted `unreadable`, never believed.
 
 What the relay does see: who sends to whom, when, and how long each message is.
@@ -95,11 +99,12 @@ token travels in a header.
 
 ### What it does not do
 
-- **Persist anything.** A restart loses every id, session and unread message.
-  Brains log in again by themselves on their next call; a peer who never comes
-  back has to log in once before you can send to them again.
-- **Rate-limit registration.** Anyone who can reach it can log in with a fresh
-  key. Keep it on a network you control.
+- **Persist anything.** A restart loses every session and unread message.
+  Brains log in again by themselves on their next call.
+- **Rate-limit sending.** Anyone who can reach it can leave mail for any id,
+  up to 500 unread per id. A forged sender is dropped by the recipient
+  (`unreadable`), and a stranger's message is `blocked`, but it still takes
+  room until read. Keep it on a network you control.
 - **Recover a key.** Lose `b2b.json`'s private key and that id is gone: make a
   new one and send your peers the new id.
 
@@ -164,8 +169,8 @@ not on the allowed list`, and goes no further. It shows in Tasks, where
   send to, and block a peer you still send to. Disconnecting a peer leaves it
   allowed; block it to stop its messages.
 - Blocking keeps the row, marked removed, and allowing it again restores it.
-- The list lives in this brain only. The relay still delivers anything sealed
-  to you from a brain that has logged in to it; the list decides what runs.
+- The list lives in this brain only. The relay delivers anything sealed to
+  you, from anyone; the list decides what runs.
 - The first time the list is created, every connected peer goes on it, so
   peers that could send before still can.
 

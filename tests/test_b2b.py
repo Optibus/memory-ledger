@@ -135,7 +135,7 @@ class Client:
 
     def send(self, to: str, text: str) -> tuple[int, dict[str, Any]]:
         env = bc.seal(self.key, to, {"text": text, "sent_at": "2026-09-30T00:00:00+00:00"})
-        return call(self.base, "POST", "/messages", {"to": to, "envelope": env}, self.token)
+        return call(self.base, "POST", "/messages", {"from": self.id, "to": to, "envelope": env})
 
     def read(self) -> list[dict[str, Any]]:
         _, r = call(self.base, "GET", "/messages", token=self.token)
@@ -197,27 +197,28 @@ def test_relay(base: str) -> None:
        st == 201 and s.get("token") and s.get("expires_in") == 3600, str(s))
     a.token = s["token"]
     st, r = a.send(b.id, "hi b")
-    ck("an id that never logged in cannot receive", st == 404, str(r))
-    b.login()
-    st, r = a.send(b.id, "hi b")
-    ck("a message is accepted", st == 202 and r.get("to") == b.id and r.get("id"), str(r))
+    ck("sending needs no token, and the recipient never logged in",
+       st == 202 and r.get("to") == b.id and r.get("id"), str(r))
     st, r = call(base, "POST", "/messages", {"to": b.id, "envelope": bc.seal(
-        a.key, b.id, {"text": "x"})}, "wrong")
-    ck("a wrong token cannot send", st == 401, str(r))
-    st, r = call(base, "POST", "/messages", {"to": b.id, "envelope": bc.seal(
-        b.key, b.id, {"text": "x"})}, a.token)
-    ck("an envelope from someone else cannot be sent", st == 400, str(r))
-    st, r = call(base, "POST", "/messages", {"to": b.id, "envelope": {"v": 2}}, a.token)
+        a.key, b.id, {"text": "x"})})
+    ck("a message without from is refused", st == 400, str(r))
+    st, r = call(base, "POST", "/messages", {"from": a.id, "to": b.id, "envelope": bc.seal(
+        b.key, b.id, {"text": "x"})})
+    ck("from must match the envelope", st == 400, str(r))
+    st, r = call(base, "POST", "/messages", {"from": a.id, "to": b.id, "envelope": {"v": 2}})
     ck("a malformed envelope is refused", st == 400, str(r))
     st, r = a.send(b.id, "x" * 40_000)
     ck("an over-large envelope is refused, not cut", st == 413, str(r))
     st, r = call(base, "GET", "/messages")
     ck("no token cannot read", st == 401, str(r))
     ck("the sender's own inbox is empty", a.read() == [])
+    b.login()
     got = b.read()
     ck("the recipient reads and opens it, from the sender", [(m["from"], m["text"])
                                                               for m in got] == [(a.id, "hi b")])
     ck("and it is gone from the relay once read", b.read() == [])
+    st, r = call(base, "GET", "/messages", token="wrong")
+    ck("a wrong token cannot read", st == 401, str(r))
 
 
 # ================================================================ the brain
@@ -324,8 +325,8 @@ def test_brain(base: str, base2: str) -> None:
     ck("a second pass finds nothing: the relays deleted them",
        b2b.poll(dispatch=dispatched.append).get("received") == 0)
     forged = bc.seal(stranger.key, me, {"text": "tampered"})
-    call(base, "POST", "/messages", {"to": me, "envelope": {**forged, "id": "f" * 32}},
-         stranger.token)
+    call(base, "POST", "/messages", {"from": stranger.id, "to": me,
+                                     "envelope": {**forged, "id": "f" * 32}})
     res = b2b.poll(dispatch=dispatched.append)
     ck("an envelope that does not open is dropped, not believed",
        res.get("ok") and len(res["unreadable"]) == 1 and not res["queued"], str(res))

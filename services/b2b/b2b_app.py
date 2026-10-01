@@ -3,23 +3,26 @@ for another (services/b2b/README.md, docs/b2b.md).
 
 A user's id **is** their public key: an X25519 public key, 32 bytes, as
 unpadded base64url (43 characters). The brain makes the key pair itself and the
-private key never leaves it. The relay keeps, in memory only, the ids that have
-proven they hold their key, and the messages waiting for each of them.
+private key never leaves it. The relay keeps no accounts: it does not know or
+care whether an id ever logged in. In memory, it holds only the retrieval
+tokens it handed out (as digests, for an hour) and the sealed messages waiting
+to be read.
 
 * `POST /challenge {user_id}` returns a random secret sealed to that id. Only
   the holder of the private key can open it.
 * `POST /session {user_id, challenge_id, answer}` checks the opened secret and
-  returns a **retrieval token**, valid for one hour. The first session an id
-  opens registers it on the relay.
-* `POST /messages {to, envelope}` (`Authorization: Bearer <token>`) leaves a
-  message for `to`. The envelope was sealed by the sender, to `to`'s key, before
-  it was sent: the relay never sees a message in clear and holds nothing that
-  opens one.
+  returns a **retrieval token**, valid for one hour. Nothing else about the id
+  is kept.
+* `POST /messages {from, to, envelope}` leaves a message for `to`. No token: the
+  envelope was sealed by the sender, to `to`'s key, and carries proof of who
+  sealed it, which only the recipient can check. The relay never sees a message
+  in clear and holds nothing that opens one.
 * `GET /messages` (bearer) returns every envelope waiting for the caller and
-  deletes them from the relay. A message is read once.
+  deletes them from the relay. A message is read once, and an emptied mailbox
+  is forgotten.
 
 Everything lives in this process's memory. There is no database: when the
-relay stops, every id, session and message on it is gone, by design.
+relay stops, every session and message on it is gone, by design.
 
     python3 services/b2b/serve_b2b.py [--host 127.0.0.1] [--port 8780]
 """
@@ -36,7 +39,6 @@ import secrets
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
@@ -47,13 +49,13 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from fastapi import Body, FastAPI, Header
 from fastapi.responses import JSONResponse
 
-VERSION = "2.0.0"
+VERSION = "3.0.0"
 
 # Caps that keep one process's memory bounded. Over them is refused, never
 # truncated: a message cut short is a different message.
 ENVELOPE_MAX = 40_000           # characters of base64 ciphertext: ~16,000 of text, sealed
 QUEUE_MAX = 500
-USERS_MAX = 10_000
+MAILBOXES_MAX = 10_000          # recipients with unread messages
 CHALLENGES_PER_USER = 5
 CHALLENGE_TTL_S = 120
 SESSION_TTL_S = 3600
@@ -110,25 +112,19 @@ def _digest(value: str) -> bytes:
 
 
 # ---------------------------------------------------------------- store
-@dataclass
-class User:
-    """One id that proved it holds its key, and the messages waiting for it."""
-
-    user_id: str
-    registered_at: str
-    inbox: list[dict[str, Any]] = field(default_factory=list)
-
-
 class Unauthorized(Exception):
     """No valid retrieval token, or a challenge answered wrong."""
 
 
 class Store:
-    """Every id, challenge, session and waiting message, in memory, behind one lock."""
+    """Open challenges, retrieval tokens and waiting messages, in memory,
+    behind one lock. No accounts: an id exists here only while it holds a
+    token or has mail."""
 
     def __init__(self) -> None:
         """An empty relay."""
-        self._users: dict[str, User] = {}
+        # recipient id -> sealed envelopes waiting for it, oldest first
+        self._mailboxes: dict[str, list[dict[str, Any]]] = {}
         # challenge_id -> (user_id, digest of the secret, expires at)
         self._challenges: dict[str, tuple[str, bytes, float]] = {}
         # digest of the token -> (user_id, expires at)
@@ -170,10 +166,6 @@ class Store:
         token = secrets.token_urlsafe(32)
         expires = now + SESSION_TTL_S
         with self._lock:
-            if user_id not in self._users:
-                if len(self._users) >= USERS_MAX:
-                    raise OverflowError("the relay is full")
-                self._users[user_id] = User(user_id=user_id, registered_at=now_iso(now))
             mine = sorted((v[1], k) for k, v in self._sessions.items() if v[0] == user_id)
             for _, k in mine[:max(0, len(mine) - SESSIONS_PER_USER + 1)]:
                 del self._sessions[k]
@@ -189,25 +181,25 @@ class Store:
             raise Unauthorized()
         return got[0]
 
-    def send(self, token: str, to: str, envelope: dict[str, Any]) -> dict[str, str]:
-        """Leave a sealed envelope for `to`. Raises `Unauthorized`, `ValueError`
-        (a malformed envelope, or one not from the caller), `LookupError` (no
-        such recipient) or `OverflowError` (their inbox is full)."""
-        sender = self.whoami(token)
+    def send(self, sender: str, to: str, envelope: dict[str, Any]) -> dict[str, str]:
+        """Leave a sealed envelope for `to`, whether or not `to` ever logged in.
+        Raises `ValueError` (a malformed envelope, or `from` not matching it)
+        or `OverflowError` (their mailbox, or the relay, is full)."""
         env = _clean_envelope(envelope)
         if env["from"] != sender:
-            raise ValueError("envelope.from must be your own id")
+            raise ValueError("from must match envelope.from")
         sent_at = now_iso()
         with self._lock:
-            target = self._users.get(to)
-            if target is None:
-                raise LookupError(to)
-            if len(target.inbox) >= QUEUE_MAX:
+            box = self._mailboxes.get(to)
+            if box is None:
+                if len(self._mailboxes) >= MAILBOXES_MAX:
+                    raise OverflowError("the relay is full")
+                box = self._mailboxes[to] = []
+            if len(box) >= QUEUE_MAX:
                 raise OverflowError(to)
-            if any(m["id"] == env["id"] for m in target.inbox):
+            if any(m["id"] == env["id"] for m in box):
                 raise ValueError("a message with this id is already waiting")
-            target.inbox.append({"id": env["id"], "from": sender, "at": sent_at,
-                                 "envelope": env})
+            box.append({"id": env["id"], "from": sender, "at": sent_at, "envelope": env})
         return {"id": env["id"], "to": to, "sent_at": sent_at}
 
     def fetch(self, token: str) -> list[dict[str, Any]]:
@@ -216,11 +208,7 @@ class Store:
         arrives during the call waits for the next one."""
         user_id = self.whoami(token)
         with self._lock:
-            user = self._users.get(user_id)
-            if user is None:
-                return []
-            out, user.inbox = list(user.inbox), []
-        return out
+            return self._mailboxes.pop(user_id, [])
 
 
 def _clean_envelope(env: Any) -> dict[str, str]:
@@ -257,8 +245,9 @@ STORE = Store()
 app = FastAPI(title="B2B — Brain 2 Brain", version=VERSION,
               description="An in-memory relay for messages between brains. A user id is "
                           "an X25519 public key; a challenge proves the private key and "
-                          "opens a one-hour session. Messages arrive sealed by the sender "
-                          "and are deleted once read. Nothing is written to disk.")
+                          "opens a one-hour session to read your mail. Anyone can send "
+                          "to an id: messages arrive sealed by the sender and are "
+                          "deleted once read. No accounts, and nothing is written to disk.")
 
 
 def _err(status: int, error: str) -> JSONResponse:
@@ -314,31 +303,24 @@ def post_session(data: Any = Body(default=None)) -> JSONResponse | dict[str, Any
                              **STORE.session(user_id, cid, answer)}, status_code=201)
     except Unauthorized:
         return _err(401, "wrong, expired or already used challenge")
-    except OverflowError as e:
-        return _err(503, str(e))
 
 
 @app.post("/messages", summary="Send a sealed message", response_model=None)
-def post_messages(data: Any = Body(default=None),
-                  authorization: str = Header(default="")) -> JSONResponse | dict[str, Any]:
-    """`{to, envelope}` with a retrieval token. The envelope is sealed by the
-    sender to `to`'s key; the relay only checks its shape and who it is from."""
-    tok = _bearer(authorization)
-    if not tok:
-        return _err(401, "send Authorization: Bearer <retrieval token>")
+def post_messages(data: Any = Body(default=None)) -> JSONResponse | dict[str, Any]:
+    """`{from, to, envelope}`. The envelope is sealed by the sender to `to`'s
+    key and proves who sealed it; the relay only checks its shape."""
     data = data if isinstance(data, dict) else {}
-    to = _text(data.get("to"))
-    if not ID_RE.fullmatch(to):
-        return _err(400, "to must be a user id (an X25519 public key)")
+    sender, to = _text(data.get("from")), _text(data.get("to"))
+    if not ID_RE.fullmatch(sender) or not ID_RE.fullmatch(to):
+        return _err(400, "from and to must be user ids (X25519 public keys)")
     try:
-        res = STORE.send(tok, to, data.get("envelope"))
-    except Unauthorized:
-        return _err(401, "no valid retrieval token: answer a new challenge")
-    except LookupError:
-        return _err(404, f"{to} has never opened a session on this relay")
+        res = STORE.send(sender, to, data.get("envelope"))
     except OverflowError as e:
-        return _err(413 if "large" in str(e) else 429,
-                    str(e) if "large" in str(e) else f"{to} has {QUEUE_MAX} unread messages")
+        if "large" in str(e):
+            return _err(413, str(e))
+        if "full" in str(e):
+            return _err(503, str(e))
+        return _err(429, f"{to} has {QUEUE_MAX} unread messages")
     except ValueError as e:
         return _err(400, str(e))
     return JSONResponse({"ok": True, **res}, status_code=202)
