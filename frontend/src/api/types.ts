@@ -1091,6 +1091,46 @@ export interface B2BSent {
   sent_at: string;
   request_id: string;
   broker_id: string;
+  /** 1 when typed in the Messages chat; 0 for a session, a script or the CLI. */
+  human?: number;
+}
+
+/** One message in a conversation, either way. */
+export interface B2BMessage {
+  id: string;
+  peer_id: string;
+  direction: "in" | "out";
+  text: string;
+  /** When the sender sent it. */
+  at: string;
+  /** A person typed it, rather than a session or a script. */
+  human: boolean;
+  /** `sent` for ours; the request's status for theirs. */
+  status: string;
+  /** Ours: the session it was sent for, if any. Theirs: the request it became. */
+  request_id: string;
+  received_at?: string;
+  broker_id?: string;
+}
+
+export interface B2BConversation {
+  peer_id: string;
+  name: string;
+  person_id: string;
+  /** A connected peer, so this brain can write to them. */
+  connected: boolean;
+  allowed: boolean;
+  messages: number;
+  last: Pick<B2BMessage, "direction" | "text" | "at" | "human"> | null;
+}
+
+export interface B2BConversations extends Envelope {
+  conversations: B2BConversation[];
+}
+
+export interface B2BThread extends Envelope {
+  peer_id: string;
+  messages: B2BMessage[];
 }
 
 export interface B2BRuntime {
@@ -1124,4 +1164,5 @@ export interface B2BSendResult extends Envelope {
   name: string;
   broker: string;
   sent_at: string;
+  human?: boolean;
 }

@@ -331,6 +331,9 @@ class B2BAllowed(Body):
 class B2BSend(Body):
     to: Text = T("A connected peer's user id, name, or person.")
     text: Text = T("The message.")
+    human: Any = Field(False, description="A person typed it (the Messages chat). Sealed "
+                                          "with the text, so the peer sees it; anything "
+                                          "else is shown as automated.")
 
 
 # -------------------------------------------------------------- contracts

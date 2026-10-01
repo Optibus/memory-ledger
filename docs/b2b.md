@@ -233,10 +233,31 @@ Sent from a session, it is also logged as a `b2b-send` action on that request.
 name or person, through that peer's broker. Every sent message is kept in
 `graph.db` (`b2b_sent`).
 
+### Human or automated
+
+Every message says whether a person wrote it. The flag (`human`) is sealed
+with the text, so the recipient sees the same thing the sender does. Only a
+message typed in the **Messages** chat is a person's. Everything else is
+automated: a headless session's reply, a script, `b2b.py send`, and the send box
+under **Settings → B2B**. A message from a brain older than the flag carries
+none, and reads as automated.
+
+### The Messages section
+
+**Messages** in the web UI shows B2B as conversations. On the left is every
+brain this one wrote to or heard from, with a search and **＋ New** to start a
+conversation with a connected peer. On the right is the thread, both
+directions, each message stamped with when it was sent and flagged 🧬 (a
+person) or 🤖 (automated). A received message is still a request: it runs its
+action and shows in Tasks as before. A brain that is not a connected peer can
+be read but not written to.
+
 ## The API
 
 | Route | |
 |---|---|
+| `GET /api/b2b-conversations` | everyone this brain messaged or heard from, and connected peers not talked to yet |
+| `GET /api/b2b-thread?peer=` | the messages with one peer, both ways, each flagged `human` and stamped `at` |
 | `GET /api/b2b` | the config (the user id, never the private key), brokers with their session state, peers, the allowed list, sent messages, received ones by status, and the poller's state |
 | `POST /api/b2b-config` | a patch of `b2b.json`; restarts the poller |
 | `POST /api/b2b-identity` | `{force?}`: a new key pair |
@@ -245,7 +266,7 @@ name or person, through that peer's broker. Every sent message is kept in
 | `POST /api/b2b-peer` | `{peer_id, name?, broker_id?, person_id?, enabled, allow?}`: connect or disconnect a peer; connecting also allows it unless `allow` is false |
 | `POST /api/b2b-allowed` | `{user_id, name?, enabled}`: allow a sender, or block it again |
 | `POST /api/trigger-reprocess` | `{request_id}`: run a `blocked` (or failed) message again |
-| `POST /api/b2b-send` | `{to, text}`: send to a peer |
+| `POST /api/b2b-send` | `{to, text, human?}`: send to a peer; `human` is the Messages chat |
 
 See [the API](api.md).
 

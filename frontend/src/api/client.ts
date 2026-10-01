@@ -157,6 +157,10 @@ export const api = {
     get<import("./types").TriggerStatus>("/api/trigger", { limit: 5 }, signal),
   b2b: (signal?: AbortSignal) =>
     get<import("./types").B2BStatus>("/api/b2b", undefined, signal),
+  b2bConversations: (signal?: AbortSignal) =>
+    get<import("./types").B2BConversations>("/api/b2b-conversations", undefined, signal),
+  b2bThread: (peer: string, signal?: AbortSignal) =>
+    get<import("./types").B2BThread>("/api/b2b-thread", { peer }, signal),
   capture: (signal?: AbortSignal) =>
     get<import("./types").CaptureState>("/api/capture", undefined, signal),
   doctor: (signal?: AbortSignal) =>
@@ -246,8 +250,9 @@ export const api = {
   /** Let a user id send to this brain (`enabled: true`), or block it again. */
   setB2BAllowed: (body: { user_id: string; enabled: boolean; name?: string }) =>
     post<{ ok: boolean; allowed: import("./types").B2BAllowed[] }>("/api/b2b-allowed", body),
-  sendB2B: (to: string, text: string) =>
-    post<import("./types").B2BSendResult>("/api/b2b-send", { to, text }),
+  /** `human`: typed in the Messages chat. Every other sender is shown as automated. */
+  sendB2B: (to: string, text: string, human = false) =>
+    post<import("./types").B2BSendResult>("/api/b2b-send", human ? { to, text, human } : { to, text }),
   flush: () => post("/api/flush", {}),
   /**
    * Consolidate. Refused without `confirm`, by the server — the preview is not

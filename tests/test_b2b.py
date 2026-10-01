@@ -134,8 +134,11 @@ class Client:
         self.token = s["token"]
         return self.token
 
-    def send(self, to: str, text: str) -> tuple[int, dict[str, Any]]:
-        env = bc.seal(self.key, to, {"text": text, "sent_at": "2026-09-30T00:00:00+00:00"})
+    def send(self, to: str, text: str, human: bool | None = None) -> tuple[int, dict[str, Any]]:
+        payload: dict[str, Any] = {"text": text, "sent_at": "2026-09-30T00:00:00+00:00"}
+        if human is not None:
+            payload["human"] = human
+        env = bc.seal(self.key, to, payload)
         return call(self.base, "POST", "/messages", {"from": self.id, "to": to, "envelope": env})
 
     def read(self) -> list[dict[str, Any]]:
@@ -287,19 +290,24 @@ def test_brain(base: str, base2: str) -> None:
     res = b2b.send(ana, "lunch on friday?")
     ck("send reaches a peer by their person", res.get("ok") and res["to"] == peer.id
        and res["broker"] == "team-a-relay", str(res))
-    res = b2b.send("bo", "and you?")
+    res = b2b.send("bo", "and you?", human=True)
     ck("and the other peer through the other broker", res.get("ok")
        and res["broker"] == "team-b-relay", str(res))
     ck("both are logged", sorted(s["text"] for s in b2b.list_sent(con))
        == ["and you?", "lunch on friday?"])
-    ck("the peer reads it, from this brain, signed",
-       [(m["from"], m["text"]) for m in peer.read()] == [(me, "lunch on friday?")])
-    ck("so does the far one", [m["text"] for m in far.read()] == ["and you?"])
+    ck("each says whether a person typed it",
+       {s["text"]: s["human"] for s in b2b.list_sent(con)}
+       == {"and you?": 1, "lunch on friday?": 0})
+    ck("the peer reads it, from this brain, signed, as automated",
+       [(m["from"], m["text"], m["human"]) for m in peer.read()]
+       == [(me, "lunch on friday?", False)])
+    ck("the far one reads it as a person's", [(m["text"], m["human"]) for m in far.read()]
+       == [("and you?", True)])
 
     print("\n== brain: poll every broker into the request log ==")
-    peer.send(me, "yes, 12:30")
+    peer.send(me, "yes, 12:30", human=True)
     stranger.send(me, "buy now")
-    far.send(me, "sure")
+    far.send(me, "sure", human=False)
     dispatched: list[str] = []
     res = b2b.poll(dispatch=dispatched.append)
     ck("a pass reads all three, across both brokers", res.get("ok") and res["received"] == 3,
@@ -312,6 +320,9 @@ def test_brain(base: str, base2: str) -> None:
     ck("the request is a b2b one, from the peer by name",
        req["source"] == "b2b" and req["requester_name"] == "Ana Souza"
        and req["scope"] == f"b2b:{peer.id}" and req["text"] == "yes, 12:30")
+    ck("it says a person wrote it", req["meta"]["human"] is True)
+    ck("one with no flag reads as automated",
+       trigger.get_request(con, res["blocked"][0])["meta"]["human"] is False)
     ck("it carries the run command it was told",
        "{b2b_peer_name}" in req["meta"]["do"] and req["meta"]["action"]["type"] == "claude")
     bad = trigger.get_request(con, res["blocked"][0])
@@ -325,6 +336,24 @@ def test_brain(base: str, base2: str) -> None:
        and v["b2b_broker"] == "team-a-relay" and v["trigger_source"] == "b2b")
     ck("a second pass finds nothing: the relays deleted them",
        b2b.poll(dispatch=dispatched.append).get("received") == 0)
+    print("\n== brain: conversations ==")
+    convs = {c["peer_id"]: c for c in b2b.conversations(con)}
+    ck("one per brain, both ways, the stranger too",
+       set(convs) == {peer.id, far.id, stranger.id}, str(list(convs)))
+    ck("a peer's is named, connected, and counts both directions",
+       convs[peer.id]["name"] == "Ana Souza" and convs[peer.id]["connected"]
+       and convs[peer.id]["messages"] == 2, str(convs[peer.id]))
+    ck("a stranger's is named as it arrived, and cannot be written to",
+       not convs[stranger.id]["connected"] and not convs[stranger.id]["allowed"])
+    th = b2b.thread(con, peer.id)
+    ck("a thread is both directions, each flagged and stamped",
+       [(m["direction"], m["text"], m["human"]) for m in th]
+       == [("in", "yes, 12:30", True), ("out", "lunch on friday?", False)], str(th))
+    ck("in time order, by when each was sent", [m["at"] for m in th]
+       == ["2026-09-30T00:00:00+00:00", b2b.list_sent(con)[-1]["sent_at"]])
+    ck("a received one names its request", next(
+        m for m in th if m["direction"] == "in")["request_id"] == req["id"])
+
     forged = bc.seal(stranger.key, me, {"text": "tampered"})
     call(base, "POST", "/messages", {"from": stranger.id, "to": me,
                                      "envelope": {**forged, "id": "f" * 32}})

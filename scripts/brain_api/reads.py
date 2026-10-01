@@ -224,6 +224,27 @@ def b2b_status():
             "watching": state.TRIGGERS}
 
 
+@router.get("/b2b-conversations", tags=["b2b"],
+            summary="B2B: everyone this brain messaged or heard from",
+            description="One row per brain, newest conversation first: its name, whether "
+                        "it is a connected peer (so it can be written to) and allowed, how "
+                        "many messages there are, and the last one. Connected peers with no "
+                        "messages yet come last.")
+def b2b_conversations():
+    return {"ok": True, "conversations": b2b.conversations(b2b.db())}
+
+
+@router.get("/b2b-thread", tags=["b2b"], summary="B2B: the messages with one brain",
+            description="Both directions, oldest first. Each says when it was sent, "
+                        "whether a person wrote it (`human`) or a session or script did, "
+                        "and, for a received one, the request it became.")
+def b2b_thread(peer: str = Query("", description="The peer's user id."),
+               limit: int = Query(500, ge=1, le=2000)):
+    if not peer:
+        return {"ok": False, "error": "missing peer"}
+    return {"ok": True, "peer_id": peer, "messages": b2b.thread(b2b.db(), peer, limit)}
+
+
 @router.get("/trigger-request", tags=["trigger"],
             summary="One request and every action taken for it")
 def trigger_request(id: str = Query("", description="The request id (UUID).")):

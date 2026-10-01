@@ -22,7 +22,9 @@ brain does with them:
   to the user id, this brain opens it with the private key and sends it back,
   and gets a retrieval token for an hour, kept in this process's memory;
 * **sends**: the message is sealed here, to the peer's key and signed by this
-  brain's, before it goes to the peer's broker; logged in `b2b_sent`;
+  brain's, before it goes to the peer's broker; logged in `b2b_sent`. It
+  carries whether a human wrote it: only the Messages chat says so, and every
+  other sender (a session, a script, this command line) is automated;
 * **polls** every enabled broker on the interval, from the trigger watchers in
   the server (`brain_api/trigger_runtime.py`), opens what arrived, and turns
   each message into a request in the same log as the Slack, Jira and GitHub
@@ -131,7 +133,8 @@ CREATE TABLE IF NOT EXISTS b2b_allowed (
 LATE_COLUMNS = {
     "b2b_peer": {"broker_id": "TEXT NOT NULL DEFAULT ''",     # the broker that reaches them
                  "person_id": "TEXT NOT NULL DEFAULT ''"},    # the person node they are
-    "b2b_sent": {"broker_id": "TEXT NOT NULL DEFAULT ''"},
+    "b2b_sent": {"broker_id": "TEXT NOT NULL DEFAULT ''",
+                 "human": "INTEGER NOT NULL DEFAULT 0"},     # typed in the Messages chat
 }
 
 
@@ -708,10 +711,13 @@ def disallow_sender(con: sqlite3.Connection, uid: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------- send
-def send(to: str, text: str, request_id: str = "") -> dict[str, Any]:
+def send(to: str, text: str, request_id: str = "", human: bool = False) -> dict[str, Any]:
     """Seal `text` to a connected peer (by id, name or person) and leave it on
     their broker, and log it. Sent from a trigger session (`request_id`, or
-    `$MEMORY_LEDGER_REQUEST_ID`), it is also an action on that request."""
+    `$MEMORY_LEDGER_REQUEST_ID`), it is also an action on that request.
+
+    `human` says a person typed it (the Messages chat). It travels sealed with
+    the text, so the recipient can show who wrote it; anything else is a bot."""
     text = (text or "").strip()
     if not text:
         return {"ok": False, "error": "missing text"}
@@ -731,7 +737,8 @@ def send(to: str, text: str, request_id: str = "") -> dict[str, Any]:
     try:
         c = _crypto()
         try:
-            env = c.seal(private_key(cfg), peer["peer_id"], {"text": text, "sent_at": sent_at})
+            env = c.seal(private_key(cfg), peer["peer_id"], {"text": text, "sent_at": sent_at,
+                                                             "human": bool(human)})
         except (c.BadBox, ValueError) as e:
             raise B2BError(f"cannot seal to {peer['peer_id']}: {e}") from None
         got = _call("POST", broker["url"] + "/messages",
@@ -740,15 +747,17 @@ def send(to: str, text: str, request_id: str = "") -> dict[str, Any]:
         return {"ok": False, "error": str(e)}
     rid = request_id or os.environ.get("MEMORY_LEDGER_REQUEST_ID", "")
     con.execute("INSERT OR IGNORE INTO b2b_sent(id, peer_id, text, sent_at, request_id, "
-                "broker_id) VALUES(?,?,?,?,?,?)",
-                (env["id"], peer["peer_id"], text, sent_at, rid, broker["id"]))
+                "broker_id, human) VALUES(?,?,?,?,?,?,?)",
+                (env["id"], peer["peer_id"], text, sent_at, rid, broker["id"],
+                 1 if human else 0))
     con.commit()
     if rid and trigger.get_request(con, rid):
         trigger.log_action(con, rid, "b2b-send", f"b2b:{peer['peer_id']}",
                            f"sent a B2B message to {peer['name'] or peer['peer_id']} "
                            f"through {broker['id']}")
     return {"ok": True, "id": env["id"], "to": peer["peer_id"], "name": peer["name"],
-            "broker": broker["id"], "sent_at": sent_at, "queued_at": got.get("sent_at")}
+            "broker": broker["id"], "sent_at": sent_at, "queued_at": got.get("sent_at"),
+            "human": bool(human)}
 
 
 def list_sent(con: sqlite3.Connection, limit: int = 50) -> list[dict[str, Any]]:
@@ -765,6 +774,9 @@ def message_event(msg: dict[str, Any], peer: dict[str, Any] | None,
     name = (peer or {}).get("name") or (peer or {}).get("person_title") or sender
     meta = {"kind": "message", "where": f"B2B message from {name} via {broker['name']}",
             "at": str(msg.get("sent_at") or ""),
+            # Typed by a person on the sender's side, not a session or a script.
+            # An envelope from before the flag says nothing, and reads as a bot.
+            "human": msg.get("human") is True,
             "vars": {"b2b_peer_id": sender, "b2b_peer_name": (peer or {}).get("name", ""),
                      "b2b_person_id": (peer or {}).get("person_id", ""),
                      "b2b_broker": broker["id"],
@@ -796,7 +808,8 @@ def _poll_broker(cfg: dict[str, Any], broker: dict[str, Any], con: sqlite3.Conne
             trigger.log.info("b2b %s: dropped message %s: %s", broker["id"], env.get("id"), e)
             continue
         msg = {"id": env["id"], "from": env["from"], "text": payload.get("text", ""),
-               "sent_at": payload.get("sent_at") or item.get("at", "")}
+               "sent_at": payload.get("sent_at") or item.get("at", ""),
+               "human": payload.get("human") is True}
         peer = get_peer(con, msg["from"])
         ev = message_event(msg, peer, cfg, broker)
         if is_allowed(con, msg["from"]):
@@ -843,6 +856,80 @@ def poll(cfg: dict[str, Any] | None = None,
     if errors:
         res["error"] = "; ".join(f"{k}: {v}" for k, v in errors.items())
     return res
+
+
+# ---------------------------------------------------------------- conversations
+def _received(con: sqlite3.Connection, peer_id: str = "") -> list[sqlite3.Row]:
+    sql = ("SELECT id, event_id, requester_id, requester_name, text, meta, status, "
+           "received_at FROM trigger_request WHERE source=?")
+    args: list[Any] = [SOURCE]
+    if peer_id:
+        sql += " AND requester_id=?"
+        args.append(peer_id)
+    return con.execute(sql, args).fetchall()
+
+
+def _in_message(r: sqlite3.Row) -> dict[str, Any]:
+    try:
+        meta = json.loads(r["meta"] or "{}")
+    except ValueError:
+        meta = {}
+    return {"id": r["event_id"], "peer_id": r["requester_id"], "direction": "in",
+            "text": r["text"], "at": str(meta.get("at") or r["received_at"]),
+            "received_at": r["received_at"], "human": meta.get("human") is True,
+            "status": r["status"], "request_id": r["id"]}
+
+
+def _out_message(r: sqlite3.Row) -> dict[str, Any]:
+    return {"id": r["id"], "peer_id": r["peer_id"], "direction": "out", "text": r["text"],
+            "at": r["sent_at"], "human": bool(r["human"]), "status": "sent",
+            "request_id": r["request_id"], "broker_id": r["broker_id"]}
+
+
+def conversations(con: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Everyone this brain messaged or was messaged by, plus connected peers it
+    has not talked to yet: newest conversation first, the silent ones last."""
+    peers = {p["peer_id"]: p for p in list_peers(con, True)}
+    allowed = {a["user_id"]: a for a in list_allowed(con, True)}
+    last: dict[str, dict[str, Any]] = {}
+    count: dict[str, int] = {}
+    names: dict[str, str] = {}
+    rows = _received(con)
+    msgs = [_in_message(r) for r in rows]
+    for r in rows:
+        if r["requester_name"] and r["requester_name"] != r["requester_id"]:
+            names.setdefault(r["requester_id"], r["requester_name"])
+    msgs += [_out_message(r) for r in con.execute("SELECT * FROM b2b_sent")]
+    for m in msgs:
+        pid = m["peer_id"]
+        count[pid] = count.get(pid, 0) + 1
+        if pid not in last or m["at"] > last[pid]["at"]:
+            last[pid] = m
+    ids = set(last) | {pid for pid, p in peers.items() if not p["removed_at"]}
+    out = []
+    for pid in ids:
+        peer, ok = peers.get(pid), allowed.get(pid)
+        name = ((peer or {}).get("name") or (peer or {}).get("person_title")
+                or (ok or {}).get("name") or names.get(pid, ""))
+        m = last.get(pid)
+        out.append({"peer_id": pid, "name": name,
+                    "person_id": (peer or {}).get("person_id", ""),
+                    "connected": bool(peer and not peer["removed_at"]),
+                    "allowed": bool(ok and not ok["removed_at"]),
+                    "messages": count.get(pid, 0),
+                    "last": {k: m[k] for k in ("direction", "text", "at", "human")} if m else None})
+    out.sort(key=lambda c: (c["name"].lower(), c["peer_id"]))
+    out.sort(key=lambda c: c["last"]["at"] if c["last"] else "", reverse=True)
+    return out
+
+
+def thread(con: sqlite3.Connection, peer_id: str, limit: int = 500) -> list[dict[str, Any]]:
+    """Every message with one peer, both ways, oldest first: the newest `limit`."""
+    msgs = [_in_message(r) for r in _received(con, peer_id)]
+    msgs += [_out_message(r) for r in con.execute(
+        "SELECT * FROM b2b_sent WHERE peer_id=?", (peer_id,))]
+    msgs.sort(key=lambda m: m["at"])
+    return msgs[-max(1, min(2000, limit)):]
 
 
 def status_payload() -> dict[str, Any]:

@@ -3,6 +3,8 @@ import { http, HttpResponse } from "msw";
 import {
   agendaFixture,
   b2bFixture,
+  b2bConversationsFixture,
+  b2bThreadFixture,
   backupsFixture,
   captureFixture,
   consolidationPreviewFixture,
@@ -86,6 +88,13 @@ export const handlers = [
   http.get("/api/status", () => HttpResponse.json(statusFixture)),
   http.get("/api/trigger", () => HttpResponse.json(triggerFixture)),
   http.get("/api/b2b", () => HttpResponse.json(b2bFixture)),
+  http.get("/api/b2b-conversations", () => HttpResponse.json(b2bConversationsFixture)),
+  http.get("/api/b2b-thread", ({ request }) => {
+    const peer = new URL(request.url).searchParams.get("peer") ?? "";
+    return HttpResponse.json(
+      peer === b2bThreadFixture.peer_id ? b2bThreadFixture : { ok: true, peer_id: peer, messages: [] },
+    );
+  }),
   http.get("/api/tasks", () => HttpResponse.json(tasksFixture)),
   http.get("/api/task", () => HttpResponse.json(taskDetailFixture)),
   http.get("/api/usage-report", ({ request }) => {
