@@ -552,10 +552,12 @@ function Composer({ conv, pick, connectors, writable, busy, error, onError, onPi
             disabled={!writable}
           />
           <span title="Off: the agent can read and look things up, and changes nothing. On: it may act (edit, run commands, write to the brain).">
+            {/* The box is the label: ticked means read-only. It once ticked for
+                "tools on" while saying "Read-only" unticked, which read as the opposite. */}
             <Checkbox
-              checked={pick.full_tools}
-              onChange={(v) => onPick({ full_tools: v })}
-              label={pick.full_tools ? "Tools on" : "Read-only"}
+              checked={!pick.full_tools}
+              onChange={(readOnly) => onPick({ full_tools: !readOnly })}
+              label="Read-only"
               disabled={!writable}
             />
           </span>

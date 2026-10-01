@@ -48,6 +48,9 @@ when it cannot go on without you. The marker is stripped before the text is stor
 
 ## Tools: read-only or on, per conversation
 
+The composer's **Read-only** box is ticked by default. Untick it to turn tools on
+from the next turn; the reply then carries a *tools on* badge.
+
 | | Read-only (default) | Tools on |
 |---|---|---|
 | Claude | `--tools=Read,Grep,Glob,WebSearch,WebFetch,Skill`, the same list in `--allowedTools`, `--permission-mode dontAsk`, `--strict-mcp-config`. No Bash, no edits, no MCP | `--dangerously-skip-permissions`, like a trigger session |

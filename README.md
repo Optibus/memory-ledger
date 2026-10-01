@@ -541,7 +541,7 @@ hamburger menu on the left (`m` toggles it):
   the brain recalls for it; every exchange is written back to the graph. The list
   shows a spinner while a reply runs, **?** when the agent is waiting on you and
   ✓ when it answered. Switch agent or model mid-conversation, keep it read-only
-  or turn tools on, and open the folded log of every tool and skill it used. The
+  (the **Read-only** box, ticked by default) or untick it to turn tools on, and open the folded log of every tool and skill it used. The
   chat header searches the thread, shows the live cost, exports PDF / text /
   JSON, and hides a chat under the active list.
 - **Capabilities** — skills, rules, processes and scripts, in that order. The

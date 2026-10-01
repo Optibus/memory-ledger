@@ -67,6 +67,16 @@ describe("Agents", () => {
     );
   });
 
+  it("ticks Read-only when the conversation is read-only, and unticking it turns tools on", async () => {
+    const { user } = renderApp(<AgentsSection />, { route: "/agents?c=c1" });
+    await screen.findByRole("listitem", { name: "agent reply" });
+    const box = screen.getByRole("checkbox", { name: "Read-only" });
+    expect(box).toBeChecked();
+    expect(box).toBeEnabled();
+    await user.click(box);
+    await waitFor(() => expect(sent("/api/agent-conversation")).toEqual([{ id: "c1", full_tools: true }]));
+  });
+
   it("starts a conversation read-only with the default agent", async () => {
     const { user } = renderApp(<AgentsSection />, { route: "/agents" });
     await screen.findByText("Start a conversation");
