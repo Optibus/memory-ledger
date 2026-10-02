@@ -410,7 +410,8 @@ function MessageItem({ m, writable, onRetry, onCancel }: {
       {m.role === "agent"
         ? segs.map((seg, i) =>
             seg.said ? (
-              <div key={i} className="ml-agents__bubble ml-agents__bubble--said">
+              <div key={i} className={`ml-agents__bubble ml-agents__bubble--said${seg.thought ? " ml-agents__bubble--thinking" : ""}`}>
+                {seg.thought ? <div className="ml-agents__muted">💭 thinking</div> : null}
                 <RichText text={seg.said} />
               </div>
             ) : (
@@ -457,22 +458,23 @@ function MessageItem({ m, writable, onRetry, onCancel }: {
   );
 }
 
-type Segment = { said: string; events: AgentEvent[] };
+type Segment = { said: string; thought?: boolean; events: AgentEvent[] };
 
 /**
  * The reply's events in order: what the agent said on its own (a top-level
- * `text` event) as a message, each run of tool calls between those as one
+ * `text` event) or thought (a top-level `thinking` event, labelled) as a message, each run of tool calls between those as one
  * folded log. The last thing said is the reply itself, already shown below,
  * so it is dropped once the reply has landed.
  */
 function segments(events: AgentEvent[], landed: boolean): Segment[] {
-  const said = (e: AgentEvent) => e.kind === "text" && !e.parent;
+  const said = (e: AgentEvent) => (e.kind === "text" || e.kind === "thinking") && !e.parent && !!(e.output ?? "").trim();
+  const isText = (e: AgentEvent) => e.kind === "text";
   let last = -1;
-  if (landed) events.forEach((e, i) => (last = said(e) ? i : last));
+  if (landed) events.forEach((e, i) => (last = said(e) && isText(e) ? i : last));
   const out: Segment[] = [];
   events.forEach((e, i) => {
     if (i === last) return;
-    if (said(e)) out.push({ said: e.output ?? "", events: [] });
+    if (said(e)) out.push({ said: e.output ?? "", thought: !isText(e), events: [] });
     else if (out.length && !out[out.length - 1]!.said) out[out.length - 1]!.events.push(e);
     else out.push({ said: "", events: [e] });
   });
