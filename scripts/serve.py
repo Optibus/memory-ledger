@@ -362,6 +362,19 @@ def _stamp(paths) -> dict:
     return out
 
 
+def _replies_running() -> bool:
+    try:
+        import graph
+        con = graph.connect()
+        try:
+            return con.execute("SELECT 1 FROM agent_msg WHERE status='running' "
+                               "AND role='agent' LIMIT 1").fetchone() is not None
+        finally:
+            con.close()
+    except Exception:
+        return False
+
+
 def _watch(server, interval=1.0) -> None:
     paths = _watched()
     seen = _stamp(paths)
@@ -386,6 +399,14 @@ def _watch(server, interval=1.0) -> None:
             for b in broken:
                 print(f"    {b}", flush=True)
             continue
+        # a re-exec kills the threads running agent replies, and the chat then
+        # shows Retry: hold the restart until none is running (at most 30 min)
+        waited = 0.0
+        while _replies_running() and waited < 1800:
+            if waited == 0:
+                print("  restart waits for the running agent replies", flush=True)
+            time.sleep(2.0)
+            waited += 2.0
         print(f"  changed: {', '.join(Path(c).name for c in changed)} — restarting",
               flush=True)
         _RESTART.set()

@@ -64,7 +64,7 @@ from _switch import _env, _env_says_off, home_dir, settings  # noqa: E402
 
 NODE_TYPE = "usage-week"
 SOURCE = "usage_ingest.py"
-PARSER_VERSION = 1
+PARSER_VERSION = 2
 CHECKPOINT = "usage_ingest.json"
 LOCK = "usage_ingest.lock"
 STAMP = "usage_ingest.stamp"
@@ -372,6 +372,7 @@ def parse_file(path: str, table, tz, resolver: RepoResolver | None = None) -> di
     by_model: collections.Counter = collections.Counter()
     by_hour: collections.Counter = collections.Counter()
     by_wd: collections.Counter = collections.Counter()
+    by_abs_hour: collections.Counter = collections.Counter()
     days: set[str] = set()
     unpriced: set[str] = set()
     read_tokens = 0
@@ -389,13 +390,15 @@ def parse_file(path: str, table, tz, resolver: RepoResolver | None = None) -> di
             days.add(local.date().isoformat())
             by_hour[str(local.hour)] += cost
             by_wd[str(local.weekday())] += cost
+            by_abs_hour[local.strftime("%Y-%m-%dT%H")] += cost
     return {"sid": sid, "sub": is_sub,
             "first": first.astimezone(tz).isoformat(), "last": last.astimezone(tz).isoformat(),
             "cost": sum(comp.values()), "comp": dict(comp), "byModel": dict(by_model),
             "cacheReadTokens": read_tokens, "turns": len(msgs), "typed": typed,
             "days": sorted(days), "compacted": compacted, "edits": dict(edits),
             "dirs": dict(dirs), "outward": dict(outward), "limits": limits,
-            "hour": dict(by_hour), "weekday": dict(by_wd), "unpriced": sorted(unpriced)}
+            "hour": dict(by_hour), "weekday": dict(by_wd), "absHour": dict(by_abs_hour),
+            "unpriced": sorted(unpriced)}
 
 
 # --------------------------------------------------------------------------- #
@@ -412,6 +415,7 @@ def merge_sessions(files: list[dict]) -> list[dict]:
                             "edits": dict(f["edits"]), "dirs": dict(f["dirs"]),
                             "outward": dict(f["outward"]), "limits": list(f["limits"]),
                             "hour": dict(f["hour"]), "weekday": dict(f["weekday"]),
+                            "absHour": dict(f.get("absHour", {})),
                             "days": list(f["days"]), "unpriced": list(f["unpriced"])}
             continue
         s["first"], s["last"] = min(s["first"], f["first"]), max(s["last"], f["last"])
@@ -423,8 +427,8 @@ def merge_sessions(files: list[dict]) -> list[dict]:
         s["days"] = sorted(set(s["days"]) | set(f["days"]))
         s["limits"] += f["limits"]
         s["unpriced"] = sorted(set(s["unpriced"]) | set(f["unpriced"]))
-        for key in ("comp", "byModel", "edits", "dirs", "outward", "hour", "weekday"):
-            for k, v in f[key].items():
+        for key in ("comp", "byModel", "edits", "dirs", "outward", "hour", "weekday", "absHour"):
+            for k, v in f.get(key, {}).items():
                 s[key][k] = s[key].get(k, 0) + v
     return sorted(by.values(), key=lambda s: (s["first"], s["sid"]))
 
@@ -463,6 +467,7 @@ def week_metrics(sessions: list[dict]) -> dict:
     days: set[str] = set()
     hour = [0.0] * 24
     wd = [0.0] * 7
+    abs_hour: collections.Counter = collections.Counter()
     unpriced: set[str] = set()
     repos: dict[str, float] = collections.defaultdict(float)
     edits: collections.Counter = collections.Counter()
@@ -480,6 +485,7 @@ def week_metrics(sessions: list[dict]) -> dict:
             hour[int(k)] += v
         for k, v in s["weekday"].items():
             wd[int(k)] += v
+        abs_hour.update(s.get("absHour", {}))
         unpriced.update(s["unpriced"])
         limits += s["limits"]
         if s["edits"]:
@@ -534,6 +540,7 @@ def week_metrics(sessions: list[dict]) -> dict:
         "rateLimits": [json.loads(l) for l in dedup_limits],
         "costByHour": [r2(v) for v in hour],
         "costByWeekday": [r2(v) for v in wd],
+        "costByAbsHour": {k: round(v, 4) for k, v in sorted(abs_hour.items())},
     }
     if unpriced:
         m["unpricedModels"] = sorted(unpriced)
@@ -761,6 +768,19 @@ def spawn(force_now: bool = False) -> bool:
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          start_new_session=True, close_fds=True)
         return True
+    except Exception:
+        return False
+
+
+def refresh(max_age_minutes: float = 10.0) -> bool:
+    """Start a detached run when the last one is older than `max_age_minutes`, for
+    a reader (the sidebar meter) that wants today's cost fresh rather than six
+    hours old. Same guards as `spawn`; never raises, never waits."""
+    try:
+        stamp = home_dir() / STAMP
+        if stamp.exists() and time.time() - stamp.stat().st_mtime < max_age_minutes * 60:
+            return False
+        return spawn(force_now=True)
     except Exception:
         return False
 

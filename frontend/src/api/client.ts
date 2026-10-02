@@ -150,6 +150,9 @@ export const api = {
     get<import("./types").TasksPayload>("/api/tasks", { limit: 500 }, signal),
   task: (id: string, signal?: AbortSignal) =>
     get<import("./types").TaskDetail>("/api/task", { id }, signal),
+  /** Estimated spend for the sidebar meter: 5 hours, today, week, month, year, total. */
+  usageSummary: (signal?: AbortSignal) =>
+    get<import("./types").UsageSummary>("/api/usage-summary", {}, signal),
   /** The usage report over a range of ISO weeks ("" leaves a bound open). */
   usageReport: (range: { from?: string; to?: string; weeks?: number }, signal?: AbortSignal) =>
     get<import("./types").UsageReportPayload>("/api/usage-report", range, signal),

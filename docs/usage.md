@@ -86,3 +86,13 @@ overlapping. It leaves a switched-off or not-yet-created brain alone. Opt out wi
   worktrees, or outside any git repository, are not attributed to a repository.
 - Files changed through `Bash` (redirects, `sed -i`) are not seen as edits.
 - The insights ccalyze writes (what to change, and why) are not reproduced here.
+
+## The sidebar meter
+
+`GET /api/usage-summary` feeds the meter above Settings in the sidebar: estimated
+dollars for the last 5 hours and today on the bar, and week, month, year and total
+when it is clicked open. It sums `metrics.costByAbsHour` (cost per local hour,
+written by the ingest) over the `usage-week` nodes, and starts a detached ingest
+when the last one is over ten minutes old. A week written by another tool without
+hour buckets counts whole on its first day (`coarseWeeks`). These are list-price
+estimates, not the subscription quota.

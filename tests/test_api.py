@@ -46,7 +46,7 @@ GET_ROUTES = [
     "/api/suggest-links", "/api/search", "/api/trigger", "/api/trigger-request", "/api/trigger-people", "/api/b2b",
     "/api/b2b-conversations", "/api/b2b-thread",
     "/api/agents", "/api/agent-commands", "/api/agent-conversations", "/api/agent-thread",
-    "/api/scripts", "/api/script", "/api/tasks", "/api/task", "/api/usage-report",
+    "/api/scripts", "/api/script", "/api/tasks", "/api/task", "/api/usage-report", "/api/usage-summary",
 ]
 POST_ROUTES = [
     "/api/set-due", "/api/add-task", "/api/complete", "/api/set-status",

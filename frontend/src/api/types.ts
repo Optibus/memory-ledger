@@ -1072,6 +1072,21 @@ export interface UsageWeek {
   sessions: number;
 }
 
+/** `/api/usage-summary`: estimated dollars for the sidebar meter. */
+export interface UsageSummary {
+  ok: boolean;
+  estimated: boolean;
+  fiveHours: number;
+  today: number;
+  week: number;
+  month: number;
+  year: number;
+  total: number;
+  weeks: number;
+  /** Weeks stored without hour buckets, counted whole on their first day. */
+  coarseWeeks: number;
+}
+
 /** `/api/usage-report`: the report, rendered by the server with no model call. */
 export interface UsageReportPayload {
   ok: boolean;

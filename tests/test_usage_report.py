@@ -222,3 +222,18 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def test_usage_summary_windows():
+    from datetime import datetime
+    hours = {"2026-10-02T14": 1.0, "2026-10-02T10": 2.0, "2026-10-02T08": 4.0,
+             "2026-10-01T23": 8.0, "2026-09-30T09": 16.0, "2025-12-31T09": 32.0}
+    weeks = [{"week": "2026-W40", "from": "2026-09-28", "metrics": {"costUSD": 63.0, "costByAbsHour": hours}},
+             {"week": "2026-W35", "from": "2026-08-24", "metrics": {"costUSD": 100.0}}]
+    s = ur.usage_summary(weeks, datetime(2026, 10, 2, 14, 30))
+    assert s["fiveHours"] == 3.0     # hours 14..10 inclusive
+    assert s["today"] == 7.0
+    assert s["week"] == 31.0         # Monday 2026-09-28 on
+    assert s["month"] == 15.0
+    assert s["year"] == 131.0        # the hourless week counts whole, on its first day
+    assert s["total"] == 163.0 and s["coarseWeeks"] == 1

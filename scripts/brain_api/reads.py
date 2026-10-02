@@ -8,6 +8,7 @@ and the bundle download (404).
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Query
@@ -19,6 +20,7 @@ import b2b
 import brain_query
 import graph
 import trigger
+import usage_ingest
 import usage_report
 
 from . import commands, payloads, state, trigger_runtime
@@ -331,6 +333,19 @@ def usage_report_page(
         return usage_report.report(graph.db_path(), weeks, from_ or None, to or None)
     except ValueError as e:
         return {"ok": False, "error": str(e)}
+
+
+@router.get("/usage-summary", tags=["usage"],
+            summary="Estimated spend for the sidebar meter: 5 hours, today, week, month, year, total",
+            description="Dollar estimates priced from the local Claude Code logs by "
+                        "`scripts/usage_ingest.py` (list price per token, not what a "
+                        "subscription charges), summed from the `usage-week` nodes. No model "
+                        "call. Asking also starts a detached ingest when the last one is "
+                        "over ten minutes old, so the numbers trail the logs by a few minutes.")
+def usage_summary():
+    usage_ingest.refresh()
+    now = datetime.now(usage_ingest.get_tz(None)).replace(tzinfo=None)
+    return usage_report.usage_summary(usage_report.load_weeks(graph.db_path()), now)
 
 
 @router.get("/meta", tags=["vocabulary"], summary="The vocabulary, so no client hard-codes it",

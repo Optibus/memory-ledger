@@ -116,6 +116,12 @@ export const handlers = [
     const q = new URL(request.url).searchParams;
     return HttpResponse.json(usageReportFixture(q.get("from") || "", q.get("to") || ""));
   }),
+  http.get("/api/usage-summary", () =>
+    HttpResponse.json({
+      ok: true, estimated: true, fiveHours: 1.5, today: 4.25, week: 30, month: 120,
+      year: 900, total: 1500, weeks: 40, coarseWeeks: 0,
+    }),
+  ),
   http.get("/api/timezones", () => ok({ zones: ["UTC", "America/Sao_Paulo", "Europe/Lisbon"] })),
   http.get("/api/capture", () => HttpResponse.json(captureFixture)),
   http.get("/api/doctor", () => HttpResponse.json(doctorFixture)),

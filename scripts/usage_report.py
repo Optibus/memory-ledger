@@ -36,7 +36,7 @@ import os
 import re
 import sqlite3
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -92,6 +92,44 @@ def load_weeks(db: str | Path | None = None) -> list[dict]:
     finally:
         con.close()
     return parse_rows(rows)
+
+
+WEEK_DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def usage_summary(weeks: list[dict], now: datetime) -> dict:
+    """Estimated spend for the sidebar meter: the last 5 hours and today, then
+    this week, month, year and everything stored. `now` is local wall-clock time
+    in the brain's timezone (the hour buckets the ingest keeps are local), so
+    the function stays pure. The 5-hour window is counted in whole hours, the
+    current one included. A week stored without hour buckets is counted whole on its
+    first day (`coarseWeeks`)."""
+    buckets: dict[str, float] = {}
+    coarse = 0
+    for w in weeks:
+        hours = w["metrics"].get("costByAbsHour")
+        if not hours and WEEK_DAY.match(w["from"]):
+            # No hour buckets (another ingest wrote it): the whole week lands on its
+            # first day, which is right for the year and total, near enough for the month.
+            hours = {w["from"] + "T00": float(w["metrics"].get("costUSD") or 0)}
+            coarse += 1
+        for k, v in (hours or {}).items():
+            buckets[k] = buckets.get(k, 0.0) + float(v)
+    today = now.date()
+    monday = today.toordinal() - today.weekday()
+    five = {(now - timedelta(hours=i)).strftime("%Y-%m-%dT%H") for i in range(5)}
+
+    def total(pred) -> float:
+        return round(sum(v for k, v in buckets.items() if pred(date.fromisoformat(k[:10]))), 2)
+
+    return {"ok": True, "estimated": True,
+            "fiveHours": round(sum(v for k, v in buckets.items() if k in five), 2),
+            "today": total(lambda d: d == today),
+            "week": total(lambda d: d.toordinal() >= monday),
+            "month": total(lambda d: (d.year, d.month) == (today.year, today.month)),
+            "year": total(lambda d: d.year == today.year),
+            "total": round(sum(float(w["metrics"].get("costUSD") or 0) for w in weeks), 2),
+            "weeks": len(weeks), "coarseWeeks": coarse}
 
 
 def parse_rows(rows) -> list[dict]:
