@@ -164,13 +164,20 @@ def main() -> int:
     argv = json.loads((Path(HOME) / "claude-argv.jsonl").read_text().splitlines()[-1])
     ck("read-only cuts the tool set and denies the rest",
        "--tools=Read,Grep,Glob,WebSearch,WebFetch,Skill,Bash" in argv and "dontAsk" in argv
-       and "--strict-mcp-config" in argv and "--dangerously-skip-permissions" not in argv)
-    allowed = next(a for a in argv if a.startswith("--allowedTools="))
-    ck("read-only Bash is the thread command only", allowed.endswith(f",Bash({agents.THREAD_CMD}:*)")
-       and ",Bash," not in allowed + ",", allowed)
+       and "--dangerously-skip-permissions" not in argv)
+    allowed = next(a for a in argv if a.startswith("--allowedTools=")).split("=", 1)[1].split(",")
+    ck("read-only Bash is the brain's own commands only",
+       [a for a in allowed if a.startswith("Bash")] == [f"Bash({c}:*)" for c in agents.BRAIN_CMDS], str(allowed))
+    ck("read-only connectors read and never write",
+       "mcp__atlassian__getJiraIssue" in allowed and "mcp__claude_ai_Slack__slack_read_thread" in allowed
+       and not any(w in a for a in allowed for w in ("send", "create", "edit", "update", "delete", "trash",
+                                                      "executeWrite", "executeDestructive", "comment")), str(allowed))
     system = argv[argv.index("--append-system-prompt") + 1]
     ck("the system prompt names the conversation and how to read it",
        r["conversation"]["id"] in system and f"{agents.THREAD_CMD} {r['conversation']['id']}" in system, system)
+    ck("the system prompt gives the brain's commands, to read and write without asking",
+       f"{agents.GRAPH_CMD} match-rules" in system and f"{agents.GRAPH_CMD} add-node" in system
+       and "without asking" in system and "READ-ONLY" in system, system)
     ck("the prompt carries the message and the recalled node",
        "What must I renew?" in argv[1] and "Renew the parking permit" in argv[1])
     ck("the conversation badge is a question", agents.conv_state(con, r["conversation"]["id"]) == "question")
@@ -218,21 +225,22 @@ def main() -> int:
     ck("ollama answers after its tool call", out["ok"] and m["text"] == "Done.", repr(m["text"]))
     ck("the tool call is logged with its result", m["events"][0]["name"] == "recall"
        and "parking permit" in m["events"][0]["output"].lower(), str(m["events"][:1]))
-    ck("read-only ollama gets only the read tools",
-       {t["function"]["name"] for t in FakeOllama.calls[0]["tools"]} == {"recall", "search", "get_node", "read_thread"})
+    ck("read-only ollama still reads and writes the brain",
+       {t["function"]["name"] for t in FakeOllama.calls[0]["tools"]}
+       == {"recall", "search", "get_node", "read_thread", "add_note", "add_task"})
     ck("ollama is told to read the thread with its tool",
        "read_thread" in FakeOllama.calls[0]["messages"][0]["content"])
     ck("read_thread reads this conversation back",
-       "What must I renew?" in agents.ollama_tool_call("read_thread", {}, False, cid))
-    last2 = agents.ollama_tool_call("read_thread", {"limit": 2}, False, cid)
+       "What must I renew?" in agents.ollama_tool_call("read_thread", {}, cid))
+    last2 = agents.ollama_tool_call("read_thread", {"limit": 2}, cid)
     ck("read_thread keeps the last N", "(2 messages)" in last2 and "Oct 5" not in last2, last2)
     ck("a local model costs nothing, tokens are counted", m["cost_usd"] == 0 and m["tokens_in"] == 120)
     ck("each reply records who wrote it", m["model"] == "tiny:1b" and reply_of(con, r["reply_id"])["model"] == "claude-sonnet-5-5")
-    ck("a write tool refuses while read-only", "read-only" in json.dumps(agents.ollama_tool_call("add_task", {"title": "x"}, False)))
+    ck("a brain write works while read-only", agents.ollama_tool_call("add_task", {"title": "x"})["ok"])
     FakeOllama.calls.clear()
     r6 = agents.send(con, "make a task", cid, full_tools=True, start=False)
     agents.run_reply(r6["reply_id"])
-    ck("tools on lets ollama write", graph.connect().execute(
+    ck("tools on, ollama writes too", graph.connect().execute(
         "SELECT 1 FROM nodes WHERE title='Renew permit' AND type='task'").fetchone() is not None)
     agents.save_conversation(con, cid, model="notools:1b")
     r7 = agents.send(con, "plain?", cid, start=False)

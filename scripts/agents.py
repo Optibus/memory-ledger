@@ -15,9 +15,10 @@ are two connectors. A conversation can switch connector and model between
 turns; each reply records which one wrote it.
 
 Tools are per conversation. Off (the default), Claude runs with read-only
-built-in tools and nothing allowed beyond them, and Ollama gets the graph's read
-tools only. On, Claude runs like a trigger session (every tool, no prompts) and
-Ollama may also write notes and tasks.
+built-in tools and read-only connectors, and nothing allowed beyond them. On,
+Claude runs like a trigger session (every tool, no prompts). Either way the
+brain itself is read AND written: the graph's commands for Claude, the graph
+tools (recall, search, get_node, read_thread, add_note, add_task) for Ollama.
 
     python3 scripts/agents.py status
     python3 scripts/agents.py run <message-id>     # run one queued reply, in this process
@@ -66,9 +67,38 @@ CLAUDE_MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5-20251
 # Read-only Claude: these built-ins and nothing else, every other call denied.
 CLAUDE_READ_TOOLS = ["Read", "Grep", "Glob", "WebSearch", "WebFetch", "Skill"]
 SCRIPT = Path(__file__).resolve()
-# How an agent reads its own conversation back. Read-only Claude gets Bash for
-# this one command and nothing else.
+# How an agent reads its own conversation back, and reads and writes the brain.
+# These run in both tool modes: read-only limits what an agent does OUTSIDE the
+# brain, never its memory (the offload rule, CONVENTIONS §0). Read-only Claude
+# gets Bash for these commands and nothing else.
 THREAD_CMD = f"python3 {SCRIPT} thread"
+GRAPH_CMD = f"python3 {SCRIPT.parent / 'graph.py'}"
+QUERY_CMD = f"python3 {SCRIPT.parent / 'brain_query.py'}"
+BRAIN_CMDS = (THREAD_CMD, GRAPH_CMD, QUERY_CMD)
+# Read-only Claude may also look things up through the person's connectors.
+# Only these, by exact name: anything that posts, edits, labels or deletes is
+# left out, and `dontAsk` denies it.
+CLAUDE_READ_MCP = [
+    "ToolSearch",
+    *(f"mcp__atlassian__{t}" for t in (
+        "atlassianUserInfo", "getAccessibleAtlassianResources", "getJiraIssue",
+        "searchJiraIssuesUsingJql", "search", "searchConfluence", "getConfluenceContent",
+        "getGraphContext", "getGraphObject", "getLoomVideo", "discover", "executeRead")),
+    *(f"mcp__claude_ai_Slack__slack_{t}" for t in (
+        "read_channel", "read_thread", "read_canvas", "read_file", "read_user_profile",
+        "search_public", "search_public_and_private", "search_channels", "search_users",
+        "list_channel_members", "get_reactions")),
+    *(f"mcp__claude_ai_Gmail__{t}" for t in (
+        "get_message", "get_thread", "search_threads", "list_labels", "list_drafts", "get_draft")),
+    *(f"mcp__claude_ai_Google_Calendar__{t}" for t in (
+        "list_calendars", "list_events", "get_event", "search_events", "suggest_time")),
+    *(f"mcp__claude_ai_Google_Drive__{t}" for t in (
+        "get_file_metadata", "list_recent_files", "read_file_content", "search_files")),
+    *(f"mcp__claude_ai_Claude_Docs__{t}" for t in ("read", "query", "guide")),
+    *(f"mcp__claude_ai_Sentry__{t}" for t in (
+        "find_organizations", "find_projects", "get_sentry_resource", "search_events",
+        "search_issues", "search_sentry_tools")),
+]
 
 DEFAULTS: dict[str, Any] = {
     "default_connector": "claude",
@@ -597,13 +627,31 @@ def system_prompt(conv: dict[str, Any] | None, carried: int, kind: str = "claude
         f"cannot find, a confirmation before acting), ask, and make the last line of your "
         f"reply exactly {QUESTION_MARK}. Never add it otherwise.",
     ]
-    if full:
-        lines.append("Tools are ON for this conversation: you may act, including writing "
-                     "to the graph with scripts/graph.py, within the brain's rules.")
+    if kind == "ollama":
+        lines.append("The brain is yours to read and write in every turn: look things up "
+                     "with recall, search and get_node, and store what is worth keeping "
+                     "(a fact, a decision, a to-do) with add_note and add_task, without "
+                     "asking first.")
     else:
-        lines.append("Tools are READ-ONLY for this conversation: read and look up, but "
-                     "change nothing. If the owner asks for a change, say what you would "
-                     "do and that they can turn tools on for this conversation.")
+        lines.append(
+            "The brain is yours to read and write in every turn, whatever the tools mode, "
+            "and without asking first. Run these exactly as written, never after a `cd`:\n"
+            f"- `{GRAPH_CMD} match-rules \"<what you are about to do>\"`: the owner's rules "
+            "that apply. Run it before acting.\n"
+            f"- `{GRAPH_CMD} recall \"<topic>\"`, `search \"<text>\"`, `get-node --id <id>`: "
+            "facts, people, projects, decisions.\n"
+            f"- `{QUERY_CMD} open --mine`: the owner's open loops.\n"
+            f"- `{GRAPH_CMD} add-node --type <note|task|decision|person|...> --title ... "
+            "--body ...` and `add-edge`: store what is worth keeping from this turn (a fact, "
+            "a decision, a to-do, a person). The exchange itself is stored for you.")
+    if full:
+        lines.append("Tools are ON for this conversation: you may also act outside the "
+                     "brain (edit, run commands, post), within the brain's rules.")
+    else:
+        lines.append("Tools are READ-ONLY for this conversation: outside the brain, read "
+                     "and look up (files, the web, Jira, Slack, mail, calendar, Drive) but "
+                     "change nothing. If the owner asks for such a change, say what you "
+                     "would do and that they can turn tools on for this conversation.")
     return "\n".join(lines)
 
 
@@ -634,11 +682,12 @@ def claude_command(c: dict[str, Any], turn: dict[str, Any], model: str, full: bo
         cmd.append("--dangerously-skip-permissions")
     else:
         # The tool set itself is cut down, and anything outside it is denied
-        # without a prompt: no edits, no MCP servers, and Bash for reading this
-        # thread back only.
+        # without a prompt: no edits, connectors for reading only, and Bash for
+        # the brain's own commands only.
         tools = ",".join(CLAUDE_READ_TOOLS)
-        cmd += [f"--tools={tools},Bash", f"--allowedTools={tools},Bash({THREAD_CMD}:*)",
-                "--permission-mode", "dontAsk", "--strict-mcp-config"]
+        allowed = [*CLAUDE_READ_TOOLS, *CLAUDE_READ_MCP, *(f"Bash({c}:*)" for c in BRAIN_CMDS)]
+        cmd += [f"--tools={tools},Bash", f"--allowedTools={','.join(allowed)}",
+                "--permission-mode", "dontAsk"]
     return cmd
 
 
@@ -825,8 +874,9 @@ OLLAMA_WRITE_TOOLS = [
 ]
 
 
-def ollama_tool_call(name: str, args: dict[str, Any], full: bool, conv_id: str = "") -> Any:
-    """One graph tool, run here. Writes refuse unless tools are on."""
+def ollama_tool_call(name: str, args: dict[str, Any], conv_id: str = "") -> Any:
+    """One graph tool, run here. Writing to the brain is allowed in both tool
+    modes; Ollama has no tools that reach outside it."""
     if name == "read_thread":
         try:
             limit = int(args.get("limit") or 0)
@@ -854,9 +904,6 @@ def ollama_tool_call(name: str, args: dict[str, Any], full: bool, conv_id: str =
             "SELECT src,rel,dst FROM edges WHERE src=? OR dst=? LIMIT 40", (d["id"], d["id"]))]
         return d
     if name in ("add_note", "add_task"):
-        if not full:
-            return {"error": "tools are read-only in this conversation; ask the owner to "
-                             "turn them on"}
         title = str(args.get("title") or "").strip()[:300]
         if not title:
             return {"error": "missing title"}
@@ -884,9 +931,8 @@ def _ollama_chat(c: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
 
 def run_ollama(con: sqlite3.Connection, reply: dict[str, Any], c: dict[str, Any],
                turn: dict[str, Any]) -> dict[str, Any]:
-    full = bool(reply["full_tools"])
     log = _Log(con, reply["id"])
-    tools = OLLAMA_READ_TOOLS + (OLLAMA_WRITE_TOOLS if full else [])
+    tools = OLLAMA_READ_TOOLS + OLLAMA_WRITE_TOOLS
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": turn["system"] + "\nUse the tools to look up the "
          "owner's memory graph when the recalled memory is not enough."},
@@ -933,7 +979,7 @@ def run_ollama(con: sqlite3.Connection, reply: dict[str, Any], c: dict[str, Any]
             ev = log.add({"kind": "tool", "name": name, "tool": name, "input": _clip(args),
                           "output": "", "error": False})
             try:
-                res = ollama_tool_call(name, args, full, reply["conv_id"])
+                res = ollama_tool_call(name, args, reply["conv_id"])
             except Exception as e:                    # a tool failure is the model's to read
                 res = {"error": str(e)}
             ev["output"] = _clip(res)
