@@ -54,7 +54,7 @@ PENDING = ("queued", "running")
 # The line an agent ends with when it cannot go on without the owner. Hidden in
 # the UI; its presence is what turns the conversation's badge into a "?".
 QUESTION_MARK = "[[needs-answer]]"
-NEXT_RE = re.compile(r"^[ \t`]*\[\[next:\s*(.*?)\s*\]\][ \t`]*$", re.M | re.S)
+NEXT_RE = re.compile(r"[ \t`]*\[\[next:\s*(.*?)\s*\]\][ \t`]*", re.S)
 # What a reply cancelled by the owner fails with; Retry runs it again.
 CANCELLED = "cancelled by you"
 MAX_TURNS = 10            # the most earlier exchanges a turn may carry
@@ -613,7 +613,7 @@ def build_turn(con: sqlite3.Connection, reply: dict[str, Any]) -> dict[str, Any]
             res = graph.api_recall(graph.connect(), question,
                                    limit=int(cfg["recall_limit"]) + 4,
                                    budget=int(cfg.get("recall_budget") or 2600), exclude=skip)
-            recalled = [r for r in res.get("results") or []
+            recalled = [_without_next(r) for r in res.get("results") or []
                         if r.get("type") not in RECALL_SKIP][:int(cfg["recall_limit"])]
         except Exception as e:                       # recall is help, never a blocker
             recalled = [{"id": "", "type": "error", "title": f"recall failed: {e}"}]
@@ -622,7 +622,7 @@ def build_turn(con: sqlite3.Connection, reply: dict[str, Any]) -> dict[str, Any]
         parts.append("Earlier in this conversation:")
         for h in history:
             parts.append(f"\nOwner: {h['asked']}\n\nYou ({h['model']}): "
-                         f"{strip_mark(h['answered'])[0]}")
+                         f"{strip_mark(strip_next(h['answered'])[0])[0]}")
         parts.append("")
     if recalled:
         parts.append("What the brain recalled for this message (ids are graph node ids):")
@@ -698,6 +698,11 @@ def strip_next(text: str) -> tuple[str, str]:
     """The reply without the `[[next: ...]]` line, and the suggestion in it."""
     found = NEXT_RE.findall(text or "")
     return NEXT_RE.sub("", text or "").rstrip(), (found[-1].strip()[:300] if found else "")
+
+
+def _without_next(node: dict[str, Any]) -> dict[str, Any]:
+    """A recalled node with any `[[next: ...]]` removed, so a small model cannot copy an old suggestion."""
+    return {k: NEXT_RE.sub("", v).strip() if isinstance(v, str) else v for k, v in node.items()}
 
 
 def strip_mark(text: str) -> tuple[str, bool]:
