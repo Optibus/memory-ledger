@@ -3,6 +3,7 @@ import { http, HttpResponse } from "msw";
 import {
   agendaFixture,
   agentsFixture,
+  agentCommandsFixture,
   agentConversationsFixture,
   agentThreadFixture,
   b2bFixture,
@@ -91,6 +92,7 @@ export const handlers = [
   http.get("/api/status", () => HttpResponse.json(statusFixture)),
   http.get("/api/trigger", () => HttpResponse.json(triggerFixture)),
   http.get("/api/agents", () => HttpResponse.json(agentsFixture)),
+  http.get("/api/agent-commands", () => HttpResponse.json(agentCommandsFixture)),
   http.get("/api/agent-conversations", () => HttpResponse.json(agentConversationsFixture)),
   http.get("/api/agent-thread", ({ request }) => {
     const id = new URL(request.url).searchParams.get("id") ?? "";
@@ -199,6 +201,7 @@ export const handlers = [
   ),
   write("/api/agent-retry", (body: { id?: string }) => ok({ reply_id: body.id })),
   write("/api/agent-cancel", (body: { id?: string }) => ok({ reply_id: body.id, was: "running" })),
+  write("/api/agent-plugin", () => HttpResponse.json(agentCommandsFixture)),
   write("/api/agent-config", () => HttpResponse.json(agentsFixture)),
   write("/api/b2b-send", () =>
     ok({ id: "m2", to: "A".repeat(43), name: "Dana", broker: "b1", sent_at: "2026-09-30T10:00:00Z" }),

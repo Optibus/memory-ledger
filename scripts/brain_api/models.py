@@ -402,6 +402,11 @@ class AgentCancel(Body):
     id: Text = T("A reply that is queued or running.")
 
 
+class AgentPlugin(Body):
+    key: Text = T("The plugin, as `name@marketplace`.")
+    enabled: Any = Field(None, description="`true` turns it on, anything else off.")
+
+
 class AgentConfig(Body):
     """A patch of `<home>/agents.json`: only the keys sent change."""
     connectors: Optional[list[Any]] = Field(None, description="The whole connector list, "

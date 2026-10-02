@@ -54,6 +54,7 @@ PENDING = ("queued", "running")
 # The line an agent ends with when it cannot go on without the owner. Hidden in
 # the UI; its presence is what turns the conversation's badge into a "?".
 QUESTION_MARK = "[[needs-answer]]"
+NEXT_RE = re.compile(r"^[ \t`]*\[\[next:\s*(.*?)\s*\]\][ \t`]*$", re.M | re.S)
 # What a reply cancelled by the owner fails with; Retry runs it again.
 CANCELLED = "cancelled by you"
 MAX_TURNS = 10            # the most earlier exchanges a turn may carry
@@ -152,7 +153,9 @@ CREATE TABLE IF NOT EXISTS agent_msg (
     tokens_out    INTEGER NOT NULL DEFAULT 0,
     started_at    TEXT NOT NULL DEFAULT '',
     finished_at   TEXT NOT NULL DEFAULT '',
-    node_id       TEXT NOT NULL DEFAULT ''      -- the exchange's `message` node
+    node_id       TEXT NOT NULL DEFAULT '',     -- the exchange's `message` node
+    owner_pid     INTEGER NOT NULL DEFAULT 0,   -- the server process running it
+    next_action   TEXT NOT NULL DEFAULT ''      -- the agent's suggested next message
 );
 CREATE INDEX IF NOT EXISTS agent_msg_conv ON agent_msg(conv_id, at);
 CREATE INDEX IF NOT EXISTS agent_msg_status ON agent_msg(status);
@@ -310,6 +313,11 @@ def status_payload() -> dict[str, Any]:
 def db() -> sqlite3.Connection:
     con = graph.connect()
     con.executescript(SCHEMA)
+    have = {r["name"] for r in con.execute("PRAGMA table_info(agent_msg)")}
+    for col, ddl in (("owner_pid", "INTEGER NOT NULL DEFAULT 0"),
+                     ("next_action", "TEXT NOT NULL DEFAULT ''")):
+        if col not in have:
+            con.execute(f"ALTER TABLE agent_msg ADD COLUMN {col} {ddl}")
     con.commit()
     return con
 
@@ -653,6 +661,10 @@ def system_prompt(conv: dict[str, Any] | None, carried: int, kind: str = "claude
         f"If you cannot go on without the owner (a choice only they can make, a fact you "
         f"cannot find, a confirmation before acting), ask, and make the last line of your "
         f"reply exactly {QUESTION_MARK}. Never add it otherwise.",
+        "Every reply ends with a line of its own suggesting the owner's most likely next "
+        "message as `[[next: <one short sentence, in the owner's voice>]]`. When you asked "
+        f"a question, suggest the answer you expect (before the {QUESTION_MARK} line, which "
+        "stays last). Leave it out only when nothing obvious follows.",
     ]
     if kind == "ollama":
         lines.append("The brain is yours to read and write in every turn: look things up "
@@ -680,6 +692,12 @@ def system_prompt(conv: dict[str, Any] | None, carried: int, kind: str = "claude
                      "change nothing. If the owner asks for such a change, say what you "
                      "would do and that they can turn tools on for this conversation.")
     return "\n".join(lines)
+
+
+def strip_next(text: str) -> tuple[str, str]:
+    """The reply without the `[[next: ...]]` line, and the suggestion in it."""
+    found = NEXT_RE.findall(text or "")
+    return NEXT_RE.sub("", text or "").rstrip(), (found[-1].strip()[:300] if found else "")
 
 
 def strip_mark(text: str) -> tuple[str, bool]:
@@ -1036,8 +1054,9 @@ def run_reply(msg_id: str) -> dict[str, Any]:
         return {"ok": False, "error": f"no reply {msg_id}"}
     reply = _msg_row(r)
     # Claimed only while still pending: a cancel in between wins.
-    claimed = con.execute("UPDATE agent_msg SET status='running', started_at=? WHERE id=? AND"
-                          " status IN ('queued','running')", (now_iso(), msg_id)).rowcount
+    claimed = con.execute("UPDATE agent_msg SET status='running', started_at=?, owner_pid=?"
+                          " WHERE id=? AND status IN ('queued','running')",
+                          (now_iso(), os.getpid(), msg_id)).rowcount
     con.commit()
     if not claimed:
         return {"ok": False, "error": f"reply {msg_id} was cancelled"}
@@ -1058,9 +1077,11 @@ def run_reply(msg_id: str) -> dict[str, Any]:
         return {"ok": False, "error": str(e)}
     if _is_cancelled(msg_id):                  # an answer that came in after the cancel
         return {"ok": False, "error": CANCELLED}
-    text, asked = strip_mark(res["text"])
+    text, nxt = strip_next(res["text"])
+    text, asked = strip_mark(text)
     status = "question" if asked else "done"
-    _update(con, msg_id, status=status, text=text[:TEXT_MAX], events=res["events"],
+    _update(con, msg_id, status=status, text=text[:TEXT_MAX],
+            next_action=nxt, events=res["events"],
             cost_usd=round(res["cost_usd"], 6) if res["cost_usd"] is not None else None,
             cost_estimated=int(bool(res["cost_estimated"])), tokens_in=res["tokens"][0],
             tokens_out=res["tokens"][1], finished_at=now_iso())
@@ -1144,13 +1165,28 @@ def _work(msg_id: str) -> None:
         dispatch()
 
 
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def recover() -> int:
-    """At server start: a reply left `running` belonged to a process that is
-    gone. It fails with a reason (retry is one click), and the queue restarts."""
+    """At server start: a reply left `running` whose server process is gone
+    fails with a reason (retry is one click), and the queue restarts. A reply
+    whose owner is still alive (a second server, a reload) is left alone."""
     con = db()
-    n = con.execute("UPDATE agent_msg SET status='error', error='interrupted: the server "
-                    "stopped while this ran', finished_at=? WHERE status='running'",
-                    (now_iso(),)).rowcount
+    n = 0
+    for r in con.execute("SELECT id, owner_pid FROM agent_msg WHERE status='running'").fetchall():
+        if r["owner_pid"] and r["owner_pid"] != os.getpid() and _alive(r["owner_pid"]):
+            continue
+        n += con.execute("UPDATE agent_msg SET status='error', error='interrupted: the server "
+                         "stopped while this ran', finished_at=? WHERE id=? AND status='running'",
+                         (now_iso(), r["id"])).rowcount
     con.commit()
     dispatch()
     return n

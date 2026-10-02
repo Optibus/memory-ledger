@@ -29,6 +29,7 @@ import type {
 } from "@/api/types";
 import { exportConversation, formatCost } from "./export";
 import type { ExportFormat } from "./export";
+import { CommandPopup, PluginsMenu, search, slashQuery, useCommands } from "./SlashCommands";
 import "./AgentsSection.css";
 
 /**
@@ -368,6 +369,7 @@ function Thread({ id, summary, connectors, defaults, writable, onCreated, onChan
         connectors={connectors}
         writable={writable}
         busy={live}
+        suggestion={live ? "" : [...(messages ?? [])].reverse().find((m) => m.role === "agent")?.next_action ?? ""}
         error={error}
         onError={setError}
         onPick={(p) => void change(p)}
@@ -515,6 +517,7 @@ interface ComposerProps {
   connectors: AgentConnector[] | null;
   writable: boolean;
   busy: boolean;
+  suggestion: string;
   error: string | null;
   onError: (e: string | null) => void;
   onPick: (p: Partial<Pick>) => void;
@@ -526,10 +529,17 @@ const TURN_OPTIONS = Array.from({ length: 11 }, (_, n) => ({
   label: n === 0 ? "no history" : `last ${n} exchange${n > 1 ? "s" : ""}`,
 }));
 
-function Composer({ conv, pick, connectors, writable, busy, error, onError, onPick, onSent }: ComposerProps) {
+function Composer({ conv, pick, connectors, writable, busy, suggestion, error, onError, onPick, onSent }: ComposerProps) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const box = useRef<HTMLTextAreaElement>(null);
+  const cmds = useCommands(true);
+  const [at, setAt] = useState(0);
+  const [dismissed, setDismissed] = useState(false);
+  const query = slashQuery(text);
+  const matches = useMemo(() => (query === null ? [] : search(cmds.data?.commands ?? [], query).slice(0, 40)), [cmds.data, query]);
+  const popup = query !== null && !dismissed && !!cmds.data;
+  const readOnly = !pick?.full_tools;
   const c = pick ? connectorOf(connectors, pick.connector) : undefined;
   const usable = !!c && c.enabled && !!pick?.model;
   const canSend = writable && usable && !sending && !!text.trim();
@@ -557,7 +567,36 @@ function Composer({ conv, pick, connectors, writable, busy, error, onError, onPi
     }
   };
 
+  const choose = (cmd: { name: string; writes: boolean }) => {
+    if (readOnly && cmd.writes) return;
+    setText(`/${cmd.name} `);
+    setDismissed(true);
+    box.current?.focus();
+  };
+
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Tab" && !e.shiftKey && !text && suggestion && !e.nativeEvent.isComposing) {
+      e.preventDefault();
+      setText(suggestion);
+      return;
+    }
+    if (popup) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const n = matches.length || 1;
+        setAt((i) => (i + (e.key === "ArrowDown" ? 1 : n - 1)) % n);
+        return;
+      }
+      if ((e.key === "Enter" || e.key === "Tab") && matches[at] && !e.nativeEvent.isComposing) {
+        e.preventDefault();
+        choose(matches[at]!);
+        return;
+      }
+      if (e.key === "Escape") {
+        setDismissed(true);
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       void send();
@@ -601,19 +640,28 @@ function Composer({ conv, pick, connectors, writable, busy, error, onError, onPi
               disabled={!writable}
             />
           </span>
+          {cmds.data ? (
+            <PluginsMenu plugins={cmds.data.plugins} disabled={!writable} onChange={cmds.setData} />
+          ) : null}
         </div>
       ) : (
         <Spinner label="reading connectors" />
       )}
+      {cmds.error ? <StatusMessage tone="error">{cmds.error}</StatusMessage> : null}
       <div className="ml-agents__compose-row">
+        {popup ? <CommandPopup items={matches} active={at} readOnly={readOnly} onPick={choose} onHover={setAt} /> : null}
         <TextArea
           ref={box}
           rows={2}
           value={text}
           disabled={!writable}
-          placeholder={busy ? "The agent is still answering. You can queue another message." : "Write to the agent. Enter sends, Shift+Enter for a new line."}
+          placeholder={busy ? "The agent is still answering. You can queue another message." : suggestion ? `${suggestion}  (Tab to use)` : "Write to the agent. Enter sends, Shift+Enter for a new line, / for a skill."}
           aria-label="message to the agent"
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value);
+            setAt(0);
+            setDismissed(false);
+          }}
           onKeyDown={onKey}
         />
         <Button variant="primary" disabled={!canSend} onClick={() => void send()}>

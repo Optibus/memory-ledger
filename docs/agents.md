@@ -140,6 +140,25 @@ add it to `KINDS`, give `_clean_connector` its fields, and register a
 `run_<kind>(con, reply, connector, turn)` in `RUNNERS` that returns
 `{text, events, tokens, cost_usd, cost_estimated}`.
 
+## Slash commands
+
+Type `/` as the first character of a message and a popup lists the skills and
+plugin commands, fuzzy-searched by name and description (`GET /api/agent-commands`,
+read from disk, no model call). Arrow keys move, Enter or Tab inserts
+`/name ` into the box, Esc closes it. The agent's own Claude session expands it,
+so there is no new execution path. A `/` later in the text opens nothing.
+
+Commands come from the enabled plugins (`plugin:name`), `~/.claude/skills` and the
+agent's `.claude/skills`. The **Plugins** button lists every installed plugin with
+a checkbox: it edits that plugin's key under `enabledPlugins` in
+`~/.claude/settings.json` (`POST /api/agent-plugin`), so it changes every Claude
+session, from the next message on.
+
+`writes` is a guess from the name and description (send, post, create, merge...),
+not a declaration. While the conversation is read-only those commands are greyed
+out; untick Read-only to use them. `python3 scripts/agent_commands.py` prints the
+same list.
+
 ## Running
 
 Replies run on threads in the server process, at most `max_concurrent` at once,

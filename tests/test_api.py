@@ -45,7 +45,7 @@ GET_ROUTES = [
     "/api/rule", "/api/rule-proposals", "/api/settings", "/api/timezones", "/api/status", "/api/meta",
     "/api/suggest-links", "/api/search", "/api/trigger", "/api/trigger-request", "/api/trigger-people", "/api/b2b",
     "/api/b2b-conversations", "/api/b2b-thread",
-    "/api/agents", "/api/agent-conversations", "/api/agent-thread",
+    "/api/agents", "/api/agent-commands", "/api/agent-conversations", "/api/agent-thread",
     "/api/scripts", "/api/script", "/api/tasks", "/api/task", "/api/usage-report",
 ]
 POST_ROUTES = [
@@ -58,7 +58,7 @@ POST_ROUTES = [
     "/api/create-skill", "/api/create-process",
     "/api/export-skills", "/api/ingest-skills", "/api/export-bundle",
     "/api/upload-bundle", "/api/import-bundle", "/api/delete-contracts",
-    "/api/agent-send", "/api/agent-conversation", "/api/agent-retry", "/api/agent-cancel", "/api/agent-config",
+    "/api/agent-send", "/api/agent-conversation", "/api/agent-retry", "/api/agent-cancel", "/api/agent-plugin", "/api/agent-config",
     "/api/trigger-gate", "/api/trigger-action", "/api/trigger-config", "/api/trigger-check",
     "/api/trigger-channel", "/api/trigger-person", "/api/trigger-decline", "/api/trigger-reprocess",
     "/api/trigger-cancel", "/api/trigger-scan",

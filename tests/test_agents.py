@@ -273,6 +273,16 @@ def main() -> int:
     con.commit()
     ck("a reply left running fails on restart", agents.recover() == 1
        and "interrupted" in reply_of(con, r8["reply_id"])["error"])
+    con.execute("UPDATE agent_msg SET status='running', owner_pid=? WHERE id=?",
+                (os.getppid(), r8["reply_id"]))
+    con.commit()
+    ck("a reply whose server is still alive survives another server's start",
+       agents.recover() == 0 and reply_of(con, r8["reply_id"])["status"] == "running")
+    con.execute("UPDATE agent_msg SET status='error' WHERE id=?", (r8["reply_id"],))
+    con.commit()
+    ck("the next-action line is split off the reply",
+       agents.strip_next("Done.\n[[next: Run the tests]]") == ("Done.", "Run the tests")
+       and agents.strip_next("Plain") == ("Plain", ""))
     ck("an empty message is refused", not agents.send(con, "  ", cid, start=False)["ok"])
 
     print("cancel")

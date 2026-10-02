@@ -157,6 +157,9 @@ export const api = {
     get<import("./types").TriggerStatus>("/api/trigger", { limit: 5 }, signal),
   agents: (signal?: AbortSignal) =>
     get<import("./types").AgentsStatus>("/api/agents", undefined, signal),
+  /** The slash commands (skills, plugin commands) and the installed plugins, read from disk. */
+  agentCommands: (signal?: AbortSignal) =>
+    get<import("./types").AgentCommands>("/api/agent-commands", undefined, signal),
   agentConversations: (signal?: AbortSignal) =>
     get<import("./types").AgentConversations>("/api/agent-conversations", undefined, signal),
   agentThread: (id: string, signal?: AbortSignal) =>
@@ -302,6 +305,9 @@ export const api = {
   retryAgent: (id: string) => post<{ ok: boolean; reply_id: string }>("/api/agent-retry", { id }),
   /** Stop a queued or running reply; it fails as cancelled, so Retry runs it again. */
   cancelAgent: (id: string) => post<{ ok: boolean; reply_id: string; was: string }>("/api/agent-cancel", { id }),
+  /** Turn an installed plugin on or off in ~/.claude/settings.json; answers the new list. */
+  setAgentPlugin: (key: string, enabled: boolean) =>
+    post<import("./types").AgentCommands>("/api/agent-plugin", { key, enabled }),
   saveAgentsConfig: (body: Partial<{
     connectors: Partial<import("./types").AgentConnector>[];
     default_connector: string;

@@ -153,4 +153,41 @@ describe("agent export", () => {
     expect(formatCost(0.0123, true)).toBe("≈ $0.01");
     expect(formatCost(0.0042)).toBe("$0.0042");
   });
+
+  it("opens a fuzzy popup on a leading /, greys writers out while read-only, and inserts the pick", async () => {
+    const { user } = renderApp(<AgentsSection />, { route: "/agents" });
+    const box = await screen.findByRole("textbox", { name: "message to the agent" });
+    await screen.findByRole("button", { name: /Plugins/ });
+    await user.type(box, "/mlr");
+    const list = await screen.findByRole("listbox", { name: "slash commands" });
+    // letters in order: both memory-ledger commands match, the fuzzy tie sorts by name
+    expect(within(list).getAllByRole("option").map((o) => o.textContent)).toEqual([
+      expect.stringContaining("/memory-ledger:recall"),
+      expect.stringContaining("/memory-ledger:send-slack"),
+    ]);
+    await user.clear(box);
+    await user.type(box, "/slack");
+    const writer = within(await screen.findByRole("listbox", { name: "slash commands" })).getByRole("option");
+    expect(writer).toHaveAttribute("aria-disabled", "true");
+    await user.clear(box);
+    await user.type(box, "/rec{Enter}");
+    expect(box).toHaveValue("/memory-ledger:recall ");
+    expect(screen.queryByRole("listbox", { name: "slash commands" })).not.toBeInTheDocument();
+  });
+
+  it("does not open the popup unless the / starts the message", async () => {
+    const { user } = renderApp(<AgentsSection />, { route: "/agents" });
+    const box = await screen.findByRole("textbox", { name: "message to the agent" });
+    await user.type(box, "see /rec");
+    expect(screen.queryByRole("listbox", { name: "slash commands" })).not.toBeInTheDocument();
+  });
+
+  it("turns a plugin on from the Plugins menu", async () => {
+    const { user } = renderApp(<AgentsSection />, { route: "/agents" });
+    await user.click(await screen.findByRole("button", { name: /Plugins/ }));
+    await user.click(screen.getByRole("checkbox", { name: /chrome-devtools-mcp/ }));
+    await waitFor(() =>
+      expect(sent("/api/agent-plugin")).toEqual([{ key: "chrome-devtools-mcp@chrome-devtools-plugins", enabled: true }]),
+    );
+  });
 });

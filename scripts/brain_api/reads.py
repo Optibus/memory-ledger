@@ -13,6 +13,7 @@ from typing import Optional
 from fastapi import APIRouter, Query
 from fastapi.responses import FileResponse, JSONResponse
 
+import agent_commands
 import agents
 import b2b
 import brain_query
@@ -251,6 +252,14 @@ def b2b_thread(peer: str = Query("", description="The peer's user id."),
                         "connector offers now (an Ollama host is asked for its own).")
 def agents_status():
     return agents.status_payload()
+
+
+@router.get("/agent-commands", tags=["agents"], summary="Agents: the slash commands and the plugins",
+            description="The skills and plugin commands the composer offers after a `/`, read "
+                        "from disk (no model call), and every installed plugin with whether it "
+                        "is on. `writes` is a guess from the name and description.")
+def agent_commands_list():
+    return agent_commands.payload(graph.home_dir())
 
 
 @router.get("/agent-conversations", tags=["agents"], summary="Agents: every conversation",

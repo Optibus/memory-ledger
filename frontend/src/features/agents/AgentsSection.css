@@ -139,5 +139,25 @@
   .ml-pick__sub { left: 45%; }
 }
 .ml-agents__hint { color: var(--muted); font-size: 11.5px; margin: 0; }
-.ml-agents__compose-row { display: flex; gap: var(--space-2); align-items: flex-end; }
+.ml-agents__compose-row { position: relative; display: flex; gap: var(--space-2); align-items: flex-end; }
 .ml-agents__compose-row .ml-input--area { min-height: 44px; resize: none; }
+
+/* The slash-command popup: above the message box, over the thread. */
+.ml-slash {
+  position: absolute; left: 0; right: 0; bottom: calc(100% + 5px); list-style: none; margin: 0;
+  padding: 5px; max-height: 40vh; overflow-y: auto;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 9px;
+  backdrop-filter: blur(8px); box-shadow: var(--shadow-pop); z-index: var(--z-dropdown);
+}
+.ml-slash__item {
+  display: flex; align-items: baseline; gap: var(--space-3); padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm); cursor: pointer; font-size: 12.5px; min-width: 0;
+}
+.ml-slash__item b { white-space: nowrap; }
+.ml-slash__item.is-active { background: var(--hover); }
+.ml-slash__item.is-blocked { opacity: 0.45; cursor: not-allowed; }
+.ml-slash__kind { color: var(--muted); font-size: 11px; }
+.ml-slash__desc { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.ml-slash__none { color: var(--muted); font-size: 12px; padding: var(--space-2) var(--space-3); }
+.ml-plugins { display: flex; flex-direction: column; gap: var(--space-2); min-width: 260px; padding: var(--space-3); }
+.ml-plugins__note { color: var(--muted); font-size: 11.5px; margin: 0; }

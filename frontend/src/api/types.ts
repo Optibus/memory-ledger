@@ -1259,6 +1259,28 @@ export interface AgentConnector {
   problem: string;
 }
 
+/** A skill or plugin command the composer offers after a `/`. `writes` is a guess. */
+export interface AgentCommand {
+  name: string;
+  plugin: string;
+  kind: "skill" | "command";
+  description: string;
+  writes: boolean;
+}
+
+export interface AgentPlugin {
+  key: string;
+  name: string;
+  version: string;
+  enabled: boolean;
+  commands: number;
+}
+
+export interface AgentCommands extends Envelope {
+  commands: AgentCommand[];
+  plugins: AgentPlugin[];
+}
+
 export interface AgentsStatus extends Envelope {
   config: {
     default_connector: string;
@@ -1335,6 +1357,8 @@ export interface AgentMessage {
   started_at: string;
   finished_at: string;
   node_id: string;
+  /** The agent's suggested next message; Tab on an empty input takes it. */
+  next_action: string;
 }
 
 export interface AgentConversations extends Envelope {

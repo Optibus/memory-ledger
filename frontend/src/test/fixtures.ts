@@ -965,7 +965,7 @@ export const agentThreadFixture: import("@/api/types").AgentThread = {
       id: "u1", conv_id: "c1", role: "user", text: "What do I have to renew?", at: "2026-09-30T10:00:00Z",
       status: "done", reply_to: "", connector: "", model: "", full_tools: false, events: [], context: [],
       error: "", session_id: "", cost_usd: null, cost_estimated: false, tokens_in: 0, tokens_out: 0,
-      started_at: "", finished_at: "", node_id: "",
+      started_at: "", finished_at: "", node_id: "", next_action: "",
     },
     {
       id: "a1", conv_id: "c1", role: "agent", text: "The parking permit, by Oct 5. Should I add a task?",
@@ -979,7 +979,20 @@ export const agentThreadFixture: import("@/api/types").AgentThread = {
       ],
       context: ["task_renew-the-optibus-parking-permit_7ba4"], error: "", session_id: "s1",
       cost_usd: 0.0123, cost_estimated: false, tokens_in: 1000, tokens_out: 50,
-      started_at: "2026-09-30T10:00:01Z", finished_at: "2026-09-30T10:00:09Z", node_id: "",
+      started_at: "2026-09-30T10:00:01Z", finished_at: "2026-09-30T10:00:09Z", node_id: "", next_action: "",
     },
+  ],
+};
+
+export const agentCommandsFixture: import("@/api/types").AgentCommands = {
+  ok: true,
+  commands: [
+    { name: "memory-ledger:recall", plugin: "memory-ledger", kind: "skill", description: "Retrieve things from the memory graph", writes: false },
+    { name: "memory-ledger:send-slack", plugin: "memory-ledger", kind: "command", description: "Send or schedule a Slack message", writes: true },
+    { name: "ccalyze", plugin: "", kind: "skill", description: "Analyze Claude Code usage and cost", writes: false },
+  ],
+  plugins: [
+    { key: "memory-ledger@memory-ledger", name: "memory-ledger", version: "0.9.0", enabled: true, commands: 2 },
+    { key: "chrome-devtools-mcp@chrome-devtools-plugins", name: "chrome-devtools-mcp", version: "0.21.0", enabled: false, commands: 6 },
   ],
 };

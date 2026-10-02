@@ -19,6 +19,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Body as BodyParam, Depends
 from fastapi.responses import JSONResponse
 
+import agent_commands
 import agents
 import b2b
 import graph
@@ -784,6 +785,13 @@ def agent_retry(data: m.AgentRetry = body(m.AgentRetry)):
                          "session is killed; an Ollama chat stops at its next round.")
 def agent_cancel(data: m.AgentCancel = body(m.AgentCancel)):
     return reply(agents.cancel(agents.db(), clip(data.id, 80)))
+
+
+@router.post("/agent-plugin", tags=["agents"], summary="Turn an installed plugin on or off",
+             description="Edits that plugin's key in `~/.claude/settings.json` `enabledPlugins`, "
+                         "which every Claude session reads. Answers the new command list.")
+def agent_plugin(data: m.AgentPlugin = body(m.AgentPlugin)):
+    return reply(agent_commands.set_plugin(clip(data.key, 200), data.enabled is True))
 
 
 @router.post("/agent-config", tags=["agents"], summary="Change the agents configuration")
