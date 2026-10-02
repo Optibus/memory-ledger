@@ -58,10 +58,26 @@ when it cannot go on without you. The marker is stripped before the text is stor
 The composer's **Read-only** box is ticked by default. Untick it to turn tools on
 from the next turn; the reply then carries a *tools on* badge.
 
+Read-only limits what the agent does **outside** the brain. The brain itself is
+read and written in both modes, without asking: that is the offload rule
+(CONVENTIONS §0), and a reply that skipped it would leave nothing behind.
+
 | | Read-only (default) | Tools on |
 |---|---|---|
-| Claude | `--tools=Read,Grep,Glob,WebSearch,WebFetch,Skill,Bash`, the same list in `--allowedTools` except Bash, which is allowed for `agents.py thread` only, `--permission-mode dontAsk`, `--strict-mcp-config`. No other Bash, no edits, no MCP | `--dangerously-skip-permissions`, like a trigger session |
-| Ollama | `recall`, `search`, `get_node`, `read_thread` | also `add_note`, `add_task` |
+| Claude | `--tools=Read,Grep,Glob,WebSearch,WebFetch,Skill,Bash`, `--permission-mode dontAsk`. `--allowedTools` holds those tools, the read-only connector tools (`CLAUDE_READ_MCP`: Jira and Confluence reads, Slack, Gmail, Calendar and Drive reads, Claude Docs `read`, Sentry searches, and `ToolSearch` to load them), and Bash for the brain's own commands only (`graph.py`, `brain_query.py`, `agents.py thread`). No other Bash, no edits, nothing that posts | `--dangerously-skip-permissions`, like a trigger session |
+| Ollama | `recall`, `search`, `get_node`, `read_thread`, `add_note`, `add_task` | the same: Ollama has no tools outside the brain |
+
+The system prompt gives Claude those commands with their absolute paths:
+`match-rules` before acting, `recall`, `search`, `get-node` and `brain_query.py open --mine` to look
+things up, and `add-node` and `add-edge` to store what the turn produced. They
+must run as written, not after a `cd`, or the allow rule does not match.
+
+The plugin's own hooks run in these sessions too, since the `claude` CLI loads them in
+`-p` mode: the prompt and answer captures, and the SessionStart bootstrap.
+
+A claude.ai artifact link cannot be read here. The `claude` CLI has no artifact
+tool in `-p` mode, whatever the tools mode, and Claude Docs `read` refuses an HTML
+artifact. Read it from an interactive Claude Code session.
 
 Ollama tools run inside the server, against the graph. A model that does not
 support tools (Ollama answers *does not support tools*) is asked again without
