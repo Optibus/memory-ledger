@@ -1,7 +1,6 @@
 import { NavLink } from "react-router-dom";
 import { useMeta } from "@/api/MetaContext";
 import { API_DOCS_URL } from "@/features/apidocs/ApiDocsSection";
-import { UsageMeter } from "./UsageMeter";
 import "./Sidebar.css";
 
 export interface SectionLink {
@@ -71,7 +70,6 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         </div>
         <nav className="ml-side__nav">{main.map(item)}</nav>
         <div className="ml-side__foot">
-          <UsageMeter active={open} />
           {/*
             Two links on one row. The row opens the server's Swagger UI framed
             inside the app, so reading the API never leaves the brain. The arrow

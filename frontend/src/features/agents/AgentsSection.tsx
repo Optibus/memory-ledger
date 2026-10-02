@@ -18,6 +18,7 @@ import {
   TextArea,
 } from "@/components";
 import { Section } from "@/features/shell/Section";
+import { UsageMeter } from "@/features/shell/UsageMeter";
 import { formatDate, truncate } from "@/lib/format";
 import { plainText } from "@/lib/richText";
 import type {
@@ -104,6 +105,7 @@ export function AgentsSection() {
               </div>
             ) : null}
           </div>
+          <UsageMeter active />
         </aside>
 
         <section className="ml-agents__main" aria-label="agent conversation">

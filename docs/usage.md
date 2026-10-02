@@ -87,9 +87,9 @@ overlapping. It leaves a switched-off or not-yet-created brain alone. Opt out wi
 - Files changed through `Bash` (redirects, `sed -i`) are not seen as edits.
 - The insights ccalyze writes (what to change, and why) are not reproduced here.
 
-## The sidebar meter
+## The Agents-tab meter
 
-`GET /api/usage-summary` feeds the meter above Settings in the sidebar: estimated
+`GET /api/usage-summary` feeds the meter under the conversation list in the Agents tab: estimated
 dollars for the last 5 hours and today on the bar, and week, month, year and total
 when it is clicked open. It sums `metrics.costByAbsHour` (cost per local hour,
 written by the ingest) over the `usage-week` nodes, and starts a detached ingest

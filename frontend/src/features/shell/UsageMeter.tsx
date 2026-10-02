@@ -9,7 +9,7 @@ const money = (v: number) =>
   `$${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 /**
- * Estimated Claude spend, pinned above Settings: the last 5 hours and today
+ * Estimated Claude spend, pinned under the conversations in the Agents tab: the last 5 hours and today
  * on the bar; a click opens the longer windows upward.
  *
  * Dollars are list price per token read from the local logs, not what a
