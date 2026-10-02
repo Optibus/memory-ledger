@@ -151,6 +151,8 @@ class Settings(Body):
     ui_sync: Any = Field(None, description="true | false; null or empty resets it.")
     learned_rules: Any = Field(None, description="true | false; the learned-rules detector, "
                                                   "OFF by default. null or empty resets it.")
+    prompt_recall: Any = Field(None, description="true | false; gated per-prompt recall, "
+                                                  "OFF by default. null or empty resets it.")
     map_poll_seconds: Any = Field(None, description="1–600.")
     dash_refresh_seconds: Any = Field(None, description="5–3600.")
 

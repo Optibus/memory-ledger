@@ -445,6 +445,8 @@ export interface StoredSettings {
   ui_sync: boolean;
   /** The learned-rules detector. Off by default; it only ever proposes. */
   learned_rules: boolean;
+  /** Gated per-prompt recall. Off by default; it spends context tokens when it fires. */
+  prompt_recall: boolean;
   map_poll_seconds: number;
   dash_refresh_seconds: number;
 }
@@ -473,6 +475,8 @@ export interface EffectiveSettings {
   ui_sync_source: SettingSource;
   learned_rules: boolean;
   learned_rules_source: SettingSource;
+  prompt_recall: boolean;
+  prompt_recall_source: SettingSource;
   map_poll_seconds: number;
   dash_refresh_seconds: number;
 }

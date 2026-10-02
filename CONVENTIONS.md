@@ -34,8 +34,9 @@ Code and is silently dropped. Measured 2026-07-27, revised 2026-10-02:
 SessionStart brief, not on every prompt: the same message on every prompt was
 ~52 tokens a prompt that taught the model nothing new after the first.
 
-**Gated per-prompt recall** (`prompt_recall`, off by default; turn on with
-`"prompt_recall": true` in `<home>/settings.json`, force off with
+**Gated per-prompt recall** (`prompt_recall`, off by default; turn on with the
+Prompt recall switch on the Settings page or `"prompt_recall": true` in
+`<home>/settings.json`, force off with
 `MEMORY_LEDGER_NO_PROMPT_RECALL=1`). Decided by FTS + regex, no model call. A node
 is injected only when it contains ≥2 of the prompt's content terms covering
 ≥60% of them, or ≥1 when the prompt points at past work ("we decided", "last

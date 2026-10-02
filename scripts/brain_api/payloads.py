@@ -220,6 +220,8 @@ def settings_payload() -> dict:
             "ui_sync_source": graph.flag_source("ui_sync"),
             "learned_rules": graph.flag("learned_rules"),
             "learned_rules_source": graph.flag_source("learned_rules"),
+            "prompt_recall": graph.flag("prompt_recall"),
+            "prompt_recall_source": graph.flag_source("prompt_recall"),
             "map_poll_seconds": _int_setting("map_poll_seconds", 2),
             "dash_refresh_seconds": _int_setting("dash_refresh_seconds", 120),
         },
