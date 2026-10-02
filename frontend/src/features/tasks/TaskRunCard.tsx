@@ -89,7 +89,54 @@ export function TaskRunCard({ task, open, onToggle, now, onChanged }: TaskRunCar
         ) : null}
       </button>
       {REPROCESSABLE.has(task.status) ? <Reprocess task={task} onDone={onChanged} /> : null}
+      {active ? <CancelTask task={task} onDone={onChanged} /> : null}
       {open ? <TaskRunDetail id={task.id} status={task.status} /> : null}
+    </div>
+  );
+}
+
+/** Stop a queued or running task. A running one asks first: its session is
+ * killed, and what it did so far stays done. Reprocess runs it again. */
+function CancelTask({ task, onDone }: { task: TriggerTask; onDone?: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [sure, setSure] = useState(false);
+  const [err, setErr] = useState("");
+
+  const go = async () => {
+    setBusy(true);
+    setErr("");
+    try {
+      await api.cancelTask(task.id);
+      setSure(false);
+      onDone?.();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="ml-run__actions">
+      {sure ? (
+        <>
+          <span className="ml-run__dim">Stop this task? Its session is killed; what it already did stays done.</span>
+          <Button size="sm" variant="danger" disabled={busy} onClick={go}>
+            {busy ? "Cancelling…" : "Stop it"}
+          </Button>
+          <Button size="sm" disabled={busy} onClick={() => setSure(false)}>Keep running</Button>
+        </>
+      ) : (
+        <Button
+          size="sm"
+          disabled={busy}
+          onClick={task.status === "running" ? () => setSure(true) : go}
+          aria-label={`Cancel ${task.name}`}
+        >
+          {busy ? "Cancelling…" : "Cancel"}
+        </Button>
+      )}
+      {err ? <StatusMessage tone="error">{err}</StatusMessage> : null}
     </div>
   );
 }

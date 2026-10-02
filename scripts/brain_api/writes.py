@@ -574,8 +574,8 @@ def trigger_person(data: m.TriggerPerson = body(m.TriggerPerson)):
 
 
 @router.post("/trigger-reprocess", tags=["trigger"], summary="Run a blocked or failed request again",
-             description="Puts a `blocked`, `refused`, `failed`, `timeout` or `interrupted` request back "
-                         "in the queue and runs it now, with the action it was stamped with. "
+             description="Puts a `blocked`, `refused`, `failed`, `timeout`, `interrupted` or "
+                         "`cancelled` request back in the queue and runs it now, with the action it was stamped with. "
                          "What the last run left is cleared; its logged actions stay, and a "
                          "`reprocess` action is added.")
 def trigger_reprocess(data: m.TriggerReprocess = body(m.TriggerReprocess)):
@@ -588,6 +588,18 @@ def trigger_reprocess(data: m.TriggerReprocess = body(m.TriggerReprocess)):
     if ran:
         res["runs_on"] = ran["on"]
     return reply(res)
+
+
+@router.post("/trigger-cancel", tags=["trigger"], summary="Stop a queued or running request",
+             description="It turns `cancelled` at once; a running session or script is killed "
+                         "within a second, and an HTTP call already sent is left to finish but "
+                         "its answer is not kept. A `cancel` action is logged, and Reprocess "
+                         "runs it again.")
+def trigger_cancel(data: m.TriggerCancel = body(m.TriggerCancel)):
+    rid = clip(data.request_id, 60)
+    if not rid:
+        return reply({"ok": False, "error": "missing request_id"})
+    return reply(trigger.cancel(trigger.db(), rid, by="web-ui"))
 
 
 @router.post("/trigger-scan", tags=["trigger"], summary="Start the tasks a meeting's wake phrases ask for",
@@ -765,6 +777,13 @@ def agent_conversation(data: m.AgentConversation = body(m.AgentConversation)):
                          "**Starts a model call.**")
 def agent_retry(data: m.AgentRetry = body(m.AgentRetry)):
     return reply(agents.retry(agents.db(), clip(data.id, 80)))
+
+
+@router.post("/agent-cancel", tags=["agents"], summary="Stop a queued or running reply",
+             description="It fails at once as cancelled, so Retry runs it again. A Claude "
+                         "session is killed; an Ollama chat stops at its next round.")
+def agent_cancel(data: m.AgentCancel = body(m.AgentCancel)):
+    return reply(agents.cancel(agents.db(), clip(data.id, 80)))
 
 
 @router.post("/agent-config", tags=["agents"], summary="Change the agents configuration")

@@ -1560,6 +1560,7 @@ const REQUEST_TONE: Record<string, BadgeTone> = {
   failed: "danger",
   timeout: "danger",
   interrupted: "warn",
+  cancelled: "neutral",
 };
 
 function Recent({ status }: { status: TriggerStatus }) {

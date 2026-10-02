@@ -52,6 +52,8 @@ with open(os.path.join(os.environ["SECOND_BRAIN_HOME"], "claude-argv.jsonl"), "a
 mode = os.environ.get("FAKE_CLAUDE_MODE", "ok")
 if mode == "crash":
     sys.stderr.write("boom: no credentials\n"); sys.exit(2)
+if mode == "slow":
+    import time; time.sleep(60)
 def p(o): print(json.dumps(o), flush=True)
 p({"type": "system", "subtype": "init", "model": "claude-sonnet-5-5", "session_id": "s"})
 p({"type": "assistant", "message": {"id": "m1", "usage": {"input_tokens": 1000, "output_tokens": 20},
@@ -272,6 +274,39 @@ def main() -> int:
     ck("a reply left running fails on restart", agents.recover() == 1
        and "interrupted" in reply_of(con, r8["reply_id"])["error"])
     ck("an empty message is refused", not agents.send(con, "  ", cid, start=False)["ok"])
+
+    print("cancel")
+    r9 = agents.send(con, "queued only", cid, start=False)
+    res = agents.cancel(con, r9["reply_id"])
+    m = reply_of(con, r9["reply_id"])
+    ck("a queued reply cancels at once, as a failure Retry can run",
+       res["ok"] and res["was"] == "queued" and m["status"] == "error"
+       and m["error"] == agents.CANCELLED, str(res))
+    ck("a reply that ended cannot be cancelled", not agents.cancel(con, r9["reply_id"])["ok"])
+    ck("and it never starts", not agents.run_reply(r9["reply_id"])["ok"]
+       and reply_of(con, r9["reply_id"])["error"] == agents.CANCELLED)
+    os.environ["FAKE_CLAUDE_MODE"] = "slow"
+    try:
+        r10 = agents.send(con, "take your time", cid)
+        end = time.time() + 10
+        while time.time() < end and r10["reply_id"] not in agents._procs:
+            time.sleep(0.05)
+        t0 = time.time()
+        res = agents.cancel(con, r10["reply_id"])
+        ck("a running reply cancels, its session killed",
+           res["ok"] and res["was"] == "running" and wait_status(con, r10["reply_id"]) == "error"
+           and time.time() - t0 < 5, str(res))
+        end = time.time() + 10
+        while time.time() < end and agents.running_count():
+            time.sleep(0.05)
+        m = reply_of(con, r10["reply_id"])
+        ck("it stays cancelled after its thread ends", m["error"] == agents.CANCELLED
+           and not agents._cancelled and not agents._procs, m["error"])
+        os.environ["FAKE_CLAUDE_MODE"] = "ok"
+        agents.retry(con, r10["reply_id"])
+        ck("and Retry runs it again", wait_status(con, r10["reply_id"]) == "question")
+    finally:
+        os.environ["FAKE_CLAUDE_MODE"] = "ok"
 
     srv.shutdown()
     print(f"\n{'FAILED: ' + str(len(FAILS)) if FAILS else 'ALL PASS'}")

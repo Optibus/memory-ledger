@@ -58,10 +58,10 @@ POST_ROUTES = [
     "/api/create-skill", "/api/create-process",
     "/api/export-skills", "/api/ingest-skills", "/api/export-bundle",
     "/api/upload-bundle", "/api/import-bundle", "/api/delete-contracts",
-    "/api/agent-send", "/api/agent-conversation", "/api/agent-retry", "/api/agent-config",
+    "/api/agent-send", "/api/agent-conversation", "/api/agent-retry", "/api/agent-cancel", "/api/agent-config",
     "/api/trigger-gate", "/api/trigger-action", "/api/trigger-config", "/api/trigger-check",
     "/api/trigger-channel", "/api/trigger-person", "/api/trigger-decline", "/api/trigger-reprocess",
-    "/api/trigger-scan",
+    "/api/trigger-cancel", "/api/trigger-scan",
     "/api/b2b-config", "/api/b2b-identity", "/api/b2b-broker", "/api/b2b-broker-check",
     "/api/b2b-peer", "/api/b2b-allowed", "/api/b2b-send",
     "/api/export-scripts", "/api/upload-scripts", "/api/import-scripts", "/api/create-script",
@@ -1042,6 +1042,10 @@ def test_trigger_routes(s: Server):
         s.post("/api/trigger-reprocess", {"request_id": rid}), 400, "can be reprocessed"))
     ck("a reprocess needs a request", refused(s.post("/api/trigger-reprocess", {}),
                                               400, "missing request_id"))
+    ck("a declined request cannot be cancelled", refused(
+        s.post("/api/trigger-cancel", {"request_id": rid}), 400, "can be cancelled"))
+    ck("a cancel needs a request", refused(s.post("/api/trigger-cancel", {}),
+                                           400, "missing request_id"))
 
     ck("a scan with wake phrases off starts nothing", refused(
         s.post("/api/trigger-scan", {"text": "Brain will handle it"}), 400, "wake phrases are off"))

@@ -39,6 +39,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+import time
 import unicodedata
 import urllib.error
 import urllib.parse
@@ -69,12 +70,18 @@ SOURCES = ("slack", "jira", "github")
 # refused at the door. `interrupted` is a session a server restart orphaned.
 # `declined` is a request the session would not do because it broke a rule;
 # `refused` never reached a session, because the conversation was not open;
-# `blocked` is a B2B message from a brain that is not on the allowed list.
-FINISHED = ("done", "declined", "failed", "timeout", "interrupted", "refused", "blocked")
+# `blocked` is a B2B message from a brain that is not on the allowed list;
+# `cancelled` one the owner stopped while it was queued or running.
+FINISHED = ("done", "declined", "failed", "timeout", "interrupted", "refused", "blocked",
+            "cancelled")
 # What `reprocess` may put back in the queue: a run that went wrong, a message
 # the allowed list stopped, or a mention the gate refused. The last two are the
 # owner vouching for that one request.
-REPROCESSABLE = ("blocked", "refused", "failed", "timeout", "interrupted")
+REPROCESSABLE = ("blocked", "refused", "failed", "timeout", "interrupted", "cancelled")
+# What `cancel` may stop.
+CANCELLABLE = ("queued", "running")
+# How often a running session checks whether it was cancelled.
+CANCEL_POLL_S = 1.0
 STATUSES = ("queued", "running") + FINISHED
 
 # Actions a node keeps a copy of. The table keeps every one; the node is what
@@ -1892,6 +1899,8 @@ def run_request(request_id: str, cfg: dict | None = None) -> dict:
     env = {**os.environ, "MEMORY_LEDGER_REQUEST_ID": request_id,
            "MEMORY_LEDGER_TRIGGER_SOURCE": req["source"]}
     cwd = session_cwd(cfg)
+    if not _claim(con, request_id):
+        return {"ok": False, "request_id": request_id, "status": "cancelled"}
     _set_request(con, request_id, status="running", started_at=now_iso(),
                  session_id=session_id, command=json.dumps(cmd, ensure_ascii=False), cwd=cwd)
     t0 = datetime.now(timezone.utc)
@@ -1901,8 +1910,12 @@ def run_request(request_id: str, cfg: dict | None = None) -> dict:
     try:
         # stdin closed: with none attached, `claude -p` waits for input, and
         # in the server it would inherit the server's own terminal.
-        pr = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
-                            env=env, cwd=cwd, stdin=subprocess.DEVNULL)
+        pr = run_watched(con, request_id, cmd, timeout, env=env, cwd=cwd)
+    except Cancelled:
+        cost = estimate_cost(transcript_path(get_request(con, request_id) or req))
+        _set_request(con, request_id, cost_usd=cost, cost_estimated=int(cost is not None))
+        log.info("task %s cancelled  after %s", request_id, took())
+        return {"ok": False, "request_id": request_id, "status": "cancelled"}
     except subprocess.TimeoutExpired:
         cost = estimate_cost(transcript_path(get_request(con, request_id) or req))
         _set_request(con, request_id, status="timeout", finished_at=now_iso(),
@@ -1916,6 +1929,8 @@ def run_request(request_id: str, cfg: dict | None = None) -> dict:
                      reason=f"could not start claude: {e}"[:300])
         log.error("task %s failed  could not start claude: %s", request_id, e)
         return {"ok": False, "request_id": request_id, "status": "failed", "error": str(e)}
+    if _status(con, request_id) == "cancelled":    # ended on its own just as it was cancelled
+        return {"ok": False, "request_id": request_id, "status": "cancelled"}
     result, cost, is_error = (pr.stdout or "").strip(), None, pr.returncode != 0
     try:
         out = json.loads(result)
@@ -1946,7 +1961,67 @@ def run_request(request_id: str, cfg: dict | None = None) -> dict:
 
 
 # ---------------------------------------------------------------- actions
-def _started(con, req: dict, what: str) -> datetime:
+class Cancelled(Exception):
+    """The owner cancelled the request while its process ran."""
+
+
+def _claim(con, request_id: str) -> bool:
+    """queued -> running, only if it is still queued: a cancel in between wins."""
+    ok = con.execute("UPDATE trigger_request SET status='running' WHERE id=? AND status='queued'",
+                     (request_id,)).rowcount > 0
+    con.commit()
+    return ok
+
+
+def _status(con, request_id: str) -> str:
+    r = con.execute("SELECT status FROM trigger_request WHERE id=?", (request_id,)).fetchone()
+    return r["status"] if r else ""
+
+
+def run_watched(con, request_id: str, argv: list, timeout: int, **kw) -> subprocess.CompletedProcess:
+    """`subprocess.run` with the output captured, killed when `timeout` runs
+    out (TimeoutExpired) or when the request turns `cancelled` (Cancelled). The
+    row is the signal, so a cancel reaches a run in another process too."""
+    p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                         stdin=subprocess.DEVNULL, **kw)
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            out, err = p.communicate(timeout=CANCEL_POLL_S)
+            return subprocess.CompletedProcess(argv, p.returncode, out, err)
+        except subprocess.TimeoutExpired:
+            cancelled = _status(con, request_id) == "cancelled"
+            if cancelled or time.monotonic() >= deadline:
+                p.kill()
+                p.communicate()
+                if cancelled:
+                    raise Cancelled(request_id) from None
+                raise subprocess.TimeoutExpired(argv, timeout) from None
+
+
+def cancel(con, request_id: str, by: str = "") -> dict:
+    """Stop a queued or running request. It is `cancelled` at once; a running
+    session or script sees that within `CANCEL_POLL_S` and is killed, and an
+    HTTP call already sent finishes but its answer is not kept. Reprocess runs
+    it again."""
+    req = get_request(con, request_id)
+    if not req:
+        return {"ok": False, "error": f"no request {request_id}"}
+    was = req["status"]
+    if was not in CANCELLABLE:
+        return {"ok": False, "error": f"request {request_id} is {was}; only queued or running "
+                                      "ones can be cancelled"}
+    who = by or "owner"
+    _set_request(con, request_id, status="cancelled", finished_at=now_iso(),
+                 reason=f"cancelled by {who} while {was}")
+    log_action(con, request_id, "cancel", who, f"cancelled while {was}")
+    log.info("request %s cancelled (was %s)%s", request_id, was, f" by {by}" if by else "")
+    return {"ok": True, "request_id": request_id, "status": "cancelled", "was": was}
+
+
+def _started(con, req: dict, what: str) -> datetime | None:
+    if not _claim(con, req["id"]):
+        return None
     _set_request(con, req["id"], status="running", started_at=now_iso())
     log.info("task %s started  %s %s from %s (%s)", req["id"], req["source"], req["scope"],
              req.get("requester_name") or req.get("requester_id") or "someone", what)
@@ -1955,6 +2030,8 @@ def _started(con, req: dict, what: str) -> datetime:
 
 def _finished(con, req: dict, t0: datetime, ok: bool, exit_code, result: str,
               reason: str = "") -> dict:
+    if _status(con, req["id"]) == "cancelled":       # what it ended with is not kept
+        return {"ok": False, "request_id": req["id"], "status": "cancelled"}
     status = "done" if ok else "failed"
     _set_request(con, req["id"], status=status, finished_at=now_iso(), exit_code=exit_code,
                  result=(result or "")[-8000:], **({"reason": reason} if reason else {}))
@@ -2003,6 +2080,8 @@ def run_script(con, req: dict, spec: dict, cfg: dict) -> dict:
     none are configured. No shell: a `;` in a message stays a `;`."""
     name = str(spec.get("name") or "")
     t0 = _started(con, req, f"script {name}")
+    if t0 is None:
+        return {"ok": False, "request_id": req["id"], "status": "cancelled"}
     prefix, err = script_argv(name)
     if err:
         return _finished(con, req, t0, False, None, err, reason=err[:300])
@@ -2014,9 +2093,11 @@ def run_script(con, req: dict, spec: dict, cfg: dict) -> dict:
     _set_request(con, req["id"], command=json.dumps(prefix + argv, ensure_ascii=False),
                  cwd=session_cwd(cfg))
     try:
-        pr = subprocess.run(prefix + argv, capture_output=True, text=True, timeout=timeout,
-                            env={**os.environ, **action_env(req, cfg)}, cwd=session_cwd(cfg),
-                            stdin=subprocess.DEVNULL)
+        pr = run_watched(con, req["id"], prefix + argv, timeout,
+                         env={**os.environ, **action_env(req, cfg)}, cwd=session_cwd(cfg))
+    except Cancelled:
+        log.info("task %s cancelled", req["id"])
+        return {"ok": False, "request_id": req["id"], "status": "cancelled"}
     except subprocess.TimeoutExpired:
         _set_request(con, req["id"], status="timeout", finished_at=now_iso(),
                      reason=f"killed after {timeout}s")
@@ -2076,6 +2157,8 @@ def run_http(con, req: dict, spec: dict, cfg: dict) -> dict:
     """Call the configured API. A status of 400 or more is a failure."""
     call = render_http(spec, request_variables(req, cfg))
     t0 = _started(con, req, f"http {call['method']} {call['url'].split('?')[0]}")
+    if t0 is None:
+        return {"ok": False, "request_id": req["id"], "status": "cancelled"}
     # Headers stay out: that is where a token goes.
     _set_request(con, req["id"], command=json.dumps(
         [call["method"], call["url"].split("?")[0]], ensure_ascii=False))

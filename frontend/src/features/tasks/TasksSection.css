@@ -21,6 +21,7 @@
 .ml-run--failed { --tone: var(--task-failed); }
 .ml-run--timeout { --tone: var(--task-timeout); }
 .ml-run--interrupted { --tone: var(--task-interrupted); }
+.ml-run--cancelled { --tone: var(--task-cancelled); }
 .ml-run--declined { --tone: var(--task-declined); }
 .ml-run--refused { --tone: var(--task-refused); }
 .ml-run--blocked { --tone: var(--task-blocked); }

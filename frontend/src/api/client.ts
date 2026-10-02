@@ -239,6 +239,11 @@ export const api = {
     post<{ ok: boolean; request_id: string; status: string; was: string }>("/api/trigger-reprocess", {
       request_id,
     }),
+  /** Stop a queued or running task; a running session is killed. */
+  cancelTask: (request_id: string) =>
+    post<{ ok: boolean; request_id: string; status: string; was: string }>("/api/trigger-cancel", {
+      request_id,
+    }),
   b2bIdentity: (force = false) =>
     post<{ ok: boolean; user_id: string; note: string }>("/api/b2b-identity", force ? { force } : {}),
   /** A patch. The private key is write-only: send one to import it, list it
@@ -295,6 +300,8 @@ export const api = {
       body,
     ),
   retryAgent: (id: string) => post<{ ok: boolean; reply_id: string }>("/api/agent-retry", { id }),
+  /** Stop a queued or running reply; it fails as cancelled, so Retry runs it again. */
+  cancelAgent: (id: string) => post<{ ok: boolean; reply_id: string; was: string }>("/api/agent-cancel", { id }),
   saveAgentsConfig: (body: Partial<{
     connectors: Partial<import("./types").AgentConnector>[];
     default_connector: string;

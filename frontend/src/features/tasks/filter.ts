@@ -7,6 +7,7 @@ export const STATUS_ORDER = [
   "failed",
   "timeout",
   "interrupted",
+  "cancelled",
   "declined",
   "refused",
   "blocked",
@@ -19,7 +20,7 @@ export const ACTIVE = new Set(["running", "queued"]);
 /** Tasks the card offers to run again: what went wrong, what the B2B
  * allowed list stopped, or a mention the gate refused. The server checks the
  * same list. */
-export const REPROCESSABLE = new Set(["blocked", "refused", "failed", "timeout", "interrupted"]);
+export const REPROCESSABLE = new Set(["blocked", "refused", "failed", "timeout", "interrupted", "cancelled"]);
 
 /** The sources whose people the Jira settings list can let in. */
 export const PERSON_SOURCES = new Set(["jira"]);

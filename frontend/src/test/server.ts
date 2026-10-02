@@ -183,6 +183,9 @@ export const handlers = [
   write("/api/trigger-reprocess", (body: { request_id?: string }) =>
     ok({ request_id: body.request_id, status: "queued", was: "failed" }),
   ),
+  write("/api/trigger-cancel", (body: { request_id?: string }) =>
+    ok({ request_id: body.request_id, status: "cancelled", was: "running" }),
+  ),
   write("/api/agent-send", (body: { conversation?: string }) =>
     ok({
       conversation: agentConversationsFixture.conversations.find((c) => c.id === body.conversation) ??
@@ -195,6 +198,7 @@ export const handlers = [
     ok({ conversation: agentConversationsFixture.conversations.find((c) => c.id === body.id), created: false }),
   ),
   write("/api/agent-retry", (body: { id?: string }) => ok({ reply_id: body.id })),
+  write("/api/agent-cancel", (body: { id?: string }) => ok({ reply_id: body.id, was: "running" })),
   write("/api/agent-config", () => HttpResponse.json(agentsFixture)),
   write("/api/b2b-send", () =>
     ok({ id: "m2", to: "A".repeat(43), name: "Dana", broker: "b1", sent_at: "2026-09-30T10:00:00Z" }),

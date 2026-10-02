@@ -352,7 +352,13 @@ function Thread({ id, summary, connectors, defaults, writable, onCreated, onChan
           </li>
         ) : null}
         {shown?.map((m) => (
-          <MessageItem key={m.id} m={m} writable={writable} onRetry={() => void api.retryAgent(m.id).then(() => { thread.refresh(); onChanged(); }, (e: Error) => setError(e.message))} />
+          <MessageItem
+            key={m.id}
+            m={m}
+            writable={writable}
+            onRetry={() => void api.retryAgent(m.id).then(() => { thread.refresh(); onChanged(); }, (e: Error) => setError(e.message))}
+            onCancel={() => void api.cancelAgent(m.id).then(() => { thread.refresh(); onChanged(); }, (e: Error) => setError(e.message))}
+          />
         ))}
       </ol>
 
@@ -387,7 +393,13 @@ function initialPick(connectors: AgentConnector[], defaults: { default_connector
   return { connector: c?.id ?? "", model: c?.default_model ?? "", full_tools: false, context_turns: defaults.context_turns };
 }
 
-function MessageItem({ m, writable, onRetry }: { m: AgentMessage; writable: boolean; onRetry: () => void }) {
+function MessageItem({ m, writable, onRetry, onCancel }: {
+  m: AgentMessage;
+  writable: boolean;
+  onRetry: () => void;
+  /** Stop the reply while it is queued or running; it fails as cancelled. */
+  onCancel: () => void;
+}) {
   const side = m.role === "user" ? "out" : "in";
   const running = m.status === "queued" || m.status === "running";
   const segs = m.role === "agent" ? segments(m.events, !running && !!m.text.trim()) : [];
@@ -407,6 +419,9 @@ function MessageItem({ m, writable, onRetry }: { m: AgentMessage; writable: bool
       {m.role === "agent" && running ? (
         <div className="ml-agents__bubble ml-agents__bubble--wait">
           <Spinner label="the agent is working" /> {m.status === "queued" ? "queued…" : "working…"}
+          <Button size="sm" variant="ghost" disabled={!writable} onClick={onCancel} aria-label="Cancel the reply">
+            Cancel
+          </Button>
         </div>
       ) : m.status === "error" ? (
         <div className="ml-agents__bubble ml-agents__bubble--error">
