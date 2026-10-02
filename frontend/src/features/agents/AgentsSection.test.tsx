@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
+import { http, HttpResponse } from "msw";
 import { AgentsSection } from "./AgentsSection";
 import { renderApp } from "@/test/utils";
-import { resetWrites, writes } from "@/test/server";
+import { resetWrites, server, writes } from "@/test/server";
 import { agentThreadFixture } from "@/test/fixtures";
 import { toText, formatCost } from "./export";
 
@@ -43,6 +44,25 @@ describe("Agents", () => {
     expect(within(reply).getByText("Let me look for permits.")).toBeInTheDocument();
     expect(within(reply).getAllByText("The parking permit, by Oct 5. Should I add a task?")).toHaveLength(1);
     expect(reply.querySelectorAll("details.ml-agents__log")).toHaveLength(1);
+  });
+
+  it("cancels a reply only while it runs", async () => {
+    const [mine, reply] = agentThreadFixture.messages;
+    server.use(
+      http.get("/api/agent-thread", () =>
+        HttpResponse.json({ ...agentThreadFixture, messages: [mine, { ...reply!, status: "running", text: "" }] }),
+      ),
+    );
+    const { user } = renderApp(<AgentsSection />, { route: "/agents?c=c1" });
+    const running = await screen.findByRole("listitem", { name: "agent reply" });
+    await user.click(await within(running).findByRole("button", { name: "Cancel the reply" }));
+    await waitFor(() => expect(sent("/api/agent-cancel")).toEqual([{ id: "a1" }]));
+  });
+
+  it("offers no cancel on a reply that has landed", async () => {
+    renderApp(<AgentsSection />, { route: "/agents?c=c1" });
+    const reply = await screen.findByRole("listitem", { name: "agent reply" });
+    expect(within(reply).queryByRole("button", { name: "Cancel the reply" })).toBeNull();
   });
 
   it("shows the conversation's cost at the top right", async () => {

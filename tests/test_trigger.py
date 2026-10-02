@@ -637,12 +637,12 @@ def test_session_hygiene(cfg):
     print("\n== every headless call: stdin closed, a working directory that exists ==")
     install_http()
     seen = []
-    orig = trigger.subprocess.run
+    orig_popen = trigger.subprocess.Popen
 
-    def spy(cmd, **kw):
+    def spy(cmd, **kw):         # Popen, under `subprocess.run` and the watched session alike
         seen.append(kw)
-        return orig(cmd, **kw)
-    trigger.subprocess.run = spy
+        return orig_popen(cmd, **kw)
+    trigger.subprocess.Popen = spy
     try:
         ev = trigger.slack_event(slack_msg("900.1", "UOWNER", "<@UBOT> go"), "C1", cfg,
                                  bot_user_id="UBOT")
@@ -654,7 +654,7 @@ def test_session_hygiene(cfg):
         gone["claude"]["cwd"] = str(Path(HOME) / "no-such-dir")
         trigger.translate_notice("Not here.", "olá", gone, trigger.get_request(trigger.db(), rid))
     finally:
-        trigger.subprocess.run = orig
+        trigger.subprocess.Popen = orig_popen
     ck("stdin is closed, or `claude -p` waits on it (and in the server, on its terminal)",
        len(seen) == 3 and all(k.get("stdin") is trigger.subprocess.DEVNULL for k in seen))
     ck("a notice or a translation runs with capture off: plumbing is not a conversation",
@@ -682,16 +682,16 @@ def test_decline(cfg):
        == [("declined", "rule_personal")])
     # Now the real order: the session runs, and declines while it runs.
     trigger._set_request(con, rid, status="queued")
-    orig_run = trigger.subprocess.run
+    orig_popen = trigger.subprocess.Popen
 
     def run_and_decline(*a, **k):
         trigger.decline(trigger.db(), rid, "Those notes are personal.", "rule_personal")
-        return orig_run(*a, **k)
-    trigger.subprocess.run = run_and_decline
+        return orig_popen(*a, **k)
+    trigger.subprocess.Popen = run_and_decline
     try:
         trigger.run_request(rid, cfg)
     finally:
-        trigger.subprocess.run = orig_run
+        trigger.subprocess.Popen = orig_popen
     ck("a session that declined finishes declined, not done",
        trigger.get_request(con, rid)["status"] == "declined")
     ck("a reason is required", trigger.decline(con, rid, "")["ok"] is False)
@@ -1208,6 +1208,45 @@ print(json.dumps({"argv": sys.argv[1:], "user": os.environ.get("BRAIN_TRIGGER_US
                   "args": json.loads(os.environ.get("BRAIN_ARGS_JSON") or "[]"),
                   "rid": os.environ.get("MEMORY_LEDGER_REQUEST_ID")}))
 """
+
+
+def test_cancel(cfg):
+    print("\n== cancel: a queued or running task, stopped by the owner ==")
+    import threading
+    import time
+    _script("slow.py", "#!/usr/bin/env python3\nimport time\ntime.sleep(60)\nprint('finished')\n")
+    ccfg = json.loads(json.dumps(cfg))
+    ccfg["slack"]["commands"] = [{"name": "slow", "action": "script", "script": {"name": "slow.py"}}]
+    ran, dispatch = dispatcher()
+    con = trigger.db()
+    install_http()
+
+    ev = trigger.slack_event(slack_msg("950.1", "UOWNER", "<@UBOT> slow"), "C9", ccfg, bot_user_id="UBOT")
+    rid = trigger.handle(ev, ccfg, dispatch)["request_id"]
+    res = trigger.cancel(con, rid, by="web-ui")
+    ck("a queued task cancels at once, and is logged", res["ok"] and res["was"] == "queued"
+       and trigger.get_request(con, rid)["status"] == "cancelled"
+       and trigger.actions_for(con, rid)[-1]["kind"] == "cancel", str(res))
+    ck("it never runs", trigger.run_request(rid, ccfg)["ok"] is False
+       and trigger.get_request(con, rid)["status"] == "cancelled")
+    ck("an ended task cannot be cancelled", not trigger.cancel(con, rid)["ok"])
+    ck("but it can be reprocessed", trigger.reprocess(con, rid)["ok"]
+       and trigger.get_request(con, rid)["status"] == "queued")
+
+    out: dict = {}
+    t = threading.Thread(target=lambda: out.update(trigger.run_request(rid, ccfg)))
+    t.start()
+    end = time.time() + 10
+    while time.time() < end and trigger.get_request(con, rid)["status"] != "running":
+        time.sleep(0.05)
+    t0 = time.time()
+    res = trigger.cancel(con, rid)
+    t.join(10)
+    req = trigger.get_request(con, rid)
+    ck("a running script is killed within a poll, and stays cancelled",
+       res["ok"] and res["was"] == "running" and not t.is_alive() and time.time() - t0 < 5
+       and out.get("status") == "cancelled" and req["status"] == "cancelled"
+       and "finished" not in (req["result"] or ""), str(out))
 
 
 def test_commands(cfg):
@@ -1807,6 +1846,7 @@ def main():
         test_tasks(cfg)
         test_access(cfg)
         test_commands(cfg)
+        test_cancel(cfg)
         test_slack_member(cfg)
         test_jira_changes(cfg)
         test_slack_dms(cfg)

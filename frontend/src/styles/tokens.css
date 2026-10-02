@@ -30,6 +30,7 @@
   --task-failed: #f85149;
   --task-timeout: #f85149;
   --task-interrupted: #db6d28;
+  --task-cancelled: #8b949e;
   --task-declined: #d29922;
   --task-refused: #a371f7;
   --task-blocked: #8b949e;

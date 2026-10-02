@@ -34,6 +34,24 @@ describe("Tasks", () => {
     );
   });
 
+  it("offers to cancel only a running task, and asks first", async () => {
+    resetWrites();
+    const { user } = renderApp(<TasksSection />, { route: "/tasks", withMeta: false });
+    const list = await screen.findByRole("list", { name: "tasks" });
+    const cards = await within(list).findAllByRole("listitem");
+    for (const done of cards.slice(1)) expect(within(done).queryByRole("button", { name: /^Cancel/ })).toBeNull();
+    const running = within(cards[0]!);
+    await user.click(running.getByRole("button", { name: /^Cancel/ }));
+    expect(running.getByText(/Stop this task\?/)).toBeInTheDocument();
+    expect(writes.some((w) => w.path === "/api/trigger-cancel")).toBe(false);
+    await user.click(running.getByRole("button", { name: "Stop it" }));
+    await waitFor(() =>
+      expect(writes.filter((w) => w.path === "/api/trigger-cancel").map((w) => w.body)).toEqual([
+        { request_id: "t-running" },
+      ]),
+    );
+  });
+
   it("asks before running a blocked message", async () => {
     resetWrites();
     const { user } = renderApp(<TasksSection />, { route: "/tasks", withMeta: false });

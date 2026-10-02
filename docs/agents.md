@@ -44,7 +44,7 @@ The list shows what each conversation's latest reply is doing:
 
 | Badge | State | Meaning |
 |---|---|---|
-| spinner | `pending` | queued or running |
+| spinner | `pending` | queued or running. **Cancel**, on the reply, stops it |
 | `?` | `question` | the agent is waiting on you |
 | ✓ | `done` | answered |
 | ✕ | `error` | failed. **Retry** reruns it with the conversation's current connector |
@@ -146,6 +146,11 @@ Replies run on threads in the server process, at most `max_concurrent` at once,
 oldest first. When the server starts, any reply still marked `running` belonged to
 a process that is gone. It becomes an `error` ("interrupted"), one click from
 Retry, and the queue starts again.
+
+**Cancel** on a queued or running reply (`POST /api/agent-cancel {id}`) fails it
+at once as `cancelled by you`, so Retry runs it again. A running Claude session is
+killed; an Ollama chat stops before its next round, and whatever the call in
+flight returns is dropped. A cancelled reply writes no `message` node.
 
 ```bash
 python3 scripts/agents.py status          # connectors, models, what is running

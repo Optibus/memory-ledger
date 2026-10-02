@@ -54,6 +54,8 @@ PENDING = ("queued", "running")
 # The line an agent ends with when it cannot go on without the owner. Hidden in
 # the UI; its presence is what turns the conversation's badge into a "?".
 QUESTION_MARK = "[[needs-answer]]"
+# What a reply cancelled by the owner fails with; Retry runs it again.
+CANCELLED = "cancelled by you"
 MAX_TURNS = 10            # the most earlier exchanges a turn may carry
 TEXT_MAX = 20_000         # a message, either way
 EVENT_MAX = 2_000         # one logged tool input or output
@@ -530,6 +532,31 @@ def retry(con: sqlite3.Connection, msg_id: str, start: bool = True) -> dict[str,
     return {"ok": True, "reply_id": msg_id}
 
 
+def cancel(con: sqlite3.Connection, msg_id: str) -> dict[str, Any]:
+    """Stop a queued or running reply. It fails at once with `CANCELLED`, so
+    the thread shows it and Retry runs it again; a running Claude session is
+    killed, a running Ollama chat stops at its next round and its answer is
+    dropped."""
+    r = con.execute("SELECT * FROM agent_msg WHERE id=? AND role='agent'", (msg_id,)).fetchone()
+    if not r:
+        return {"ok": False, "error": f"no reply {msg_id}"}
+    if r["status"] not in PENDING:
+        return {"ok": False, "error": f"reply {msg_id} is {r['status']}, not running"}
+    with _lock:
+        if msg_id in _threads:                 # its thread drops whatever it ends with
+            _cancelled.add(msg_id)
+        proc = _procs.get(msg_id)
+    if proc is not None and proc.poll() is None:
+        proc.kill()
+    _update(con, msg_id, status="error", error=CANCELLED, finished_at=now_iso())
+    return {"ok": True, "reply_id": msg_id, "was": r["status"]}
+
+
+def _is_cancelled(msg_id: str) -> bool:
+    with _lock:
+        return msg_id in _cancelled
+
+
 def _after(ts: str) -> str:
     dt = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
     return datetime.fromtimestamp(dt.timestamp() + 0.001, timezone.utc).strftime(
@@ -816,6 +843,8 @@ def run_claude(con: sqlite3.Connection, reply: dict[str, Any], c: dict[str, Any]
                                 else str(Path.home()), bufsize=1)
     except OSError as e:
         raise AgentError(f"could not start {cmd[0]}: {e}") from None
+    with _lock:
+        _procs[reply["id"]] = proc
     timer = threading.Timer(int(c.get("timeout_s") or 900), proc.kill)
     timer.start()
     result = None
@@ -829,6 +858,8 @@ def run_claude(con: sqlite3.Connection, reply: dict[str, Any], c: dict[str, Any]
     finally:
         timed_out = not timer.is_alive() and proc.returncode not in (0, None)
         timer.cancel()
+        with _lock:
+            _procs.pop(reply["id"], None)
     log.flush(force=True)
     if result is None:
         err = (proc.stderr.read() if proc.stderr else "").strip()[-600:]   # type: ignore[union-attr]
@@ -941,6 +972,8 @@ def run_ollama(con: sqlite3.Connection, reply: dict[str, Any], c: dict[str, Any]
     tin = tout = 0
     use_tools = True
     for _ in range(int(c.get("max_rounds") or 8)):
+        if _is_cancelled(reply["id"]):
+            raise AgentError(CANCELLED)
         body = {"model": reply["model"], "messages": messages, "stream": False}
         if use_tools:
             body["tools"] = tools
@@ -1002,9 +1035,12 @@ def run_reply(msg_id: str) -> dict[str, Any]:
     if not r:
         return {"ok": False, "error": f"no reply {msg_id}"}
     reply = _msg_row(r)
-    if reply["status"] not in PENDING:
-        return {"ok": False, "error": f"reply {msg_id} is {reply['status']}"}
-    _update(con, msg_id, status="running", started_at=now_iso())
+    # Claimed only while still pending: a cancel in between wins.
+    claimed = con.execute("UPDATE agent_msg SET status='running', started_at=? WHERE id=? AND"
+                          " status IN ('queued','running')", (now_iso(), msg_id)).rowcount
+    con.commit()
+    if not claimed:
+        return {"ok": False, "error": f"reply {msg_id} was cancelled"}
     cfg = load_config()
     c = connector(cfg, reply["connector"])
     try:
@@ -1016,8 +1052,12 @@ def run_reply(msg_id: str) -> dict[str, Any]:
         _update(con, msg_id, context=turn["context"])
         res = RUNNERS[c["kind"]](con, reply, c, turn)
     except Exception as e:
+        if _is_cancelled(msg_id):              # cancel already wrote the reply's end
+            return {"ok": False, "error": CANCELLED}
         _update(con, msg_id, status="error", error=str(e)[:1000], finished_at=now_iso())
         return {"ok": False, "error": str(e)}
+    if _is_cancelled(msg_id):                  # an answer that came in after the cancel
+        return {"ok": False, "error": CANCELLED}
     text, asked = strip_mark(res["text"])
     status = "question" if asked else "done"
     _update(con, msg_id, status=status, text=text[:TEXT_MAX], events=res["events"],
@@ -1060,6 +1100,8 @@ def remember(con: sqlite3.Connection, msg_id: str, question: str, answer: str) -
 
 _lock = threading.Lock()
 _threads: dict[str, threading.Thread] = {}
+_procs: dict[str, subprocess.Popen] = {}     # a running Claude reply's session, to cancel it
+_cancelled: set[str] = set()                 # replies the owner cancelled, until they end
 
 
 def running_count() -> int:
@@ -1098,6 +1140,7 @@ def _work(msg_id: str) -> None:
     finally:
         with _lock:
             _threads.pop(msg_id, None)
+            _cancelled.discard(msg_id)
         dispatch()
 
 

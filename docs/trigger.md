@@ -626,7 +626,7 @@ Two tables in `graph.db`, and one node per request:
 
 | Where | What |
 |---|---|
-| `trigger_request` | one row per mention or GitHub event noticed: `id` (UUID), `source`, `event_id`, `scope`, requester id and name, permalink, text, `received_at`, `status` (`queued` → `running` → `done` / `declined` / `failed` / `timeout` / `interrupted`, or `refused`, or `blocked` for a B2B message from a brain off the allowed list), exit code, result, stderr, cost, and what ran: `session_id`, `command` (JSON argv; for an `http` action only the method and URL, never the headers) and `cwd` |
+| `trigger_request` | one row per mention or GitHub event noticed: `id` (UUID), `source`, `event_id`, `scope`, requester id and name, permalink, text, `received_at`, `status` (`queued` → `running` → `done` / `declined` / `failed` / `timeout` / `interrupted`, or `refused`, or `blocked` for a B2B message from a brain off the allowed list, or `cancelled` by the owner), exit code, result, stderr, cost, and what ran: `session_id`, `command` (JSON argv; for an `http` action only the method and URL, never the headers) and `cwd` |
 | `trigger_action` | append-only: every action taken for a request — `kind` (`reply`, `reply-dm`, `declined`, `refusal-notice`, `refusal-notice-dm`, `jira-transition`, …), `target`, `detail`, `at` |
 | `trigger_channel` | the Slack channels open to everyone, with who opened and closed each and when. Closed ones are kept |
 | `trigger_person` | the Jira people who may tag the brain on any issue, keyed by `(source, user_id)`, with who allowed and took off each and when. Switched-off ones are kept |
@@ -655,7 +655,7 @@ the first time the Tasks section lists it.
 
 ### Reprocessing a task
 
-A task that went wrong (`failed`, `timeout`, `interrupted`), a B2B message
+A task that went wrong (`failed`, `timeout`, `interrupted`, `cancelled`), a B2B message
 that the allowed list stopped (`blocked`), or a mention the gate turned away
 (`refused`) has a **Reprocess** button on its Tasks card. A blocked or refused
 one asks first, because running it means you vouch for someone the gate did not
@@ -674,6 +674,16 @@ python3 scripts/trigger.py reprocess --request <id> --run   # and run it here, n
 ```
 
 or `POST /api/trigger-reprocess {request_id}`.
+
+### Cancelling a task
+
+A `queued` or `running` task has a **Cancel** button on its Tasks card
+(`POST /api/trigger-cancel {request_id}`). The request turns `cancelled` at once
+and a `cancel` action is logged. A running session or script checks its row
+every second (`CANCEL_POLL_S`) and is killed when it sees the cancel, so this
+reaches a run in another process too (a meeting scan's detached run). An HTTP
+call already sent is left to finish, but its answer is not kept. A cancelled
+task can be reprocessed.
 
 ### The server log
 

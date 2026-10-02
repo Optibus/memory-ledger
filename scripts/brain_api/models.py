@@ -292,6 +292,10 @@ class TriggerReprocess(Body):
     request_id: Text = T("The blocked or failed request to run again.")
 
 
+class TriggerCancel(Body):
+    request_id: Text = T("The queued or running request to stop.")
+
+
 class TriggerCheck(Body):
     only: Text = T("`claude`, `slack`, `jira` or `github`; empty checks everything switched on.")
     offline: Any = Field(False, description="true skips the calls to Slack and Jira.")
@@ -392,6 +396,10 @@ class AgentConversation(Body):
 
 class AgentRetry(Body):
     id: Text = T("A reply that failed.")
+
+
+class AgentCancel(Body):
+    id: Text = T("A reply that is queued or running.")
 
 
 class AgentConfig(Body):
