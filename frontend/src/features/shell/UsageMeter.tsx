@@ -44,11 +44,11 @@ export function UsageMeter({ active }: { active: boolean }) {
     ["Total", data.total],
   ];
   return (
-    <div className="ml-usage">
+    <div className="ml-meter">
       {open ? (
-        <dl className="ml-usage__more" aria-label="estimated usage by period">
+        <dl className="ml-meter__more" aria-label="estimated usage by period">
           {rows.map(([label, v]) => (
-            <div key={label} className="ml-usage__row">
+            <div key={label} className="ml-meter__row">
               <dt>{label}</dt>
               <dd>{money(v)}</dd>
             </div>
@@ -57,20 +57,20 @@ export function UsageMeter({ active }: { active: boolean }) {
       ) : null}
       <button
         type="button"
-        className="ml-usage__bar"
+        className="ml-meter__bar"
         aria-expanded={open}
         title="Estimated from local logs at list price, not your subscription"
         onClick={() => setOpen((o) => !o)}
       >
-        <span className="ml-usage__cell">
-          <span className="ml-usage__label">5h est.</span>
+        <span className="ml-meter__cell">
+          <span className="ml-meter__label">5h est.</span>
           <b>{money(data.fiveHours)}</b>
         </span>
-        <span className="ml-usage__cell">
-          <span className="ml-usage__label">Today est.</span>
+        <span className="ml-meter__cell">
+          <span className="ml-meter__label">Today est.</span>
           <b>{money(data.today)}</b>
         </span>
-        <span aria-hidden="true" className="ml-usage__chev">{open ? "▾" : "▴"}</span>
+        <span aria-hidden="true" className="ml-meter__chev">{open ? "▾" : "▴"}</span>
       </button>
     </div>
   );
