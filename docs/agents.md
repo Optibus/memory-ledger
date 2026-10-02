@@ -53,6 +53,16 @@ The agent decides `question` itself. The system prompt, and a reminder at the en
 of the prompt, tell it to make the last line of its reply exactly `[[needs-answer]]`
 when it cannot go on without you. The marker is stripped before the text is stored.
 
+## Suggested next message
+
+The prompt also asks the agent to end every reply with a line of its own, `[[next: <one short sentence, in your voice>]]`,
+suggesting what you are most likely to say next. When it asked you a question, the suggestion is the answer it expects, and
+`[[needs-answer]]` stays the very last line. The agent leaves it out when nothing obvious follows.
+
+The marker is stripped wherever it appears in the reply, and from recalled context, so a model cannot copy an old
+suggestion. The sentence is stored on the reply as `next_action` and offered as a suggestion in the composer once the
+reply is done.
+
 ## Tools: read-only or on, per conversation
 
 The composer's **Read-only** box is ticked by default. Untick it to turn tools on
