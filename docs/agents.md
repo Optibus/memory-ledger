@@ -27,8 +27,15 @@ finds earlier turns like any other memory, and so does every other session on
 any machine. The exchanges already carried in step 2 are left out of recall, so
 nothing appears twice.
 
+The system prompt also names the conversation: its id, its graph node, and how
+to read the whole thread back when the owner refers to something the carried
+exchanges do not cover. Claude runs `python3 scripts/agents.py thread <id>
+[--limit N]`; Ollama calls its `read_thread` tool. Both print the thread oldest
+first, the reply being written left out.
+
 Because each turn is stateless, switching the **connector or model** mid-conversation
-costs nothing. The next reply is written by whichever one is picked, and every
+costs nothing. In the composer they are one button: it opens the connectors, and
+pointing at one (or tapping it) opens its models to the side. The next reply is written by whichever one is picked, and every
 reply records its own `connector` and `model`.
 
 ## Badges
@@ -53,8 +60,8 @@ from the next turn; the reply then carries a *tools on* badge.
 
 | | Read-only (default) | Tools on |
 |---|---|---|
-| Claude | `--tools=Read,Grep,Glob,WebSearch,WebFetch,Skill`, the same list in `--allowedTools`, `--permission-mode dontAsk`, `--strict-mcp-config`. No Bash, no edits, no MCP | `--dangerously-skip-permissions`, like a trigger session |
-| Ollama | `recall`, `search`, `get_node` | also `add_note`, `add_task` |
+| Claude | `--tools=Read,Grep,Glob,WebSearch,WebFetch,Skill,Bash`, the same list in `--allowedTools` except Bash, which is allowed for `agents.py thread` only, `--permission-mode dontAsk`, `--strict-mcp-config`. No other Bash, no edits, no MCP | `--dangerously-skip-permissions`, like a trigger session |
+| Ollama | `recall`, `search`, `get_node`, `read_thread` | also `add_note`, `add_task` |
 
 Ollama tools run inside the server, against the graph. A model that does not
 support tools (Ollama answers *does not support tools*) is asked again without
@@ -69,7 +76,7 @@ Each reply logs every tool call, skill, subagent, MCP call and thinking block,
 with input and output clipped to 2,000 characters. In the UI, what the agent
 says while it works shows as its own message, as it comes; the tool calls
 between those fold shut. The tab fills the window and the chat scrolls on its
-own: it follows new messages while you are at the bottom, and stays put when
+own, with no heading above it (the search sits just under the ☰ button): it follows new messages while you are at the bottom, and stays put when
 you scrolled up to read. Claude's events come from `--output-format stream-json --verbose`,
 and the row is updated about twice a second while the reply runs, so the log
 and the **cost** move live. While a reply runs, its cost is estimated from the

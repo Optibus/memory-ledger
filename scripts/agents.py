@@ -21,6 +21,7 @@ Ollama may also write notes and tasks.
 
     python3 scripts/agents.py status
     python3 scripts/agents.py run <message-id>     # run one queued reply, in this process
+    python3 scripts/agents.py thread <conversation-id> [--limit N]   # the thread, as text
 """
 
 from __future__ import annotations
@@ -64,6 +65,10 @@ CLAUDE_MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5-20251
                  "claude-fable-5-1"]
 # Read-only Claude: these built-ins and nothing else, every other call denied.
 CLAUDE_READ_TOOLS = ["Read", "Grep", "Glob", "WebSearch", "WebFetch", "Skill"]
+SCRIPT = Path(__file__).resolve()
+# How an agent reads its own conversation back. Read-only Claude gets Bash for
+# this one command and nothing else.
+THREAD_CMD = f"python3 {SCRIPT} thread"
 
 DEFAULTS: dict[str, Any] = {
     "default_connector": "claude",
@@ -341,6 +346,26 @@ def thread(con: sqlite3.Connection, cid: str) -> dict[str, Any] | None:
     return {"ok": True, "conversation": c, "messages": msgs}
 
 
+def thread_text(con: sqlite3.Connection, cid: str, limit: int = 0) -> str:
+    """The thread as plain text, oldest first: what an agent reads to see
+    earlier turns than the ones its prompt carries. `limit` keeps the last N
+    messages."""
+    c = get_conv(con, cid)
+    if not c:
+        return f"no conversation {cid}"
+    rows = con.execute("SELECT role, text, model, status, at FROM agent_msg WHERE conv_id=?"
+                       " ORDER BY at", (cid,)).fetchall()
+    if limit > 0:
+        rows = rows[-limit:]
+    out = [f"Conversation {cid}: {c['title'] or 'Untitled'} ({len(rows)} messages)"]
+    for r in rows:
+        if r["role"] == "agent" and r["status"] in PENDING:
+            continue                                   # the reply being written now
+        who = "Owner" if r["role"] == "user" else f"Agent ({r['model']})"
+        out.append(f"\n[{r['at']}] {who}:\n{strip_mark(r['text'] or '')[0]}")
+    return "\n".join(out)
+
+
 def _pick(cfg: dict[str, Any], connector_id: str, model: str) -> tuple[dict | None, str, str]:
     cid = connector_id or cfg.get("default_connector") or ""
     c = connector(cfg, cid)
@@ -541,11 +566,13 @@ def build_turn(con: sqlite3.Connection, reply: dict[str, Any]) -> dict[str, Any]
     parts.append("The owner's message:\n" + question)
     parts.append(f"\n(If your reply asks the owner anything they must answer before you "
                  f"can go on, its last line is exactly {QUESTION_MARK}.)")
-    return {"system": system_prompt(conv, len(history)), "prompt": "\n".join(parts),
+    cid = reply.get("connector") or (conv or {}).get("connector") or ""
+    kind = (connector(cfg, cid) or {}).get("kind", "claude")
+    return {"system": system_prompt(conv, len(history), kind), "prompt": "\n".join(parts),
             "context": [r["id"] for r in recalled if r.get("id")], "question": question}
 
 
-def system_prompt(conv: dict[str, Any] | None, carried: int) -> str:
+def system_prompt(conv: dict[str, Any] | None, carried: int, kind: str = "claude") -> str:
     full = bool(conv and conv.get("full_tools"))
     owner = graph.owner() or "the owner"
     lines = [
@@ -555,6 +582,16 @@ def system_prompt(conv: dict[str, Any] | None, carried: int) -> str:
         + (f"the last {carried} exchange(s) of this conversation, " if carried else "")
         + "and the memory the brain recalled for it. If that is not enough, look things "
           "up rather than guess.",
+    ]
+    if conv:
+        how = ("call the read_thread tool" if kind == "ollama" else
+               f"run `{THREAD_CMD} {conv['id']}` (add `--limit N` for the last N messages)")
+        lines.append(
+            f"This conversation's id is {conv['id']}"
+            + (f", its graph node {conv['node_id']}" if conv.get("node_id") else "")
+            + f". When the owner refers to something said earlier that you do not see, "
+              f"{how} to read the whole thread rather than ask.")
+    lines += [
         "Reply in the language of the owner's message. Be direct and short.",
         f"If you cannot go on without the owner (a choice only they can make, a fact you "
         f"cannot find, a confirmation before acting), ask, and make the last line of your "
@@ -597,10 +634,11 @@ def claude_command(c: dict[str, Any], turn: dict[str, Any], model: str, full: bo
         cmd.append("--dangerously-skip-permissions")
     else:
         # The tool set itself is cut down, and anything outside it is denied
-        # without a prompt: no Bash, no edits, no MCP servers.
+        # without a prompt: no edits, no MCP servers, and Bash for reading this
+        # thread back only.
         tools = ",".join(CLAUDE_READ_TOOLS)
-        cmd += [f"--tools={tools}", f"--allowedTools={tools}", "--permission-mode", "dontAsk",
-                "--strict-mcp-config"]
+        cmd += [f"--tools={tools},Bash", f"--allowedTools={tools},Bash({THREAD_CMD}:*)",
+                "--permission-mode", "dontAsk", "--strict-mcp-config"]
     return cmd
 
 
@@ -776,6 +814,8 @@ OLLAMA_READ_TOOLS = [
           "related to a query (people, tasks, decisions, notes).", {"query": _S}, ["query"]),
     _tool("search", "Find nodes whose title contains the text.", {"text": _S}, ["text"]),
     _tool("get_node", "Read one node in full, with its relations.", {"id": _S}, ["id"]),
+    _tool("read_thread", "Read this conversation's earlier messages, oldest first. "
+          "`limit` keeps the last N.", {"limit": {"type": "integer"}}, []),
 ]
 OLLAMA_WRITE_TOOLS = [
     _tool("add_note", "Store a note in the owner's memory graph.",
@@ -785,8 +825,14 @@ OLLAMA_WRITE_TOOLS = [
 ]
 
 
-def ollama_tool_call(name: str, args: dict[str, Any], full: bool) -> Any:
+def ollama_tool_call(name: str, args: dict[str, Any], full: bool, conv_id: str = "") -> Any:
     """One graph tool, run here. Writes refuse unless tools are on."""
+    if name == "read_thread":
+        try:
+            limit = int(args.get("limit") or 0)
+        except (TypeError, ValueError):
+            limit = 0
+        return thread_text(db(), conv_id, limit) if conv_id else {"error": "no conversation"}
     gcon = graph.connect()
     if name == "recall":
         res = graph.api_recall(gcon, str(args.get("query") or ""), limit=8)
@@ -887,7 +933,7 @@ def run_ollama(con: sqlite3.Connection, reply: dict[str, Any], c: dict[str, Any]
             ev = log.add({"kind": "tool", "name": name, "tool": name, "input": _clip(args),
                           "output": "", "error": False})
             try:
-                res = ollama_tool_call(name, args, full)
+                res = ollama_tool_call(name, args, full, reply["conv_id"])
             except Exception as e:                    # a tool failure is the model's to read
                 res = {"error": str(e)}
             ev["output"] = _clip(res)
@@ -1028,9 +1074,14 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("status")
     r = sub.add_parser("run")
     r.add_argument("id")
+    t = sub.add_parser("thread", help="print a conversation's messages, oldest first")
+    t.add_argument("id")
+    t.add_argument("--limit", type=int, default=0, help="only the last N messages")
     a = ap.parse_args(argv)
     if a.cmd == "status":
         graph.out(status_payload())
+    elif a.cmd == "thread":
+        print(thread_text(db(), a.id, a.limit))
     else:
         graph.out(run_reply(a.id))
     return 0

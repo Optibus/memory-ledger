@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+import subprocess
 import sys
 import tempfile
 import threading
@@ -162,8 +163,14 @@ def main() -> int:
        any(c.startswith("task_renew-the-parking-permit") for c in m["context"]), str(m["context"]))
     argv = json.loads((Path(HOME) / "claude-argv.jsonl").read_text().splitlines()[-1])
     ck("read-only cuts the tool set and denies the rest",
-       "--tools=Read,Grep,Glob,WebSearch,WebFetch,Skill" in argv and "dontAsk" in argv
+       "--tools=Read,Grep,Glob,WebSearch,WebFetch,Skill,Bash" in argv and "dontAsk" in argv
        and "--strict-mcp-config" in argv and "--dangerously-skip-permissions" not in argv)
+    allowed = next(a for a in argv if a.startswith("--allowedTools="))
+    ck("read-only Bash is the thread command only", allowed.endswith(f",Bash({agents.THREAD_CMD}:*)")
+       and ",Bash," not in allowed + ",", allowed)
+    system = argv[argv.index("--append-system-prompt") + 1]
+    ck("the system prompt names the conversation and how to read it",
+       r["conversation"]["id"] in system and f"{agents.THREAD_CMD} {r['conversation']['id']}" in system, system)
     ck("the prompt carries the message and the recalled node",
        "What must I renew?" in argv[1] and "Renew the parking permit" in argv[1])
     ck("the conversation badge is a question", agents.conv_state(con, r["conversation"]["id"]) == "question")
@@ -212,7 +219,13 @@ def main() -> int:
     ck("the tool call is logged with its result", m["events"][0]["name"] == "recall"
        and "parking permit" in m["events"][0]["output"].lower(), str(m["events"][:1]))
     ck("read-only ollama gets only the read tools",
-       {t["function"]["name"] for t in FakeOllama.calls[0]["tools"]} == {"recall", "search", "get_node"})
+       {t["function"]["name"] for t in FakeOllama.calls[0]["tools"]} == {"recall", "search", "get_node", "read_thread"})
+    ck("ollama is told to read the thread with its tool",
+       "read_thread" in FakeOllama.calls[0]["messages"][0]["content"])
+    ck("read_thread reads this conversation back",
+       "What must I renew?" in agents.ollama_tool_call("read_thread", {}, False, cid))
+    last2 = agents.ollama_tool_call("read_thread", {"limit": 2}, False, cid)
+    ck("read_thread keeps the last N", "(2 messages)" in last2 and "Oct 5" not in last2, last2)
     ck("a local model costs nothing, tokens are counted", m["cost_usd"] == 0 and m["tokens_in"] == 120)
     ck("each reply records who wrote it", m["model"] == "tiny:1b" and reply_of(con, r["reply_id"])["model"] == "claude-sonnet-5-5")
     ck("a write tool refuses while read-only", "read-only" in json.dumps(agents.ollama_tool_call("add_task", {"title": "x"}, False)))
@@ -236,6 +249,11 @@ def main() -> int:
        str(t["conversation"]["cost_usd"]))
     ck("messages alternate, the reply after its question",
        [x["role"] for x in t["messages"][:2]] == ["user", "agent"])
+
+    out = subprocess.run([sys.executable, str(agents.SCRIPT), "thread", cid], capture_output=True, text=True,
+                         env=os.environ)
+    ck("the thread command prints the thread", out.returncode == 0 and "Owner:" in out.stdout
+       and "Oct 5" in out.stdout and agents.QUESTION_MARK not in out.stdout, out.stdout + out.stderr)
 
     print("background dispatch and recovery")
     agents.save_conversation(con, cid, connector="claude", model="claude-sonnet-5-5")
