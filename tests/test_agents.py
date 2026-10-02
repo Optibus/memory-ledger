@@ -269,14 +269,19 @@ def main() -> int:
     agents.save_conversation(con, cid, connector="claude", model="claude-sonnet-5-5")
     r8 = agents.send(con, "async", cid)
     ck("a sent message runs in the background", wait_status(con, r8["reply_id"]) == "question")
-    con.execute("UPDATE agent_msg SET status='running' WHERE id=?", (r8["reply_id"],))
+    con.execute("UPDATE agent_msg SET status='running', beat_at=0 WHERE id=?", (r8["reply_id"],))
     con.commit()
     ck("a reply left running fails on restart", agents.recover() == 1
        and "interrupted" in reply_of(con, r8["reply_id"])["error"])
-    con.execute("UPDATE agent_msg SET status='running', owner_pid=? WHERE id=?",
+    con.execute("UPDATE agent_msg SET status='running', owner_pid=?, beat_at=0 WHERE id=?",
                 (os.getppid(), r8["reply_id"]))
     con.commit()
     ck("a reply whose server is still alive survives another server's start",
+       agents.recover() == 0 and reply_of(con, r8["reply_id"])["status"] == "running")
+    con.execute("UPDATE agent_msg SET owner_pid=0, beat_at=? WHERE id=?",
+                (time.time(), r8["reply_id"]))
+    con.commit()
+    ck("a reply with a fresh heartbeat survives even if its pid is unseen",
        agents.recover() == 0 and reply_of(con, r8["reply_id"])["status"] == "running")
     con.execute("UPDATE agent_msg SET status='error' WHERE id=?", (r8["reply_id"],))
     con.commit()

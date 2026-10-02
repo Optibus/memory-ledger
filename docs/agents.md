@@ -176,6 +176,11 @@ oldest first. When the server starts, any reply still marked `running` belonged 
 a process that is gone. It becomes an `error` ("interrupted"), one click from
 Retry, and the queue starts again.
 
+While a reply runs, a thread writes `beat_at` on its row every 10s. On startup
+`recover()` leaves alone any running reply with a beat under 30s old, even when its
+pid is not visible to this process (another server, a sandbox); the pid check stays
+as the second guard. Only a reply with a stale beat and a dead pid is failed.
+
 **Cancel** on a queued or running reply (`POST /api/agent-cancel {id}`) fails it
 at once as `cancelled by you`, so Retry runs it again. A running Claude session is
 killed; an Ollama chat stops before its next round, and whatever the call in

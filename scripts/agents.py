@@ -155,6 +155,7 @@ CREATE TABLE IF NOT EXISTS agent_msg (
     finished_at   TEXT NOT NULL DEFAULT '',
     node_id       TEXT NOT NULL DEFAULT '',     -- the exchange's `message` node
     owner_pid     INTEGER NOT NULL DEFAULT 0,   -- the server process running it
+    beat_at       REAL NOT NULL DEFAULT 0,      -- epoch of the owner's last heartbeat
     next_action   TEXT NOT NULL DEFAULT ''      -- the agent's suggested next message
 );
 CREATE INDEX IF NOT EXISTS agent_msg_conv ON agent_msg(conv_id, at);
@@ -315,6 +316,7 @@ def db() -> sqlite3.Connection:
     con.executescript(SCHEMA)
     have = {r["name"] for r in con.execute("PRAGMA table_info(agent_msg)")}
     for col, ddl in (("owner_pid", "INTEGER NOT NULL DEFAULT 0"),
+                     ("beat_at", "REAL NOT NULL DEFAULT 0"),
                      ("next_action", "TEXT NOT NULL DEFAULT ''")):
         if col not in have:
             con.execute(f"ALTER TABLE agent_msg ADD COLUMN {col} {ddl}")
@@ -1059,12 +1061,34 @@ def run_reply(msg_id: str) -> dict[str, Any]:
         return {"ok": False, "error": f"no reply {msg_id}"}
     reply = _msg_row(r)
     # Claimed only while still pending: a cancel in between wins.
-    claimed = con.execute("UPDATE agent_msg SET status='running', started_at=?, owner_pid=?"
-                          " WHERE id=? AND status IN ('queued','running')",
-                          (now_iso(), os.getpid(), msg_id)).rowcount
+    claimed = con.execute("UPDATE agent_msg SET status='running', started_at=?, owner_pid=?,"
+                          " beat_at=? WHERE id=? AND status IN ('queued','running')",
+                          (now_iso(), os.getpid(), time.time(), msg_id)).rowcount
     con.commit()
     if not claimed:
         return {"ok": False, "error": f"reply {msg_id} was cancelled"}
+    stop = threading.Event()
+    threading.Thread(target=_beat, args=(msg_id, stop), daemon=True).start()
+    try:
+        return _run_claimed(con, msg_id, reply)
+    finally:
+        stop.set()
+
+
+def _beat(msg_id: str, stop: threading.Event) -> None:
+    """While a reply runs, stamp it every BEAT_S so another server can tell it
+    is alive without seeing its pid (a sandbox may not)."""
+    con = graph.connect()
+    while not stop.wait(BEAT_S):
+        try:
+            con.execute("UPDATE agent_msg SET beat_at=? WHERE id=? AND status='running'",
+                        (time.time(), msg_id))
+            con.commit()
+        except sqlite3.Error:
+            pass
+
+
+def _run_claimed(con: sqlite3.Connection, msg_id: str, reply: dict[str, Any]) -> dict[str, Any]:
     cfg = load_config()
     c = connector(cfg, reply["connector"])
     try:
@@ -1170,6 +1194,10 @@ def _work(msg_id: str) -> None:
         dispatch()
 
 
+BEAT_S = 10          # heartbeat period of a running reply
+BEAT_STALE_S = 30    # no heartbeat for this long: the owner is gone
+
+
 def _alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
@@ -1183,10 +1211,13 @@ def _alive(pid: int) -> bool:
 def recover() -> int:
     """At server start: a reply left `running` whose server process is gone
     fails with a reason (retry is one click), and the queue restarts. A reply
-    whose owner is still alive (a second server, a reload) is left alone."""
+    whose owner is still alive (a recent heartbeat, or a live pid) is left alone."""
     con = db()
     n = 0
-    for r in con.execute("SELECT id, owner_pid FROM agent_msg WHERE status='running'").fetchall():
+    for r in con.execute("SELECT id, owner_pid, beat_at FROM agent_msg"
+                         " WHERE status='running'").fetchall():
+        if time.time() - (r["beat_at"] or 0) < BEAT_STALE_S:
+            continue
         if r["owner_pid"] and r["owner_pid"] != os.getpid() and _alive(r["owner_pid"]):
             continue
         n += con.execute("UPDATE agent_msg SET status='error', error='interrupted: the server "
