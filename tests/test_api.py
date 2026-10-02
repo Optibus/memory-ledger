@@ -669,6 +669,22 @@ def test_settings_writes(s: Server):
        r.raw[:160])
 
 
+def test_prompt_recall_setting(s: Server):
+    print("\n== prompt recall: the switch over the settings route ==")
+    eff = s.get("/api/settings").json()["effective"]
+    ck("prompt_recall is OFF by default and says where that came from",
+       eff["prompt_recall"] is False and eff["prompt_recall_source"] == "default", str(eff)[:160])
+    ck("prompt_recall must be true or false", refused(
+        s.post("/api/settings", {"prompt_recall": "maybe"}), 400, "must be true or false"))
+    r = s.post("/api/settings", {"prompt_recall": True})
+    ck("turning it on through the settings route", r.status == 200
+       and r.json()["effective"]["prompt_recall"] is True
+       and r.json()["effective"]["prompt_recall_source"] == "settings", r.raw[:160])
+    r = s.post("/api/settings", {"prompt_recall": False})
+    ck("and back off", r.status == 200 and r.json()["effective"]["prompt_recall"] is False,
+       r.raw[:160])
+
+
 def test_learned_rules(s: Server):
     print("\n== learned rules: proposals over the API ==")
     r = s.get("/api/rule-proposals")
@@ -1194,6 +1210,7 @@ def main():
         test_settings_writes(s)
         test_contract_writes(s)
         test_learned_rules(s)
+        test_prompt_recall_setting(s)
         test_scripts(s)
         test_trigger_routes(s)
         test_b2b_routes(s)

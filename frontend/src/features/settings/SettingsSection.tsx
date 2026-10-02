@@ -24,6 +24,7 @@ import { B2BCard } from "./B2BCard";
 import { AgentsCard } from "./AgentsCard";
 import { RealmsCard } from "./RealmsCard";
 import { LearnedRulesCard } from "./LearnedRulesCard";
+import { PromptRecallCard } from "./PromptRecallCard";
 import type { RealmCount, Settings, Status, StoredSettings, Timezones } from "@/api/types";
 import "./SettingsSection.css";
 
@@ -78,6 +79,11 @@ export function SettingsSection() {
           />
           <CaptureCard
             capture={settings.data.capture}
+            writable={settings.data.writable}
+            onChanged={() => settings.reload()}
+          />
+          <PromptRecallCard
+            effective={settings.data.effective}
             writable={settings.data.writable}
             onChanged={() => settings.reload()}
           />

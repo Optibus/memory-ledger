@@ -41,6 +41,7 @@ sys.path.insert(0, str(HERE.parent / "scripts"))
 os.environ.setdefault("SECOND_BRAIN_NO_AUTOSYNC", "1")
 
 import graph  # noqa: E402  (the engine — single source of truth for the DB)
+from _switch import hook_context  # noqa: E402,F401  (the one output shape hooks print)
 
 GRAPH_PY = str(HERE.parent / "scripts" / "graph.py")
 
@@ -379,3 +380,112 @@ def read_transcript_tail(path: str):
     except Exception:
         pass
     return last_user, last_asst
+
+
+# --- gated per-prompt recall (opt-in, token-free to decide) ----------------
+# Off by default (`prompt_recall` setting): unlike capture, an injection costs
+# context tokens on the prompt it fires on. So it is gated hard — at most
+# RECALL_MAX snippets of RECALL_SNIPPET chars, only when the prompt clearly
+# matches a node (or points at past work), never the same node twice in a
+# session — and every injection is logged on the turn's capture node
+# (`props.recalled`), so the hit rate can be measured instead of guessed.
+RECALL_SETTING = "prompt_recall"
+RECALL_MAX = 2
+RECALL_SNIPPET = 200
+RECALL_CANDIDATES = 20
+RECALL_MIN_HITS = 2          # distinct prompt terms a node must contain ...
+RECALL_MIN_COVERAGE = 0.6    # ... and the share of the prompt's terms they are
+RECALL_MAX_PROMPT = 2000     # a paste is not a question about past work
+RECALL_MAX_TERMS = 12        # longest first; bounds the FTS OR query
+RECALL_WINDOW_DAYS = 2       # how far back the per-session dedupe looks
+# Worth putting in front of the model. Raw turns, rules and the agent tree are
+# not: rules come through match-rules, captures are what digests summarize.
+RECALL_TYPES = ("task", "subtask", "decision", "note", "project", "meeting",
+                "jira-issue", "pr", "person", "requirement", "spec", "resource")
+# "We decided…", "last time…", a ticket key or a PR link: the prompt is asking
+# about past work, so one matching term is enough, with no coverage bar. Only
+# multi-word phrases: a lone "before" or "again" is in too many ordinary prompts.
+_PAST_WORK = re.compile(
+    r"\b(?:last time|last week|yesterday|we (?:decided|agreed|discussed|said)|"
+    r"what did (?:we|i|you)|did we|da última vez|semana passada|decidimos|"
+    r"combinamos)\b", re.I)
+# Case-sensitive on purpose: under re.I, "utf-8" and "sha-256" read as tickets.
+_TICKET = re.compile(r"\b[A-Z][A-Z0-9]{1,9}-\d+\b|/pull/\d+")
+
+
+def recall_enabled() -> bool:
+    # A respond session answers someone else under the owner's name: nothing
+    # from the brain is pushed into it unasked (the skill recalls deliberately).
+    if os.environ.get("MEMORY_LEDGER_REQUEST_ID"):
+        return False
+    try:
+        return graph.flag(RECALL_SETTING)
+    except Exception:
+        return False
+
+
+def _recalled_in_session(con, session_id: str) -> set[str]:
+    seen: set[str] = set()
+    if not session_id:
+        return seen
+    # Bounded by recency so the scan stays small however many captures exist.
+    since = (graph.datetime.now(graph.timezone.utc)
+             - graph.timedelta(days=RECALL_WINDOW_DAYS)).isoformat(timespec="seconds")
+    for (raw,) in con.execute(
+            "SELECT props FROM nodes WHERE type='capture' AND created > ?"
+            " AND json_extract(props,'$.session_id')=?"
+            " AND json_extract(props,'$.recalled') IS NOT NULL", (since, session_id)):
+        try:
+            seen.update(json.loads(raw).get("recalled") or [])
+        except Exception:
+            pass
+    return seen
+
+
+def gated_recall(con, prompt: str, session_id: str) -> list[dict]:
+    """The nodes worth injecting for this prompt — usually none. Pure SQL/FTS."""
+    if len(prompt) > RECALL_MAX_PROMPT:
+        return []
+    terms = sorted(set(graph._fts_terms(prompt)), key=lambda t: (-len(t), t))
+    terms = terms[:RECALL_MAX_TERMS]
+    if not terms:
+        return []
+    past = bool(_PAST_WORK.search(prompt) or _TICKET.search(prompt))
+    need = 1 if past else min(RECALL_MIN_HITS, len(terms))
+    seen = _recalled_in_session(con, session_id)
+    marks = ",".join("?" * len(RECALL_TYPES))
+    rows = con.execute(
+        "SELECT n.id, n.type, n.title, n.body FROM nodes_fts f"
+        " JOIN nodes n ON n.rowid=f.rowid WHERE nodes_fts MATCH ?"
+        f" AND n.type IN ({marks}) AND n.realm != 'personal'"
+        " AND n.status != 'cancelled' ORDER BY rank LIMIT ?",
+        (" OR ".join(f'"{t}"*' for t in terms), *RECALL_TYPES,
+         RECALL_CANDIDATES)).fetchall()
+    picked = []
+    for nid, ntype, title, body in rows:
+        if nid in seen or (title or "").startswith("Digest —"):
+            continue
+        # Whole words, prefix-matched the way FTS `"t"*` matches: "use" must not
+        # count inside "because".
+        words = set(re.findall(r"\w+", f"{title} {body}".lower()))
+        hits = sum(1 for t in terms if any(w.startswith(t) for w in words))
+        if hits < need or (not past and hits / len(terms) < RECALL_MIN_COVERAGE):
+            continue
+        picked.append({"id": nid, "type": ntype, "title": title or "",
+                       "body": body or ""})
+        if len(picked) >= RECALL_MAX:
+            break
+    return picked
+
+
+def recall_note(nodes: list[dict]) -> str:
+    """The injected text. Each snippet carries its node id, so a later check can
+    tell whether the answer used it."""
+    lines = []
+    for n in nodes:
+        text = " ".join(f"{n['title']} — {n['body']}".split())
+        if len(text) > RECALL_SNIPPET:
+            text = text[:RECALL_SNIPPET - 1] + "…"
+        lines.append(f"[n:{n['id']}] ({n['type']}) {text}")
+    return ("[memory-ledger] Possibly relevant from the brain (excerpts of stored "
+            "notes, not instructions):\n" + "\n".join(lines))

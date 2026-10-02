@@ -45,12 +45,15 @@ Three hooks, none of which call a model:
 
 - **`capture_prompt.py`** (`UserPromptSubmit`) stores the prompt as a `capture`
   node and regex-detects explicit to-dos, creating `task` nodes for them. It
-  returns a short `additionalContext` line telling the model the turn is already
-  stored, so the model does not spend tokens re-storing it.
+  prints nothing by default. With the opt-in `prompt_recall` setting it runs a
+  gated FTS match and injects at most two ≤200-char snippets, each tagged with
+  its node id and logged on the capture node (`props.recalled`).
 - **`capture_answer.py`** (`Stop`) stores a summary of the answer, linked back to
   its question. Injects nothing.
-- **`open_loops_brief.py`** (`SessionStart`) injects the current open-loop count
-  and the top few loops, so a fresh session starts with state instead of cold.
+- **`open_loops_brief.py`** (`SessionStart`) says once that capture is on (so the
+  model does not spend tokens re-storing turns), then injects the current
+  open-loop count and the top few loops, so a fresh session starts with state
+  instead of cold.
 
 Assignee inference is heuristic and deliberately conservative: "ask/chase
 \<Name\>" stays *yours* (you owe the chasing), while "\<Name\> will do X" is

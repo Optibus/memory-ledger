@@ -19,18 +19,34 @@ richer nodes/links only for things the heuristics miss.
 **What "token-free" means here — precisely.** No skill, hook or query ever spends
 tokens *deciding* or *storing*: that work is regex + SQL. What does cost tokens is
 text that lands in the conversation — command output you read, and the short
-`additionalContext` two hooks inject. Measured 2026-07-27:
+`additionalContext` the SessionStart brief injects. Hooks print it as
+`{"hookSpecificOutput": {"hookEventName": "<event>", "additionalContext": "…"}}`
+(`_switch.hook_context`); a top-level `additionalContext` is not read by Claude
+Code and is silently dropped. Measured 2026-07-27, revised 2026-10-02:
 
 | Hook | Injected into context | Latency |
 |---|---|---|
-| `UserPromptSubmit` | **208 bytes** (~52 tokens), on every prompt | 64 ms |
-| `SessionStart` | **~1.0 KB** (~267 tokens; open-loops brief, capped at 6 loops so it does not grow with the graph) | 185 ms |
+| `UserPromptSubmit` | **nothing** by default. With the opt-in `prompt_recall` setting, at most 2 snippets of ≤200 chars (~110 tokens), only on prompts that clearly match a node | 64 ms |
+| `SessionStart` | **~1.1 KB** (~290 tokens; "capture is on" once, plus the open-loops brief, capped at 6 loops so it does not grow with the graph). Sits in the cached prefix | 185 ms |
 | `Stop` | **nothing** (writes only) | 57 ms |
 
-A heavy day — ~60 prompts across ~6 sessions — is ~4,700 injected tokens, a few
-cents, **under 0.05% of what a working day of Claude Code costs**. It likely pays
-for itself, since the injected line tells the model not to re-store the turn and to
-recall through the free paths instead. So: effectively free, **not literally zero**.
+"Capture is on, don't re-store the turn" is said once per session, in the
+SessionStart brief, not on every prompt: the same message on every prompt was
+~52 tokens a prompt that taught the model nothing new after the first.
+
+**Gated per-prompt recall** (`prompt_recall`, off by default; turn on with the
+Prompt recall switch on the Settings page or `"prompt_recall": true` in
+`<home>/settings.json`, force off with
+`MEMORY_LEDGER_NO_PROMPT_RECALL=1`). Decided by FTS + regex, no model call. A node
+is injected only when it contains ≥2 of the prompt's content terms covering
+≥60% of them, or ≥1 when the prompt points at past work ("we decided", "last
+time", a ticket key, a PR link). Never a `capture`, `rule` or digest, never a
+`personal`-realm node, never the same node twice in a session, and never into a
+respond session (`$MEMORY_LEDGER_REQUEST_ID` set). Each snippet carries its id
+(`[n:<id>]`), and the ids injected are logged on the turn's capture node
+(`props.recalled`), so the hit rate is measured rather than guessed.
+
+So: effectively free, **not literally zero**.
 Say "no model call" when you mean it. Re-measure with the recipe in
 [`docs/performance.md`](docs/performance.md).
 

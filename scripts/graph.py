@@ -260,7 +260,7 @@ def learned_skills_dir() -> Path:
 # ---------------------------------------------------------------------------
 SETTING_KEYS = ["tz", "realm", "owner", "brain_name", "backend", "autosync", "consolidate",
                 "map_poll_seconds", "dash_refresh_seconds", "ui_sync",
-                "learned_rules"]
+                "learned_rules", "prompt_recall"]
 
 # `backend` is where READS come from by default (writes always hit SQLite first
 # and mirror onward, whatever this says). `auto` is the honest setting for a

@@ -229,7 +229,9 @@ def test_hooks():
 
     o = hook("capture_prompt.py", {"prompt": "how does the exporter handle empty timetables",
                                    "session_id": sid, "cwd": "/repo"})
-    ck("the prompt hook still injects its note", "additionalContext" in o.stdout)
+    # Silent by default: "capture is on" moved to the SessionStart brief, and
+    # gated recall (opt-in) is the only thing this hook may inject.
+    ck("the prompt hook is silent by default", o.stdout.strip() == "", o.stdout[:120])
     hook("capture_agent.py", {"session_id": sid, "tool_name": "Task", "tool_input": ti}, "pre")
     hook("capture_agent.py", {"session_id": sid, "tool_name": "Task", "tool_input": ti,
                               "tool_response": {"content": "done"}}, "post")
