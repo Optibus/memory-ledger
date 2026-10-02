@@ -3,6 +3,9 @@
   height: 100vh; display: flex; flex-direction: column;
   padding: 64px var(--space-5) var(--space-4);
 }
+/* Bare: no heading, so the chat starts at the top. The burger sits over the
+   top-left corner; whatever is under it makes room itself. */
+.ml-section--fill.ml-section--bare { padding-top: var(--space-4); }
 .ml-section__bar { display: flex; align-items: center; gap: var(--space-3); }
 .ml-section__title { margin: 0 0 4px; font-size: 18px; }
 .ml-section__actions { margin-left: auto; }

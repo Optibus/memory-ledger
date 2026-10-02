@@ -1,4 +1,4 @@
-/* Two panes under the heading, like Messages: conversations, then the thread. */
+/* Two panes, the whole window high, like Messages: conversations, then the thread. */
 .ml-agents {
   display: grid; grid-template-columns: 300px 1fr; gap: var(--space-4);
   flex: 1; min-height: 0;
@@ -11,7 +11,8 @@
   border: 1px solid var(--border); border-radius: var(--radius-lg);
   background: var(--panel); display: flex; flex-direction: column; min-height: 0;
 }
-.ml-agents__side { padding: var(--space-3); gap: var(--space-2); }
+/* The burger floats over the top-left corner; the search starts below it. */
+.ml-agents__side { padding: 44px var(--space-3) var(--space-3); gap: var(--space-2); }
 .ml-agents__tools { display: flex; gap: var(--space-2); align-items: center; }
 .ml-agents__tools .ml-search { flex: 1; min-width: 0; }
 .ml-agents__lists { overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: var(--space-2); }
@@ -97,6 +98,46 @@
 }
 .ml-agents__pickers { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; }
 .ml-agents__pickers .ml-input--select { width: auto; max-width: 260px; }
+
+/* The agent and model: one button. It opens upward, over the thread; each
+   agent opens its models to the side. */
+.ml-pick { position: relative; }
+.ml-pick__btn {
+  display: flex; align-items: center; gap: var(--space-2); max-width: 320px;
+  background: var(--bg-sunken); border: 1px solid var(--border); color: var(--fg);
+  border-radius: var(--radius); padding: 6px 9px; font: inherit; font-size: 12.5px;
+  cursor: pointer; white-space: nowrap;
+}
+.ml-pick__btn:hover:not(:disabled), .ml-pick__btn[aria-expanded="true"] { border-color: var(--accent); }
+.ml-pick__btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.ml-pick__model { color: var(--muted); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.ml-pick__caret { font-size: 9px; color: var(--muted); }
+.ml-pick__menu, .ml-pick__sub {
+  list-style: none; margin: 0; padding: 5px; min-width: 170px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 9px;
+  backdrop-filter: blur(8px); box-shadow: var(--shadow-pop); z-index: var(--z-dropdown);
+}
+.ml-pick__menu { position: absolute; left: 0; bottom: calc(100% + 5px); }
+.ml-pick__row { position: relative; }
+.ml-pick__sub {
+  position: absolute; left: calc(100% + 4px); bottom: -5px; min-width: 210px;
+  max-height: 50vh; overflow-y: auto;
+}
+.ml-pick__item {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-4);
+  width: 100%; text-align: left; white-space: nowrap;
+  background: transparent; border: 0; color: var(--fg); font: inherit; font-size: 12.5px;
+  padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); cursor: pointer;
+}
+.ml-pick__item:hover, .ml-pick__item.is-shown { background: var(--hover); }
+.ml-pick__item.is-current { font-weight: 600; }
+.ml-pick__item.is-current [aria-hidden] { color: var(--accent); }
+.ml-pick__none { color: var(--muted); font-size: 12px; padding: var(--space-2) var(--space-3); max-width: 240px; white-space: normal; }
+@media (max-width: 480px) {
+  /* Little room to the side: the models overlap the agents' right half,
+     leaving their names in reach. */
+  .ml-pick__sub { left: 45%; }
+}
 .ml-agents__hint { color: var(--muted); font-size: 11.5px; margin: 0; }
 .ml-agents__compose-row { display: flex; gap: var(--space-2); align-items: flex-end; }
 .ml-agents__compose-row .ml-input--area { min-height: 44px; resize: none; }

@@ -69,10 +69,31 @@ describe("Agents", () => {
   it("switches the model mid-conversation", async () => {
     const { user } = renderApp(<AgentsSection />, { route: "/agents?c=c1" });
     await screen.findByRole("listitem", { name: "agent reply" });
-    await user.selectOptions(screen.getByLabelText("agent"), "ollama");
+    await user.click(screen.getByRole("button", { name: "agent and model" }));
+    await user.hover(screen.getByRole("menuitem", { name: /Ollama/ }));
+    const models = screen.getByRole("menu", { name: "Ollama models" });
+    await user.click(within(models).getByRole("menuitemradio", { name: "llama3:latest" }));
     await waitFor(() =>
       expect(sent("/api/agent-conversation")).toEqual([{ id: "c1", connector: "ollama", model: "llama3:latest" }]),
     );
+    expect(screen.queryByRole("menu", { name: "agents" })).not.toBeInTheDocument();
+  });
+
+  it("opens an agent's models to the side, the current one ticked", async () => {
+    const { user } = renderApp(<AgentsSection />, { route: "/agents?c=c1" });
+    await screen.findByRole("listitem", { name: "agent reply" });
+    await user.click(screen.getByRole("button", { name: "agent and model" }));
+    const models = screen.getByRole("menu", { name: "Claude models" });
+    expect(within(models).getByRole("menuitemradio", { name: "claude-sonnet-5-5" })).toHaveAttribute("aria-checked", "true");
+    await user.click(screen.getByRole("menuitem", { name: /Ollama/ }));
+    expect(screen.queryByRole("menu", { name: "Claude models" })).not.toBeInTheDocument();
+    expect(screen.getByRole("menu", { name: "Ollama models" })).toBeInTheDocument();
+  });
+
+  it("gives the chat the whole window: no visible heading", async () => {
+    renderApp(<AgentsSection />, { route: "/agents" });
+    expect(await screen.findByRole("heading", { name: "Agents" })).toHaveClass("sr-only");
+    expect(screen.queryByText(/Each turn is a fresh call/)).not.toBeInTheDocument();
   });
 
   it("ticks Read-only when the conversation is read-only, and unticking it turns tools on", async () => {
@@ -88,7 +109,7 @@ describe("Agents", () => {
   it("starts a conversation read-only with the default agent", async () => {
     const { user } = renderApp(<AgentsSection />, { route: "/agents" });
     await screen.findByText("Start a conversation");
-    await waitFor(() => expect(screen.getByLabelText("model")).toHaveValue("claude-sonnet-5-5"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "agent and model" })).toHaveTextContent("claude-sonnet-5-5"));
     await user.type(screen.getByLabelText("message to the agent"), "Hello{Enter}");
     await waitFor(() =>
       expect(sent("/api/agent-send")).toEqual([

@@ -72,11 +72,7 @@ export function AgentsSection() {
   const current = all.find((c) => c.id === selected);
 
   return (
-    <Section
-      title="Agents"
-      lead="Talk to Claude or a local Ollama model. Each turn is a fresh call that gets your message, the last few exchanges, and what the brain recalls for it."
-      fill
-    >
+    <Section title="Agents" fill bare>
       {convs.error ? <StatusMessage tone="error">{convs.error}</StatusMessage> : null}
       {status.data?.config._problem ? <StatusMessage tone="error">{status.data.config._problem}</StatusMessage> : null}
       <div className="ml-agents">
@@ -239,7 +235,7 @@ function Thread({ id, summary, connectors, defaults, writable, onCreated, onChan
   const change = async (next: Partial<Pick>) => {
     if (!pick) return;
     const merged = { ...pick, ...next };
-    if (next.connector && next.connector !== pick.connector) {
+    if (next.connector && next.connector !== pick.connector && next.model === undefined) {
       merged.model = connectorOf(connectors, next.connector)?.default_model ?? "";
     }
     if (!conv) {
@@ -520,7 +516,6 @@ function Composer({ conv, pick, connectors, writable, busy, error, onError, onPi
   const [sending, setSending] = useState(false);
   const box = useRef<HTMLTextAreaElement>(null);
   const c = pick ? connectorOf(connectors, pick.connector) : undefined;
-  const models = c ? (c.models.includes(pick!.model) || !pick!.model ? c.models : [pick!.model, ...c.models]) : [];
   const usable = !!c && c.enabled && !!pick?.model;
   const canSend = writable && usable && !sending && !!text.trim();
 
@@ -572,20 +567,7 @@ function Composer({ conv, pick, connectors, writable, busy, error, onError, onPi
       {error ? <StatusMessage tone="error">{error}</StatusMessage> : null}
       {pick && connectors ? (
         <div className="ml-agents__pickers">
-          <Select
-            aria-label="agent"
-            value={pick.connector}
-            options={connectors.map((x) => ({ value: x.id, label: `${x.name}${x.enabled ? "" : " (off)"}` }))}
-            onChange={(e) => onPick({ connector: e.target.value })}
-            disabled={!writable}
-          />
-          <Select
-            aria-label="model"
-            value={pick.model}
-            options={models.length ? models.map((m) => ({ value: m, label: m })) : [{ value: "", label: "no models" }]}
-            onChange={(e) => onPick({ model: e.target.value })}
-            disabled={!writable || !models.length}
-          />
+          <ModelPicker pick={pick} connectors={connectors} disabled={!writable} onPick={onPick} />
           <Select
             aria-label="context"
             title="Earlier exchanges each turn carries, besides what the brain recalls"
@@ -623,6 +605,130 @@ function Composer({ conv, pick, connectors, writable, busy, error, onError, onPi
           {sending ? "sending…" : "Send"}
         </Button>
       </div>
+    </div>
+  );
+}
+
+/** A connector's models, with the conversation's own first if the host no longer lists it. */
+function modelsOf(c: AgentConnector, pick: Pick): string[] {
+  return c.id !== pick.connector || !pick.model || c.models.includes(pick.model) ? c.models : [pick.model, ...c.models];
+}
+
+/**
+ * One button for the agent and its model. It opens the agents; pointing at
+ * one (or tapping it) opens its models to the side.
+ */
+function ModelPicker({
+  pick,
+  connectors,
+  disabled,
+  onPick,
+}: {
+  pick: Pick;
+  connectors: AgentConnector[];
+  disabled: boolean;
+  onPick: (p: Partial<Pick>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [side, setSide] = useState("");
+  const root = useRef<HTMLDivElement>(null);
+  const current = connectorOf(connectors, pick.connector);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      if (root.current && !root.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const toggle = () => {
+    setSide(pick.connector);
+    setOpen((v) => !v);
+  };
+  const choose = (connector: string, model: string) => {
+    setOpen(false);
+    if (connector !== pick.connector) onPick({ connector, model });
+    else if (model !== pick.model) onPick({ model });
+  };
+
+  return (
+    <div className="ml-pick" ref={root}>
+      <button
+        type="button"
+        className="ml-pick__btn"
+        aria-label="agent and model"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        disabled={disabled}
+        onClick={toggle}
+      >
+        <b>{current?.name ?? pick.connector}</b>
+        <span className="ml-pick__model">{pick.model || "no model"}</span>
+        <span className="ml-pick__caret" aria-hidden="true">▴</span>
+      </button>
+      {open ? (
+        <ul className="ml-pick__menu" role="menu" aria-label="agents">
+          {connectors.map((x) => {
+            const models = modelsOf(x, pick);
+            const shown = side === x.id;
+            return (
+              <li key={x.id} role="none" className="ml-pick__row" onPointerEnter={() => setSide(x.id)}>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={`ml-pick__item${x.id === pick.connector ? " is-current" : ""}${shown ? " is-shown" : ""}`}
+                  aria-haspopup="menu"
+                  aria-expanded={shown}
+                  onClick={() => setSide(x.id)}
+                  onFocus={() => setSide(x.id)}
+                >
+                  <span>
+                    {x.name}
+                    {x.enabled ? "" : " (off)"}
+                  </span>
+                  <span aria-hidden="true">▸</span>
+                </button>
+                {shown ? (
+                  <ul className="ml-pick__sub" role="menu" aria-label={`${x.name} models`}>
+                    {models.length ? (
+                      models.map((m) => {
+                        const on = x.id === pick.connector && m === pick.model;
+                        return (
+                          <li key={m} role="none">
+                            <button
+                              type="button"
+                              role="menuitemradio"
+                              aria-checked={on}
+                              className={`ml-pick__item${on ? " is-current" : ""}`}
+                              onClick={() => choose(x.id, m)}
+                            >
+                              <span>{m}</span>
+                              {on ? <span aria-hidden="true">✓</span> : null}
+                            </button>
+                          </li>
+                        );
+                      })
+                    ) : (
+                      <li role="none" className="ml-pick__none">
+                        {x.problem || "no models"}
+                      </li>
+                    )}
+                  </ul>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
     </div>
   );
 }
