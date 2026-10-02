@@ -3,8 +3,10 @@
 
 At the start of a session (when the brain is enabled), surface the open loops
 AND the thread that was in play, so the session opens knowing what's hanging and
-where it left off. Emits {"additionalContext": ...} on stdout (exit 0), or nothing
-when the brain is disabled.
+where it left off. Emits {"hookSpecificOutput": {"hookEventName": "SessionStart",
+"additionalContext": ...}} on stdout (exit 0), or nothing when the brain is
+disabled. It also says, once per session, that capture is on: the per-prompt
+hook stays silent, so this is the one place the model learns it.
 
 This fires on `/clear` too, which is the point: clearing the context window is the
 cheapest thing you can do to a long conversation, and it is only safe because this
@@ -36,6 +38,15 @@ if _switch.disabled():
     sys.exit(0)  # brain explicitly off -> silent (bootstrap.py owns dir creation)
 
 home = str(_switch.home_dir())
+
+# Said once here, in the cached prefix, instead of on every prompt.
+CAPTURE_ON = ("[memory-ledger] Capture is on: every turn is stored without a model "
+              "call; don't spend tokens re-storing it. Recall is free via "
+              "graph.py search / brain_query.py.")
+
+
+def emit(note):
+    print(_switch.hook_context("SessionStart", CAPTURE_ON + "\n" + note))
 graph = os.path.join(root, "scripts", "graph.py")
 
 
@@ -190,7 +201,7 @@ try:
                          capture_output=True, text=True, timeout=8).stdout
     d = json.loads(raw)
 except Exception:
-    print("{}")
+    print(_switch.hook_context("SessionStart", CAPTURE_ON))
     sys.exit(0)
 
 n = d.get("count", 0)
@@ -200,7 +211,7 @@ if not n:
     if rev:
         note += ("\nBecame possible again (the condition that blocked these no "
                  "longer holds — offer them, don't resume them):\n" + "\n".join(rev))
-    print(json.dumps({"additionalContext": note}))
+    emit(note)
     sys.exit(0)
 
 lines = []
@@ -244,4 +255,4 @@ msg = (
     + revived_block
     + "\n(full list: open-loops · thread + parked: resume · park to offload context)"
 )
-print(json.dumps({"additionalContext": msg}))
+emit(msg)

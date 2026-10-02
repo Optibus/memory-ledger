@@ -7,16 +7,18 @@ node, and dynamically creates `task` nodes for any explicit to-dos it contains,
 linked back to the turn. Recall stays free — the data is in the DB for
 graph.py / brain_query.py to read without a model call.
 
-NOTE: storing costs nothing, but the `additionalContext` printed below DOES enter
-the conversation (~200 chars per prompt). Measured at ~0.01% of a session's
-tokens; keep this string short. See CONVENTIONS §0.
+By default it prints nothing: "capture is on" is said once per session by the
+SessionStart brief, where it sits in the cached prefix, instead of on every
+prompt. With the opt-in `prompt_recall` setting it may inject up to two short
+snippets of matching nodes (gated; see `_capture.gated_recall`). See
+CONVENTIONS §0.
 
 stdin: Claude Code JSON incl. `prompt`, `session_id`, `cwd`.
-stdout: optional {"additionalContext": "..."} — kept tiny on purpose.
+stdout: nothing, or {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
+"additionalContext": "..."}} when gated recall found something.
 """
 
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -43,17 +45,26 @@ def main():
         # conversation (§2k) — so a branch is always walkable from the root, and
         # a subagent's discarded alternative never dies with its branch.
         agent = C.root_agent(con, sid, cwd)
+        # Before the insert, so this turn never matches itself.
+        recalled = []
+        if C.recall_enabled():
+            try:
+                recalled = C.gated_recall(con, prompt, sid)
+            except Exception:
+                recalled = []  # recall is a bonus; never cost the capture
+        props = {"role": "user", "session_id": sid, "cwd": cwd,
+                 "agent": agent, "captured_at": C.graph.now()}
+        if recalled:
+            # the log the hit rate is measured from, and the session's dedupe
+            props["recalled"] = [n["id"] for n in recalled]
         turn = C.insert_node(
-            con, "capture", C.title_of(prompt), body=prompt[:4000],
-            props={"role": "user", "session_id": sid, "cwd": cwd,
-                   "agent": agent, "captured_at": C.graph.now()})
+            con, "capture", C.title_of(prompt), body=prompt[:4000], props=props)
         if agent:
             C.insert_edge(con, turn, agent, C.graph.AREA_REL)
         # dynamically spin up tasks + links for explicit to-dos in the prompt.
         # Infer the assignee (mine / someone else / unknown) instead of assuming
         # it's the owner's — so the dashboard's assignee filter is meaningful and
         # someone-else's ingested to-dos don't masquerade as the owner's action.
-        made = 0
         # Through graph.owner(), so a name set in Settings decides whose to-do
         # this is. Reading the env var alone left the hook assigning work to a
         # hardcoded name on every machine but one.
@@ -66,16 +77,12 @@ def main():
                 props["assignee"] = who
             tid = C.insert_node(con, "task", title, status="open", props=props)
             C.insert_edge(con, tid, turn, "captured-from")
-            made += 1
         C.flush_async()
     except Exception:
         return  # never break the session
 
-    note = ("[memory-ledger] Turn auto-captured to the brain (Python/SQL, no model call)"
-            + (f"; {made} task(s) created" if made else "")
-            + ". Recall is free via scripts/brain_query.py / graph.py search — "
-              "don't spend tokens re-storing this turn.")
-    print(json.dumps({"additionalContext": note}))
+    if recalled:
+        print(C.hook_context("UserPromptSubmit", C.recall_note(recalled)))
 
 
 if __name__ == "__main__":

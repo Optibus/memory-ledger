@@ -251,7 +251,10 @@ Once installed, hooks run in **pure Python/SQL — no model call**:
   Code, add a launchd agent calling `graph.py consolidate --older-than 1`.
 - **UserPromptSubmit** → `capture_prompt.py` stores each prompt as a `capture` node
   and auto-creates `task` nodes for explicit to-dos ("remind me…", "todo:", "follow
-  up…"), linked back to the turn.
+  up…"), linked back to the turn. It injects nothing unless you opt in to gated
+  recall (`"prompt_recall": true` in `<home>/settings.json`): then up to two short
+  snippets of clearly matching nodes, never the same one twice in a session
+  (CONVENTIONS §0).
 - **Stop** → `capture_answer.py` stores an extractive summary of the answer, linked
   to its question.
 - **PreToolUse / PostToolUse** (matcher `Task`) → `capture_agent.py` puts each

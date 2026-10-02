@@ -217,7 +217,10 @@ def enabled() -> bool:
 #: want, an escape hatch you export for one shell should say what you suppress.
 BOOL_SETTINGS = {"autosync": True, "consolidate": True, "ui_sync": False,
                  # learned rules (graph.py propose-rules): opt-in, never on by default
-                 "learned_rules": False}
+                 "learned_rules": False,
+                 # gated per-prompt recall (hooks/capture_prompt.py): opt-in, it
+                 # spends context tokens on every prompt it fires on
+                 "prompt_recall": False}
 
 _BOOL_TRUE = {"1", "true", "yes", "on"}
 _BOOL_FALSE = {"0", "false", "no", "off"}
@@ -271,3 +274,14 @@ def flag_source(name: str) -> str:
     if _env_says_off(name):
         return "env"
     return "settings" if settings().get(name) is not None else "default"
+
+
+def hook_context(event: str, text: str) -> str:
+    """The JSON a hook prints to put `text` into the model's context.
+
+    Claude Code reads `additionalContext` only under `hookSpecificOutput`, next
+    to the event it answers. A top-level `{"additionalContext": ...}` is not a
+    documented field and is dropped, which is how the open-loops brief and the
+    per-prompt note both went unread while looking like they worked."""
+    return json.dumps({"hookSpecificOutput": {"hookEventName": event,
+                                              "additionalContext": text}})
