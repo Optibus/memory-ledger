@@ -1747,6 +1747,29 @@ def test_wake_phrases(cfg):
            and turns[1] == ("Owner Doe", "Jarvis will handle this,")
            and turns[2] == ("Owner Doe", "send them the v2.")
            and turns[3][0] == "Owner Doe", str(turns))
+        gemini = trigger.utterances(
+            "### **Details**\n"
+            "**Integration Concepts and Next Steps**: Owner Doe said Jarvis will handle it.\n"
+            "-----\n"
+            "# **Transcript**\n"
+            "### **00:28:37**\n"
+            "**Owner Doe:** the wizard, I'll let Jarvis will handle this and she\n"
+            "**Ana Lima**: Mhm.\n"
+            "will take the requirements.\n"
+            "### **00:30:10**\n"
+            "orphan line after a timestamp heading\n")
+        ck("a Gemini export: notes above the transcript are skipped, **Name:** is a speaker,"
+           " a heading ends a turn",
+           gemini == [("Owner Doe", "the wizard, I'll let Jarvis will handle this and she"),
+                      ("Ana Lima", "Mhm."), ("Ana Lima", "will take the requirements."),
+                      ("", "orphan line after a timestamp heading")], str(gemini))
+        overlap = json.loads(json.dumps(cfg))
+        overlap["meeting"] = {"enabled": True, "phrases": [
+            {"phrase": "{brain} handle this"}, {"phrase": "I'll let {brain} handle this"}]}
+        one = trigger.match_phrases(overlap, "Owner Doe: so I'll let Jarvis handle this one")
+        ck("two phrases fitting one line are one ask; the most specific phrase takes it",
+           len(one) == 1 and one[0]["phrase"]["phrase"] == "I'll let {brain} handle this",
+           str([m["phrase"]["phrase"] for m in one]))
         ck("the owner in full, or by first name, is the owner; someone else is not",
            trigger.is_owner_name("Owner Doe") and trigger.is_owner_name("owner")
            and not trigger.is_owner_name("Ana Lima") and not trigger.is_owner_name("")

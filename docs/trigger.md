@@ -329,10 +329,15 @@ notes, it scans them for your **wake phrases**, and each one said starts a task
 - **Matching.** Word by word, case- and accent-blind, whatever punctuation is
   between the words: `{brain} will handle` matches "Brain, will handle this" and
   "BRAIN will handle it", not "brain will handled". At least two words, so naming
-  the brain alone fires nothing. One match per line per phrase.
+  the brain alone fires nothing. One match per line: when several phrases fit one
+  sentence ("{brain} handle this" and "I'll let {brain} handle this"), it is one
+  ask, and the phrase with the most words takes it.
 - **The transcript.** One turn per line, `Name: what they said` (Meet's format;
-  a `[00:12]` timestamp in front is fine). A line with no name carries on the
-  last speaker's turn.
+  a `[00:12]` timestamp in front is fine, and so is the Markdown a Gemini export
+  writes, `**Name:** what they said`). A line with no name carries on the last
+  speaker's turn, and a heading or rule (`### 00:12:00`, `-----`) ends it. A
+  document with notes above a `# Transcript` heading (a "Notes by Gemini" Doc) is
+  read from that heading on, so the summary is never taken for anyone's words.
 - **Who.** You, as the transcript names you: the `owner` setting, in full or by
   first name ("Alex" is "Alex Doe"), or a name passed with `--me`. A phrase marked
   `anyone` runs for whoever says it. Anyone else's is logged **`refused`** and runs

@@ -1582,11 +1582,19 @@ PHRASE_DO = ("{phrase_speaker} said \"{phrase_said}\" in a meeting ({trigger_whe
              "Work out from what was said around it what they put on {brain}, and do it now. "
              "If it is not clear enough to act on, add a task to the brain for {owner} "
              "saying what was asked, instead of guessing.")
-# A transcript line: "Ana Lima: text", "[00:12] Ana: text", "00:01:02 Ana: text".
+# A transcript line: "Ana Lima: text", "[00:12] Ana: text", "00:01:02 Ana: text", and
+# the Markdown a Google Meet (Gemini) export writes: "**Ana Lima:** text".
 # The name is a few words with no URL in it, so "see https://x: y" is no speaker.
 _SPEAKER_RE = re.compile(
     r"^\s*(?:\[?\(?\d{1,2}:\d{2}(?::\d{2})?\)?\]?\s*[-–]?\s*)?"
-    r"(?P<who>[^\s:/][^:/\n]{0,58}?)\s*:\s+(?P<said>\S.*)$")
+    r"(?:[*_]{1,2})?(?P<who>[^\s:/*_][^:/\n*]{0,58}?)(?:[*_]{1,2})?\s*:(?:[*_]{1,2})?"
+    r"\s+(?P<said>\S.*)$")
+# A Markdown heading or rule ends a speaker's turn: what follows a "### 00:12:00" or a
+# "-----" is no longer the last speaker's.
+_BREAK_RE = re.compile(r"^\s*(?:#{1,6}\s|-{3,}\s*$|\*{3,}\s*$)")
+# The heading a notes-plus-transcript document puts over the transcript ("# Transcript",
+# "# Transcrição"). The notes above it are a summary, not anyone's words.
+_TRANSCRIPT_HEADING_RE = re.compile(r"^\s*#{1,6}\s.*\btranscri", re.I | re.M)
 _WORD_RE = re.compile(r"\w+")
 
 
@@ -1625,10 +1633,18 @@ def find_phrase(words: list, text: str):
 def utterances(text: str) -> list:
     """A transcript as [(speaker, said)]. A line with no "Name:" before it
     carries on the last speaker's turn, as a wrapped line does; before any
-    speaker it is nobody's ("")."""
+    speaker it is nobody's (""). A document with notes above a transcript
+    heading is read from that heading on, and a heading or rule ends a turn."""
+    text = text or ""
+    head = _TRANSCRIPT_HEADING_RE.search(text)
+    if head:
+        text = text[head.start():]
     out, who = [], ""
-    for line in (text or "")[:SCAN_TEXT_MAX].splitlines():
+    for line in text[:SCAN_TEXT_MAX].splitlines():
         if not line.strip():
+            continue
+        if _BREAK_RE.match(line):
+            who = ""
             continue
         m = _SPEAKER_RE.match(line)
         if m and len(m.group("who").split()) <= 6:
@@ -1665,15 +1681,21 @@ def _context(turns: list, i: int) -> str:
 
 def match_phrases(cfg: dict, text: str, aliases=()) -> list:
     """Every switched-on phrase said in a transcript, in the order said: one
-    match per line per phrase. Decides nothing about who may run it."""
+    match per line. When several phrases fit one line ("{brain} handle this" and
+    "I'll let {brain} handle this"), that is one ask, so the most specific
+    phrase, the one with the most words, takes it. Decides nothing about who
+    may run it."""
     phrases = [(ph, phrase_words(ph["phrase"])) for ph in phrases_cfg(cfg) if ph["on"]]
     turns = utterances(text)
     found = []
     for i, (who, said) in enumerate(turns):
+        best = None
         for ph, words in phrases:
             at = find_phrase(words, said)
-            if at is None:
-                continue
+            if at is not None and (best is None or len(words) > len(best[1])):
+                best = (ph, words, at)
+        if best:
+            ph, _, at = best
             found.append({"index": i, "phrase": ph, "speaker": who, "said": said,
                           "rest": said[at[1]:].lstrip(" ,.:;-–—").strip(),
                           "context": _context(turns, i),
