@@ -1390,3 +1390,13 @@ export interface AgentSendResult extends Envelope {
   message_id: string;
   reply_id: string;
 }
+
+/** A document an agent wrote under <home>/exports (GET /api/document). */
+export interface AgentDocument extends Envelope {
+  name: string;
+  path: string;
+  kind: "md" | "txt" | "html" | "pdf";
+  size: number;
+  /** Markdown, text and HTML only; a PDF is shown from /api/document-file. */
+  text: string | null;
+}

@@ -46,6 +46,7 @@ share is the graph, so the real coupling is in the read and write surfaces below
 | `calendar` | `meeting` (optional), `relates-to` | Google Calendar, `task` props, `person.tz` |
 | `complete-task` | status `done` via `complete` | `search`, `list --type task` |
 | `delegate` | `assigned-to`, `props.state`, `waiting_on` | `person`, `task` |
+| `document-html`, `document-md`, `document-pdf`, `document-txt` | one file under `<home>/exports/documents/`; optionally a `note` (`Document style - <format>`) | the `Document style` note, `recall` |
 | `export-memory` | none (files only) | the whole graph |
 | `follow-up` | `set-state`, `pr`, `email`, `message` | `open-loops`, GitHub, Gmail, Slack, Jira |
 | `ingest-context` | `meeting`, `person`, `decision`, `task`, `note`, `jira-issue` + edges | Gmail, Drive, Slack, Jira, `search` |
