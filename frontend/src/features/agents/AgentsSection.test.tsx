@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 import { AgentsSection } from "./AgentsSection";
 import { renderApp } from "@/test/utils";
@@ -7,7 +7,12 @@ import { resetWrites, server, writes } from "@/test/server";
 import { agentThreadFixture } from "@/test/fixtures";
 import { toText, formatCost } from "./export";
 
-beforeEach(resetWrites);
+beforeEach(() => {
+  resetWrites();
+  // jsdom has no object URLs; the composer makes one per image for its thumbnail.
+  URL.createObjectURL = () => "blob:thumb";
+  URL.revokeObjectURL = () => {};
+});
 
 const sent = (path: string) => writes.filter((w) => w.path === path).map((w) => w.body);
 
@@ -124,6 +129,38 @@ describe("Agents", () => {
     expect(box).toBeEnabled();
     await user.click(box);
     await waitFor(() => expect(sent("/api/agent-conversation")).toEqual([{ id: "c1", full_tools: true }]));
+  });
+
+  it("attaches files with the clip, the drop and the paste, and sends them with the message", async () => {
+    const { user } = renderApp(<AgentsSection />, { route: "/agents" });
+    const box = await screen.findByRole("textbox", { name: "message to the agent" });
+    await waitFor(() => expect(screen.getByRole("button", { name: "agent and model" })).toHaveTextContent("claude-sonnet-5-5"));
+    const png = new File(["x"], "shot.png", { type: "image/png" });
+    await user.upload(screen.getByLabelText("choose files"), png);
+    const chips = await screen.findByRole("list", { name: "attached files" });
+    expect(await within(chips).findByText("shot.png")).toBeInTheDocument();
+
+    fireEvent.paste(box, { clipboardData: { files: [new File(["z"], "notes.zip", { type: "application/zip" })] } });
+    expect(await within(chips).findByText("notes.zip")).toBeInTheDocument();
+
+    const dropped = new File(["m"], "plan.md", { type: "text/markdown" });
+    fireEvent.drop(box, { dataTransfer: { types: ["Files"], files: [dropped] } });
+    expect(await within(chips).findByText("plan.md")).toBeInTheDocument();
+
+    await user.click(within(chips).getByRole("button", { name: "Remove notes.zip" }));
+    expect(within(chips).queryByText("notes.zip")).not.toBeInTheDocument();
+
+    expect(sent("/api/agent-send")).toEqual([]);
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() =>
+      expect(sent("/api/agent-send")).toEqual([
+        expect.objectContaining({
+          text: "",
+          attachments: ["20261007-101010-ab12-shot.png", "20261007-101010-ab12-plan.md"],
+        }),
+      ]),
+    );
+    expect(screen.queryByRole("list", { name: "attached files" })).not.toBeInTheDocument();
   });
 
   it("starts a conversation read-only with the default agent", async () => {

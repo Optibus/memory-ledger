@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse
 import agent_commands
 import agents
 import b2b
+import documents
 import graph
 import trigger
 
@@ -746,13 +747,22 @@ def _bool_or_none(v):
     return None if v is None else v is True
 
 
+@router.post("/agent-attach", tags=["agents"], summary="Attach a file to the chat",
+             description="Saves one file under `<home>/attachments/` (any type, up to 25 MB, "
+                         "sent as base64) and returns its `path`, to pass to `/api/agent-send`. "
+                         "No model call.")
+def agent_attach(data: m.AgentAttach = body(m.AgentAttach)):
+    return reply(documents.save_attachment(clip(data.name, 200), data.data))
+
+
 @router.post("/agent-send", tags=["agents"], summary="Say something to an agent",
              description="Stores the message and queues the reply, which runs in the "
                          "background: poll `/api/agent-thread`. **Starts a model call.**")
 def agent_send(data: m.AgentSend = body(m.AgentSend)):
     turns = data.context_turns
     return reply(agents.send(agents.db(), clip(data.text, agents.TEXT_MAX),
-                             clip(data.conversation, 80), connector_id=clip(data.connector, 40),
+                             clip(data.conversation, 80),
+                             attachments=[a for a in data.attachments if isinstance(a, str)][:10], connector_id=clip(data.connector, 40),
                              model=clip(data.model, 120), full_tools=_bool_or_none(data.full_tools),
                              context_turns=None if turns is None else turns))
 

@@ -166,8 +166,8 @@ export const api = {
   agentConversations: (signal?: AbortSignal) =>
     get<import("./types").AgentConversations>("/api/agent-conversations", undefined, signal),
   /** A document an agent wrote, by its path under <home>/exports. */
-  document: (path: string, signal?: AbortSignal) =>
-    get<import("./types").AgentDocument>("/api/document", { path }, signal),
+  document: (path: string, area: "exports" | "attachments" = "exports", signal?: AbortSignal) =>
+    get<import("./types").AgentDocument>("/api/document", area === "exports" ? { path } : { path, area }, signal),
   agentThread: (id: string, signal?: AbortSignal) =>
     get<import("./types").AgentThread>("/api/agent-thread", { id }, signal),
   b2b: (signal?: AbortSignal) =>
@@ -285,9 +285,13 @@ export const api = {
   /** `human`: typed in the Messages chat. Every other sender is shown as automated. */
   sendB2B: (to: string, text: string, human = false) =>
     post<import("./types").B2BSendResult>("/api/b2b-send", human ? { to, text, human } : { to, text }),
+  /** Save a file the owner attached to the chat under <home>/attachments (base64). No model call. */
+  attachFile: (name: string, data: string) =>
+    post<import("./types").AgentAttachResult>("/api/agent-attach", { name, data }),
   /** Starts a model call: the reply runs in the background, poll the thread. */
   sendAgent: (body: {
     text: string;
+    attachments?: string[];
     conversation?: string;
     connector?: string;
     model?: string;
@@ -383,4 +387,5 @@ export const api = {
 export type Api = typeof api;
 
 /** The raw bytes of a document, for an iframe. */
-export const documentFileUrl = (path: string) => `${BASE}/api/document-file${queryString({ path })}`;
+export const documentFileUrl = (path: string, area: "exports" | "attachments" = "exports") =>
+  `${BASE}/api/document-file${queryString(area === "exports" ? { path } : { path, area })}`;

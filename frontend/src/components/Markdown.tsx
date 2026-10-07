@@ -7,7 +7,7 @@ import "./Markdown.css";
 /**
  * A message with its Markdown: headings, lists, quotes, tables and rules on top
  * of what `RichText` reads inline, and `[name](doc:path)` as a document card
- * that opens the file in an overlay. Built from React elements, never HTML.
+ * (an image shows as a thumbnail) that opens the file in an overlay. Built from React elements, never HTML.
  */
 export function Markdown({ text }: { text: string }) {
   const blocks = useMemo(() => parseBlocks(text), [text]);
@@ -47,7 +47,7 @@ export function Markdown({ text }: { text: string }) {
               </div>
             );
           case "doc":
-            return <DocCard key={i} name={b.name} path={b.path} />;
+            return <DocCard key={i} name={b.name} path={b.path} area={b.area} />;
         }
       })}
     </div>

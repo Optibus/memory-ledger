@@ -7,6 +7,7 @@
  *   # heading (1-6)     - item / * item     1. item     > quote     ---
  *   | a | b |  (header row, then |---|---| , then rows)
  *   [name](doc:documents/report.html)  a document card, on a line of its own
+ *   [name](attach:<path>)              the same, for a file the owner attached
  *
  * A line that is none of these joins the paragraph above it. Code fences are
  * left inside the text, because `parseRich` already reads those.
@@ -19,13 +20,17 @@ export type Block =
   | { t: "quote"; v: string }
   | { t: "hr" }
   | { t: "table"; head: string[]; rows: string[][] }
-  | { t: "doc"; name: string; path: string };
+  | { t: "doc"; name: string; path: string; area: DocArea };
+
+/** Where a document lives: `doc:` is under <home>/exports, `attach:` under <home>/attachments. */
+export type DocArea = "exports" | "attachments";
 
 const HEADING = /^(#{1,6})\s+(.+?)\s*#*\s*$/;
 const BULLET = /^\s*[-*+]\s+(.*)$/;
 const NUMBERED = /^\s*\d+[.)]\s+(.*)$/;
 const RULE = /^\s*([-*_])(\s*\1){2,}\s*$/;
-const DOC = /^\s*\[([^\]\n]+)\]\(doc:([^)\s]+)\)\s*$/;
+const DOC = /^\s*\[([^\]\n]+)\]\((doc|attach):([^)\s]+)\)\s*$/;
+const ATTACH_LINE = /^\s*\[([^\]\n]+)\]\(attach:([^)\s]+)\)\s*$/;
 const FENCE_LINE = /^\s*```/;
 const TABLE_SEP = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
 
@@ -60,9 +65,9 @@ export function parseBlocks(text: string): Block[] {
       continue;
     }
     const doc = DOC.exec(line);
-    if (doc && safeDocPath(doc[2])) {
+    if (doc && safeDocPath(doc[3])) {
       flush();
-      out.push({ t: "doc", name: doc[1], path: doc[2] });
+      out.push({ t: "doc", name: doc[1], path: doc[3], area: doc[2] === "attach" ? "attachments" : "exports" });
       continue;
     }
     const h = HEADING.exec(line);
@@ -117,3 +122,17 @@ export function parseBlocks(text: string): Block[] {
   flush();
   return out;
 }
+
+/** A message's own words, apart from the `[name](attach:path)` lines it ends with. */
+export function splitAttachments(text: string): { body: string; files: { name: string; path: string }[] } {
+  const keep: string[] = [];
+  const files: { name: string; path: string }[] = [];
+  for (const line of (text ?? "").split("\n")) {
+    const m = ATTACH_LINE.exec(line);
+    if (m && safeDocPath(m[2])) files.push({ name: m[1], path: m[2] });
+    else keep.push(line);
+  }
+  return { body: keep.join("\n").trim(), files };
+}
+
+export const IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg)$/i;

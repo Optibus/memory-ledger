@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import documents  # noqa: E402
 import graph  # noqa: E402
 
 CONFIG_NAME = "agents.json"
@@ -481,13 +482,45 @@ def _node_title(title: str) -> str:
     return f"Agents chat: {title}"[:200]
 
 
+ATTACH_LINK = re.compile(r"\[([^\]\n]+)\]\(attach:([^)\s]+)\)")
+
+
+def attachment_lines(paths: list[str]) -> tuple[str, str]:
+    """The message lines for files the owner attached, or the reason one is refused."""
+    lines = []
+    for rel in paths:
+        try:
+            target = documents.resolve(rel, "attachments")
+        except ValueError as e:
+            return "", f"attachment {rel!r}: {e}"
+        name = re.sub(r"[\[\]()]", "", re.sub(r"^\d{8}-\d{6}-[0-9a-f]{4}-", "", target.name)) or "file"
+        lines.append(f"[{name}](attach:{rel})")
+    return "\n".join(lines), ""
+
+
+def with_disk_paths(text: str) -> str:
+    """The message as the agent reads it: each attachment link also names the
+    file's place on disk, which a model with file tools can open."""
+    def where(m: re.Match) -> str:
+        try:
+            return f"{m.group(1)} (attached file: {documents.resolve(m.group(2), 'attachments')})"
+        except ValueError:
+            return m.group(0)
+    return ATTACH_LINK.sub(where, text)
+
+
 def send(con: sqlite3.Connection, text: str, conv_id: str = "", *, connector_id: str = "",
          model: str = "", full_tools: bool | None = None, context_turns: int | None = None,
-         start: bool = True) -> dict[str, Any]:
+         attachments: list[str] | None = None, start: bool = True) -> dict[str, Any]:
     """Store the person's message and queue the reply. With no conversation,
     one is made, titled from the message. The connector, model and tools given
     here become the conversation's own from this turn on."""
     text = (text or "").strip()[:TEXT_MAX]
+    if attachments:
+        lines, err = attachment_lines(attachments)
+        if err:
+            return {"ok": False, "error": err}
+        text = f"{text}\n\n{lines}".strip()
     if not text:
         return {"ok": False, "error": "missing text"}
     changes: dict[str, Any] = {}
@@ -574,7 +607,7 @@ def _after(ts: str) -> str:
 
 
 def _title_from(text: str) -> str:
-    line = re.sub(r"\s+", " ", text).strip()
+    line = re.sub(r"\s+", " ", ATTACH_LINK.sub(r"\1", text)).strip()
     return line if len(line) <= 60 else line[:57].rstrip() + "…"
 
 
@@ -596,7 +629,7 @@ def build_turn(con: sqlite3.Connection, reply: dict[str, Any]) -> dict[str, Any]
     cfg = load_config()
     conv = get_conv(con, reply["conv_id"])
     q = con.execute("SELECT * FROM agent_msg WHERE id=?", (reply["reply_to"],)).fetchone()
-    question = q["text"] if q else ""
+    question = with_disk_paths(q["text"]) if q else ""
     turns = conv["context_turns"] if conv else 0
     history = []
     if turns:

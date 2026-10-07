@@ -371,8 +371,17 @@ class B2BSend(Body):
 
 
 # ------------------------------------------------------------------ agents
+class AgentAttach(Body):
+    name: Text = T("The file's name, as the person sees it.")
+    data: Text = T("The file's bytes, base64. At most 25 MB.")
+
+
 class AgentSend(Body):
-    text: Text = T("The person's message.")
+    text: Text = T("The person's message. May be empty when `attachments` is not.")
+    attachments: list[LooseStr] = Field(
+        default_factory=list,
+        description="Paths `/api/agent-attach` returned, up to 10; each is added to the "
+                    "message as a link the agent can read from disk.")
     conversation: Text = T("The conversation to add it to; empty starts one, titled "
                            "from the message.")
     connector: Text = T("The connector to answer with; empty keeps the conversation's.")

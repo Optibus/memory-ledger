@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseBlocks, safeDocPath } from "./markdown";
+import { parseBlocks, safeDocPath, splitAttachments } from "./markdown";
 
 describe("parseBlocks", () => {
   it("reads headings, lists, quotes and rules", () => {
@@ -26,7 +26,7 @@ describe("parseBlocks", () => {
 
   it("turns a doc link on its own line into a card", () => {
     expect(parseBlocks("[Report](doc:documents/r.html)")).toEqual([
-      { t: "doc", name: "Report", path: "documents/r.html" },
+      { t: "doc", name: "Report", path: "documents/r.html", area: "exports" },
     ]);
   });
 
@@ -34,5 +34,25 @@ describe("parseBlocks", () => {
     expect(safeDocPath("../x.md")).toBe(false);
     expect(safeDocPath("/etc/passwd")).toBe(false);
     expect(parseBlocks("[x](doc:../x.md)")[0].t).toBe("p");
+  });
+});
+
+describe("attachments", () => {
+  it("reads an attach link as a card in the attachments area", () => {
+    expect(parseBlocks("[shot.png](attach:20261007-101010-ab12-shot.png)")).toEqual([
+      { t: "doc", name: "shot.png", path: "20261007-101010-ab12-shot.png", area: "attachments" },
+    ]);
+  });
+
+  it("splits a message's words from the files it ends with", () => {
+    const text = "look at these\n\n[a.png](attach:x-a.png)\n[b.zip](attach:x-b.zip)";
+    expect(splitAttachments(text)).toEqual({
+      body: "look at these",
+      files: [{ name: "a.png", path: "x-a.png" }, { name: "b.zip", path: "x-b.zip" }],
+    });
+  });
+
+  it("refuses a path that leaves the folder", () => {
+    expect(splitAttachments("[x](attach:../secret)").files).toEqual([]);
   });
 });

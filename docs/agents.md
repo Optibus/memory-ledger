@@ -217,11 +217,26 @@ Escape, or a click outside closes it. Markdown is rendered, text is shown as is,
 HTML and PDF show in a frame (HTML sandboxed: it can run its own script, but
 cannot reach this server's API).
 
-- `GET /api/document?path=` reads one (name, kind, size, text).
-- `GET /api/document-file?path=` serves the raw file for the frame.
+- `GET /api/document?path=&area=` reads one (name, kind, size, text). `area` is `exports` (default) or `attachments`.
+- `GET /api/document-file?path=&area=` serves the raw file for the frame or the image.
 
 Only files under `<home>/exports`, of a known type (md, txt, html, pdf, plus log,
 csv and json as text) and under 5 MB; anything else, a `..`, an absolute path or
 a symlink out is refused (`scripts/documents.py`). Each skill reads the owner's
 `Document style - <format>` note, so how documents look is customized once and
 remembered, or per request.
+
+## Attaching files
+
+The paperclip in the composer, a drop on the composer, or a paste (a screenshot,
+copied files) adds a file to the chat. Each is saved at once under
+`<home>/attachments/` (`POST /api/agent-attach`, base64, any type, up to 25 MB)
+and waits as a chip above the box, with a thumbnail for an image and a cross to
+take it back. Nothing is sent until the owner sends: the message then ends with
+one `[name](attach:<path>)` line per file (`attachments` on `/api/agent-send`).
+
+The agent is given each file's place on disk next to its name, so one with file
+tools opens it (an image is read as an image). In the chat an image attachment
+shows as a thumbnail that opens in the viewer; any other file is a card with
+Expand (text, Markdown, PDF) or Download. An agent can show an image the same
+way with `[name](doc:path.png)` for a file under `exports/`, or `attach:`.

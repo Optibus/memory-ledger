@@ -202,6 +202,9 @@ export const handlers = [
       reply_id: "a9",
     }),
   ),
+  write("/api/agent-attach", (body: { name?: string }) =>
+    ok({ name: body.name, path: `20261007-101010-ab12-${body.name}`, kind: "img", size: 4 }),
+  ),
   write("/api/agent-conversation", (body: { id?: string }) =>
     ok({ conversation: agentConversationsFixture.conversations.find((c) => c.id === body.id), created: false }),
   ),

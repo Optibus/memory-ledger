@@ -145,6 +145,17 @@ def main() -> int:
     con = agents.db()
     graph.api_create_node(graph.connect(), "task", "Renew the parking permit", "", {}, "open", "2026-10-05")
 
+    print("attachments")
+    import base64
+    import documents
+    saved = documents.save_attachment("shot.png", base64.b64encode(b"\x89PNG").decode())
+    bad = agents.send(con, "see", attachments=["../etc/passwd"], start=False)
+    ck("an attachment outside the attachments folder is refused", not bad["ok"])
+    r0 = agents.send(con, "", attachments=[saved["path"]], start=False)
+    ck("attachments alone make a message, titled by the file", r0["ok"] and r0["conversation"]["title"] == "shot.png")
+    turn = agents.build_turn(con, dict(con.execute("SELECT * FROM agent_msg WHERE id=?", (r0["reply_id"],)).fetchone()))
+    ck("the agent is told where the file is on disk", str(documents.root("attachments") / saved["path"]) in turn["prompt"])
+
     print("claude, read-only")
     r = agents.send(con, "What must I renew?", start=False)
     ck("a first message makes the conversation, titled from it",

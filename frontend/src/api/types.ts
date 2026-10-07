@@ -1391,11 +1391,19 @@ export interface AgentSendResult extends Envelope {
   reply_id: string;
 }
 
+/** A file saved by POST /api/agent-attach, under <home>/attachments. */
+export interface AgentAttachResult extends Envelope {
+  name: string;
+  path: string;
+  kind: AgentDocument["kind"];
+  size: number;
+}
+
 /** A document an agent wrote under <home>/exports (GET /api/document). */
 export interface AgentDocument extends Envelope {
   name: string;
   path: string;
-  kind: "md" | "txt" | "html" | "pdf";
+  kind: "md" | "txt" | "html" | "pdf" | "img" | "file";
   size: number;
   /** Markdown, text and HTML only; a PDF is shown from /api/document-file. */
   text: string | null;

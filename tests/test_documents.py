@@ -49,5 +49,23 @@ ck("absolute path is refused", not documents.read(str(HOME / "secret.md"))["ok"]
 ck("symlink out of exports is refused", not documents.read("documents/link.md")["ok"])
 ck("empty path is refused", not documents.read("")["ok"])
 
+(docs / "p.png").write_bytes(b"\x89PNG")
+r = documents.read("documents/p.png")
+ck("an image is an img with no text", r["ok"] and r["kind"] == "img" and r["text"] is None)
+ck("an image is served with its own media type", documents.media_type(docs / "p.png") == "image/png")
+
+import base64  # noqa: E402
+
+b64 = base64.b64encode(b"zipbytes").decode()
+a = documents.save_attachment("../../my report (1).zip", b64)
+ck("an attachment is saved under <home>/attachments", a["ok"] and (HOME / "attachments" / a["path"]).read_bytes() == b"zipbytes")
+ck("the saved name drops the path and keeps the extension", a["name"] == "my report _1_.zip" or a["name"].endswith(".zip"))
+ck("an attachment of any type is readable as a file", documents.read(a["path"], "attachments")["kind"] == "file")
+ck("an attachment is not readable as an export", not documents.read(a["path"])["ok"])
+ck("two files of one name do not collide", documents.save_attachment("x.png", b64)["path"] != documents.save_attachment("x.png", b64)["path"])
+ck("an empty file is refused", not documents.save_attachment("e.txt", "")["ok"])
+ck("traversal out of attachments is refused", not documents.read("../exports/documents/a.md", "attachments")["ok"])
+ck("an unknown area falls back to exports", documents.root("zzz") == documents.root("exports"))
+
 print(f"\n{len(FAILS)} failed" if FAILS else "\nall passed")
 raise SystemExit(1 if FAILS else 0)

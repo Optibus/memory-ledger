@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent } from "react";
+import type { ClipboardEvent, DragEvent, KeyboardEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api } from "@/api/client";
 import { useMeta } from "@/api/MetaContext";
@@ -21,6 +21,7 @@ import {
 import { Section } from "@/features/shell/Section";
 import { UsageMeter } from "@/features/shell/UsageMeter";
 import { formatDate, truncate } from "@/lib/format";
+import { splitAttachments } from "@/lib/markdown";
 import { plainText } from "@/lib/richText";
 import type {
   AgentConnector,
@@ -438,7 +439,7 @@ function MessageItem({ m, writable, onRetry, onCancel }: {
         </div>
       ) : (
         <div className="ml-agents__bubble">
-          {m.role === "agent" ? <Markdown text={m.text} /> : <RichText text={m.text} />}
+          {m.role === "agent" ? <Markdown text={m.text} /> : <UserText text={m.text} />}
         </div>
       )}
       <div className="ml-agents__meta">
@@ -516,6 +517,38 @@ function EventLog({ events, running }: { events: AgentEvent[]; running: boolean 
   );
 }
 
+/** What the owner wrote, then the files they attached as cards and thumbnails. */
+function UserText({ text }: { text: string }) {
+  const { body, files } = useMemo(() => splitAttachments(text), [text]);
+  return (
+    <>
+      {body ? <RichText text={body} /> : null}
+      {files.length ? <Markdown text={files.map((f) => `[${f.name}](attach:${f.path})`).join("\n\n")} /> : null}
+    </>
+  );
+}
+
+/** A file saved to the brain and waiting for the owner to send. */
+interface Pending {
+  key: number;
+  name: string;
+  path: string;
+  /** An object URL for an image's thumbnail, freed when the chip goes. */
+  preview: string;
+  state: "saving" | "ready" | "failed";
+}
+
+const ATTACH_MAX = 25 * 1024 * 1024;
+const ATTACH_LIMIT = 10;
+
+const toBase64 = (file: File): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onerror = () => reject(r.error ?? new Error("could not read the file"));
+    r.onload = () => resolve(String(r.result).replace(/^data:[^,]*,/, ""));
+    r.readAsDataURL(file);
+  });
+
 interface ComposerProps {
   conv: AgentConversation | undefined;
   pick: Pick | null;
@@ -541,13 +574,52 @@ function Composer({ conv, pick, connectors, writable, busy, suggestion, error, o
   const cmds = useCommands(true);
   const [at, setAt] = useState(0);
   const [dismissed, setDismissed] = useState(false);
+  const [files, setFiles] = useState<Pending[]>([]);
+  const [dragging, setDragging] = useState(false);
+  const picker = useRef<HTMLInputElement>(null);
+  const keys = useRef(0);
   const query = slashQuery(text);
   const matches = useMemo(() => (query === null ? [] : search(cmds.data?.commands ?? [], query).slice(0, 40)), [cmds.data, query]);
   const popup = query !== null && !dismissed && !!cmds.data;
   const readOnly = !pick?.full_tools;
   const c = pick ? connectorOf(connectors, pick.connector) : undefined;
   const usable = !!c && c.enabled && !!pick?.model;
-  const canSend = writable && usable && !sending && !!text.trim();
+  const ready = files.filter((f) => f.state === "ready");
+  const saving = files.some((f) => f.state === "saving");
+  const canSend = writable && usable && !sending && !saving && (!!text.trim() || ready.length > 0);
+
+  const drop = (f: Pending) => {
+    if (f.preview) URL.revokeObjectURL(f.preview);
+    setFiles((all) => all.filter((x) => x.key !== f.key));
+  };
+
+  /** Each file is saved at once, so it is in the brain's home before the message is sent. */
+  const attach = (list: File[]) => {
+    if (!writable || !list.length) return;
+    const room = ATTACH_LIMIT - files.length;
+    if (list.length > room) onError(`At most ${ATTACH_LIMIT} files go with one message.`);
+    for (const file of list.slice(0, Math.max(room, 0))) {
+      if (file.size > ATTACH_MAX) {
+        onError(`${file.name || "A file"} is over 25 MB.`);
+        continue;
+      }
+      const key = ++keys.current;
+      const name = file.name || `pasted-${key}.${(file.type.split("/")[1] || "bin").replace(/\+.*/, "")}`;
+      const preview = file.type.startsWith("image/") ? URL.createObjectURL(file) : "";
+      setFiles((all) => [...all, { key, name, path: "", preview, state: "saving" }]);
+      toBase64(file)
+        .then((data) => api.attachFile(name, data))
+        .then(
+          (res) => setFiles((all) => all.map((x) => (x.key === key ? { ...x, path: res.path, state: "ready" } : x))),
+          (err) => {
+            onError(err instanceof Error ? err.message : String(err));
+            setFiles((all) => all.map((x) => (x.key === key ? { ...x, state: "failed" } : x)));
+          },
+        );
+    }
+  };
+
+  const hasFiles = (e: DragEvent<HTMLElement>) => Array.from(e.dataTransfer?.types ?? []).includes("Files");
 
   const send = async () => {
     if (!canSend || !pick) return;
@@ -556,6 +628,7 @@ function Composer({ conv, pick, connectors, writable, busy, suggestion, error, o
     try {
       const res = await api.sendAgent({
         text: text.trim(),
+        ...(ready.length ? { attachments: ready.map((f) => f.path) } : {}),
         conversation: conv?.id,
         connector: pick.connector,
         model: pick.model,
@@ -563,6 +636,8 @@ function Composer({ conv, pick, connectors, writable, busy, suggestion, error, o
         context_turns: pick.context_turns,
       });
       setText("");
+      files.forEach((f) => f.preview && URL.revokeObjectURL(f.preview));
+      setFiles([]);
       onSent(res.conversation.id);
       box.current?.focus();
     } catch (err) {
@@ -617,7 +692,25 @@ function Composer({ conv, pick, connectors, writable, busy, suggestion, error, o
         : c?.problem || (c && !pick?.model ? `Pick a model for ${c.name}.` : "");
 
   return (
-    <div className="ml-agents__compose">
+    <div
+      className={`ml-agents__compose${dragging ? " is-dragging" : ""}`}
+      onDragEnter={(e) => {
+        if (writable && hasFiles(e)) setDragging(true);
+      }}
+      onDragOver={(e) => {
+        if (writable && hasFiles(e)) e.preventDefault();
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+      }}
+      onDrop={(e) => {
+        if (!hasFiles(e)) return;
+        e.preventDefault();
+        setDragging(false);
+        attach(Array.from(e.dataTransfer.files));
+      }}
+    >
+      {dragging ? <div className="ml-agents__drop">Drop to attach</div> : null}
       {why ? (
         <p className="ml-agents__hint">
           {why} {writable ? <Link to="/settings">Settings</Link> : null}
@@ -653,7 +746,42 @@ function Composer({ conv, pick, connectors, writable, busy, suggestion, error, o
         <Spinner label="reading connectors" />
       )}
       {cmds.error ? <StatusMessage tone="error">{cmds.error}</StatusMessage> : null}
+      {files.length ? (
+        <ul className="ml-agents__files" aria-label="attached files">
+          {files.map((f) => (
+            <li key={f.key} className={`ml-agents__file is-${f.state}`}>
+              {f.preview ? <img src={f.preview} alt="" /> : <span aria-hidden="true">▤</span>}
+              <span className="ml-agents__file-name" title={f.name}>{f.name}</span>
+              {f.state === "saving" ? <span className="ml-agents__muted">saving…</span> : null}
+              {f.state === "failed" ? <Badge tone="danger">failed</Badge> : null}
+              <button type="button" className="ml-agents__file-x" aria-label={`Remove ${f.name}`} onClick={() => drop(f)}>
+                ×
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
       <div className="ml-agents__compose-row">
+        <input
+          ref={picker}
+          type="file"
+          multiple
+          hidden
+          aria-label="choose files"
+          onChange={(e) => {
+            attach(Array.from(e.target.files ?? []));
+            e.target.value = "";
+          }}
+        />
+        <Button
+          variant="ghost"
+          aria-label="Attach files"
+          title="Attach files (or drop or paste them here)"
+          disabled={!writable}
+          onClick={() => picker.current?.click()}
+        >
+          📎
+        </Button>
         {popup ? <CommandPopup items={matches} active={at} readOnly={readOnly} onPick={choose} onHover={setAt} /> : null}
         <TextArea
           ref={box}
@@ -668,6 +796,12 @@ function Composer({ conv, pick, connectors, writable, busy, suggestion, error, o
             setDismissed(false);
           }}
           onKeyDown={onKey}
+          onPaste={(e: ClipboardEvent<HTMLTextAreaElement>) => {
+            const pasted = Array.from(e.clipboardData?.files ?? []);
+            if (!pasted.length) return;
+            e.preventDefault();
+            attach(pasted);
+          }}
         />
         <Button variant="primary" disabled={!canSend} onClick={() => void send()}>
           {sending ? "sending…" : "Send"}
