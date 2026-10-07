@@ -165,6 +165,9 @@ export const api = {
     get<import("./types").AgentCommands>("/api/agent-commands", undefined, signal),
   agentConversations: (signal?: AbortSignal) =>
     get<import("./types").AgentConversations>("/api/agent-conversations", undefined, signal),
+  /** A document an agent wrote, by its path under <home>/exports. */
+  document: (path: string, signal?: AbortSignal) =>
+    get<import("./types").AgentDocument>("/api/document", { path }, signal),
   agentThread: (id: string, signal?: AbortSignal) =>
     get<import("./types").AgentThread>("/api/agent-thread", { id }, signal),
   b2b: (signal?: AbortSignal) =>
@@ -378,3 +381,6 @@ export const api = {
 };
 
 export type Api = typeof api;
+
+/** The raw bytes of a document, for an iframe. */
+export const documentFileUrl = (path: string) => `${BASE}/api/document-file${queryString({ path })}`;

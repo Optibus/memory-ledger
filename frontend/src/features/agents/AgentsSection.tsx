@@ -9,6 +9,7 @@ import {
   Button,
   Checkbox,
   EmptyState,
+  Markdown,
   Menu,
   RichText,
   SearchInput,
@@ -414,7 +415,7 @@ function MessageItem({ m, writable, onRetry, onCancel }: {
             seg.said ? (
               <div key={i} className={`ml-agents__bubble ml-agents__bubble--said${seg.thought ? " ml-agents__bubble--thinking" : ""}`}>
                 {seg.thought ? <div className="ml-agents__muted">💭 thinking</div> : null}
-                <RichText text={seg.said} />
+                <Markdown text={seg.said} />
               </div>
             ) : (
               <EventLog key={i} events={seg.events} running={running && i === segs.length - 1} />
@@ -437,7 +438,7 @@ function MessageItem({ m, writable, onRetry, onCancel }: {
         </div>
       ) : (
         <div className="ml-agents__bubble">
-          <RichText text={m.text} />
+          {m.role === "agent" ? <Markdown text={m.text} /> : <RichText text={m.text} />}
         </div>
       )}
       <div className="ml-agents__meta">

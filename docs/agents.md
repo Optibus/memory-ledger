@@ -195,3 +195,33 @@ python3 tests/test_agents.py              # fake claude + fake Ollama, no model 
 Storage is two tables in the brain's database, `agent_conv` and `agent_msg`. The
 graph holds the memory (`conversation` and `message` nodes). The tables hold the
 UI's view: status, event log, cost, tokens.
+
+## Markdown and documents in the chat
+
+The agent's replies are read as Markdown: headings, lists, quotes, tables and
+rules, on top of the inline marks (`frontend/src/lib/markdown.ts`, which hands
+every block's text to the safe inline reader of `lib/richText`). Your own
+messages stay plain rich text. Nothing becomes HTML: a reply can only ever be
+text, links and the cards below.
+
+A headless run cannot write an artifact, so it writes a **document** instead.
+The `document-html`, `document-md`, `document-pdf` and `document-txt` skills pipe
+the content into `scripts/make_document.py`, which saves it under
+`<home>/exports/documents/` and prints a line of its own:
+
+    [Q3 report](doc:documents/20261007-1030-q3-report.html)
+
+On a line of its own, that link shows as a card: the name and an **Expand**
+button. Expanded, the file overlays the interface; the cross at the top right,
+Escape, or a click outside closes it. Markdown is rendered, text is shown as is,
+HTML and PDF show in a frame (HTML sandboxed: it can run its own script, but
+cannot reach this server's API).
+
+- `GET /api/document?path=` reads one (name, kind, size, text).
+- `GET /api/document-file?path=` serves the raw file for the frame.
+
+Only files under `<home>/exports`, of a known type (md, txt, html, pdf, plus log,
+csv and json as text) and under 5 MB; anything else, a `..`, an absolute path or
+a symlink out is refused (`scripts/documents.py`). Each skill reads the owner's
+`Document style - <format>` note, so how documents look is customized once and
+remembered, or per request.

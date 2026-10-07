@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse
 import agent_commands
 import agents
 import b2b
+import documents
 import brain_query
 import graph
 import trigger
@@ -448,3 +449,25 @@ def dashboard(
         return brain_query.run_json(view, **opts)
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
+@router.get("/document", tags=["agents"], summary="One document the agents wrote, as text",
+            description="`path` is relative to `<home>/exports` (the target of a `doc:` link "
+                        "in a reply). Markdown, text and HTML come back as `text`; a PDF has "
+                        "none and is fetched from `/api/document-file`. A path outside "
+                        "`exports`, an unknown type or a file over 5 MB is `ok: false`.")
+def document(path: str = Query("", description="Path relative to <home>/exports.")):
+    return documents.read(path)
+
+
+@router.get("/document-file", tags=["agents"], summary="One document, raw",
+            description="The bytes of a document, for an iframe (HTML, PDF). HTML is served "
+                        "with a CSP `sandbox` so it can run its own script but cannot reach "
+                        "this server's API.")
+def document_file(path: str = Query("", description="Path relative to <home>/exports.")):
+    try:
+        target = documents.resolve(path)
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=404)
+    return FileResponse(target, media_type=documents.media_type(target),
+                        headers={"Content-Security-Policy": "sandbox allow-scripts"})
