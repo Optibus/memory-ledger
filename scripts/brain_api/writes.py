@@ -772,11 +772,13 @@ def agent_send(data: m.AgentSend = body(m.AgentSend)):
                          "or context window. Only the keys sent change.")
 def agent_conversation(data: m.AgentConversation = body(m.AgentConversation)):
     changes = {k: getattr(data, k) for k in ("title", "connector", "model", "full_tools",
-                                             "context_turns", "hidden")
+                                             "context_turns", "hidden", "draft", "draft_at")
                if getattr(data, k) is not None}
     for k in ("title", "connector", "model"):
         if k in changes:
             changes[k] = clip(changes[k], 200)
+    if "draft" in changes:
+        changes["draft"] = clip(changes["draft"], agents.TEXT_MAX)
     for k in ("full_tools", "hidden"):
         if k in changes:
             changes[k] = changes[k] is True

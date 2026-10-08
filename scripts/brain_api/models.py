@@ -401,6 +401,8 @@ class AgentConversation(Body):
     full_tools: Any = Field(None, description="Tools on, or read-only.")
     context_turns: Any = Field(None, description="Earlier exchanges each turn carries, 0 to 10.")
     hidden: Any = Field(None, description="Hidden from the active list.")
+    draft: Any = Field(None, description="The unsent message in the composer.")
+    draft_at: Any = Field(None, description="When the draft was edited (ISO); an older one than the stored draft is ignored.")
 
 
 class AgentRetry(Body):

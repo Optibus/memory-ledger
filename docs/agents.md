@@ -240,3 +240,17 @@ tools opens it (an image is read as an image). In the chat an image attachment
 shows as a thumbnail that opens in the viewer; any other file is a card with
 Expand (text, Markdown, PDF) or Download. An agent can show an image the same
 way with `[name](doc:path.png)` for a file under `exports/`, or `attach:`.
+
+## The draft
+
+What is typed in the composer is kept per conversation. Every keystroke goes to
+`localStorage` (`ml.agent-draft.<conversationId>`) with a timestamp; about 800 ms
+later the same text and timestamp go to the brain (`draft`, `draft_at` on
+`/api/agent-conversation`). The newest edit wins both ways: a newer brain draft
+replaces the local one, a newer local one is pushed up, and the server ignores a
+write older than what it holds. Sending clears the draft in both places. A new
+conversation that does not exist yet keeps only a local draft.
+
+Texts from subagents show as bubbles like the agent's own; only their thinking
+stays folded in the tool log. The last text is dropped only when it equals the
+final reply exactly.

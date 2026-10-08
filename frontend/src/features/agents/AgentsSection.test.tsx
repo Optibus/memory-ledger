@@ -51,6 +51,30 @@ describe("Agents", () => {
     expect(reply.querySelectorAll("details.ml-agents__log")).toHaveLength(1);
   });
 
+  it("keeps the unsent message per conversation, local first, and syncs it to the brain", async () => {
+    localStorage.clear();
+    const { user } = renderApp(<AgentsSection />, { route: "/agents?c=c1" });
+    const box = await screen.findByRole("textbox", { name: "message to the agent" });
+    await user.type(box, "half a thou");
+    expect(JSON.parse(localStorage.getItem("ml.agent-draft.c1") ?? "{}").text).toBe("half a thou");
+    await waitFor(() => expect(sent("/api/agent-conversation")).toEqual([expect.objectContaining({ id: "c1", draft: "half a thou" })]));
+    expect(localStorage.getItem("ml.agent-draft.c2")).toBeNull();
+  });
+
+  it("takes the brain's draft when it is newer than the local one", async () => {
+    localStorage.setItem("ml.agent-draft.c1", JSON.stringify({ text: "old", at: "2026-10-01T00:00:00Z" }));
+    server.use(
+      http.get("/api/agent-thread", () =>
+        HttpResponse.json({
+          ...agentThreadFixture,
+          conversation: { ...agentThreadFixture.conversation, draft: "from the phone", draft_at: "2026-10-02T00:00:00Z" },
+        }),
+      ),
+    );
+    renderApp(<AgentsSection />, { route: "/agents?c=c1" });
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "message to the agent" })).toHaveValue("from the phone"));
+  });
+
   it("cancels a reply only while it runs", async () => {
     const [mine, reply] = agentThreadFixture.messages;
     server.use(

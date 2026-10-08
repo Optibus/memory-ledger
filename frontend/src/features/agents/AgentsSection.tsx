@@ -408,7 +408,7 @@ function MessageItem({ m, writable, onRetry, onCancel }: {
 }) {
   const side = m.role === "user" ? "out" : "in";
   const running = m.status === "queued" || m.status === "running";
-  const segs = m.role === "agent" ? segments(m.events, !running && !!m.text.trim()) : [];
+  const segs = m.role === "agent" ? segments(m.events, !running && !!m.text.trim(), m.text) : [];
   return (
     <li className={`ml-agents__item ml-agents__item--${side}`} aria-label={m.role === "user" ? "your message" : "agent reply"}>
       {m.role === "agent"
@@ -465,16 +465,15 @@ function MessageItem({ m, writable, onRetry, onCancel }: {
 type Segment = { said: string; thought?: boolean; events: AgentEvent[] };
 
 /**
- * The reply's events in order: what the agent said on its own (a top-level
- * `text` event) or thought (a top-level `thinking` event, labelled) as a message, each run of tool calls between those as one
- * folded log. The last thing said is the reply itself, already shown below,
- * so it is dropped once the reply has landed.
+ * The reply's events in order: what the agent said on its own (a `text` event, a subagent's too) or thought (a top-level `thinking` event, labelled) as a message, each run of tool calls between those as one
+ * folded log. The last thing said, when it is the reply itself, already shown below,
+ * is dropped once the reply has landed.
  */
-function segments(events: AgentEvent[], landed: boolean): Segment[] {
-  const said = (e: AgentEvent) => (e.kind === "text" || e.kind === "thinking") && !e.parent && !!(e.output ?? "").trim();
+function segments(events: AgentEvent[], landed: boolean, reply: string): Segment[] {
+  const said = (e: AgentEvent) => (e.kind === "text" || (e.kind === "thinking" && !e.parent)) && !!(e.output ?? "").trim();
   const isText = (e: AgentEvent) => e.kind === "text";
   let last = -1;
-  if (landed) events.forEach((e, i) => (last = said(e) && isText(e) ? i : last));
+  if (landed) events.forEach((e, i) => (last = said(e) && isText(e) && !e.parent && (e.output ?? "").trim() === reply.trim() ? i : last));
   const out: Segment[] = [];
   events.forEach((e, i) => {
     if (i === last) return;
@@ -562,13 +561,33 @@ interface ComposerProps {
   onSent: (conversationId: string) => void;
 }
 
+const DRAFT_PREFIX = "ml.agent-draft.";
+
+function readDraft(key: string): { text: string; at: string } {
+  try {
+    const v = JSON.parse(localStorage.getItem(DRAFT_PREFIX + key) ?? "null");
+    return { text: typeof v?.text === "string" ? v.text : "", at: typeof v?.at === "string" ? v.at : "" };
+  } catch {
+    return { text: "", at: "" };
+  }
+}
+
+function writeDraft(key: string, text: string, at: string) {
+  try {
+    localStorage.setItem(DRAFT_PREFIX + key, JSON.stringify({ text, at }));
+  } catch {
+    /* storage full or blocked: the server copy still holds it */
+  }
+}
+
 const TURN_OPTIONS = Array.from({ length: 11 }, (_, n) => ({
   value: String(n),
   label: n === 0 ? "no history" : `last ${n} exchange${n > 1 ? "s" : ""}`,
 }));
 
 function Composer({ conv, pick, connectors, writable, busy, suggestion, error, onError, onPick, onSent }: ComposerProps) {
-  const [text, setText] = useState("");
+  const draftKey = conv?.id ?? "";
+  const [text, setText] = useState(() => readDraft(draftKey).text);
   const [sending, setSending] = useState(false);
   const box = useRef<HTMLTextAreaElement>(null);
   const cmds = useCommands(true);
@@ -587,6 +606,34 @@ function Composer({ conv, pick, connectors, writable, busy, suggestion, error, o
   const ready = files.filter((f) => f.state === "ready");
   const saving = files.some((f) => f.state === "saving");
   const canSend = writable && usable && !sending && !saving && (!!text.trim() || ready.length > 0);
+
+  // Drafts are local first: every edit lands in localStorage at once and goes to
+  // the brain a moment later; when the two differ, the one edited last wins.
+  const pushed = useRef<ReturnType<typeof setTimeout>>();
+  const shown = useRef({ key: draftKey, text });
+  shown.current = { key: draftKey, text };
+  const edit = (next: string) => {
+    setText(next);
+    const at = new Date().toISOString();
+    writeDraft(draftKey, next, at);
+    clearTimeout(pushed.current);
+    if (conv && writable) {
+      pushed.current = setTimeout(() => void api.saveAgentConversation({ id: conv.id, draft: next, draft_at: at }).catch(() => {}), 800);
+    }
+  };
+  useEffect(() => () => clearTimeout(pushed.current), [draftKey]);
+  useEffect(() => {
+    const local = readDraft(draftKey);
+    if (shown.current.key === draftKey && conv && conv.draft_at > local.at && conv.draft !== local.text) {
+      writeDraft(draftKey, conv.draft, conv.draft_at);
+      setText(conv.draft);
+    } else if (conv && local.at > conv.draft_at && local.text !== conv.draft && writable) {
+      void api.saveAgentConversation({ id: conv.id, draft: local.text, draft_at: local.at }).catch(() => {});
+    }
+  }, [draftKey, conv?.draft, conv?.draft_at, writable]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (shown.current.text !== readDraft(draftKey).text) setText(readDraft(draftKey).text);
+  }, [draftKey]);
 
   const drop = (f: Pending) => {
     if (f.preview) URL.revokeObjectURL(f.preview);
@@ -635,6 +682,9 @@ function Composer({ conv, pick, connectors, writable, busy, suggestion, error, o
         full_tools: pick.full_tools,
         context_turns: pick.context_turns,
       });
+      if (conv) void api.saveAgentConversation({ id: conv.id, draft: "", draft_at: new Date().toISOString() }).catch(() => {});
+      clearTimeout(pushed.current);
+      writeDraft(draftKey, "", new Date().toISOString());
       setText("");
       files.forEach((f) => f.preview && URL.revokeObjectURL(f.preview));
       setFiles([]);
@@ -649,7 +699,7 @@ function Composer({ conv, pick, connectors, writable, busy, suggestion, error, o
 
   const choose = (cmd: { name: string; writes: boolean }) => {
     if (readOnly && cmd.writes) return;
-    setText(`/${cmd.name} `);
+    edit(`/${cmd.name} `);
     setDismissed(true);
     box.current?.focus();
   };
@@ -657,7 +707,7 @@ function Composer({ conv, pick, connectors, writable, busy, suggestion, error, o
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Tab" && !e.shiftKey && !text && suggestion && !e.nativeEvent.isComposing) {
       e.preventDefault();
-      setText(suggestion);
+      edit(suggestion);
       return;
     }
     if (popup) {
@@ -791,7 +841,7 @@ function Composer({ conv, pick, connectors, writable, busy, suggestion, error, o
           placeholder={busy ? "The agent is still answering. You can queue another message." : suggestion ? `${suggestion}  (Tab to use)` : "Write to the agent. Enter sends, Shift+Enter for a new line, / for a skill."}
           aria-label="message to the agent"
           onChange={(e) => {
-            setText(e.target.value);
+            edit(e.target.value);
             setAt(0);
             setDismissed(false);
           }}

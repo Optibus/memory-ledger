@@ -131,6 +131,8 @@ CREATE TABLE IF NOT EXISTS agent_conv (
     full_tools    INTEGER NOT NULL DEFAULT 0,
     context_turns INTEGER NOT NULL DEFAULT 1,
     hidden        INTEGER NOT NULL DEFAULT 0,
+    draft         TEXT NOT NULL DEFAULT '',    -- the unsent message in the composer
+    draft_at      TEXT NOT NULL DEFAULT '',    -- when the draft was last edited (the newest wins)
     node_id       TEXT NOT NULL DEFAULT ''     -- its `conversation` node in the graph
 );
 CREATE TABLE IF NOT EXISTS agent_msg (
@@ -321,6 +323,10 @@ def db() -> sqlite3.Connection:
                      ("next_action", "TEXT NOT NULL DEFAULT ''")):
         if col not in have:
             con.execute(f"ALTER TABLE agent_msg ADD COLUMN {col} {ddl}")
+    have = {r["name"] for r in con.execute("PRAGMA table_info(agent_conv)")}
+    for col in ("draft", "draft_at"):
+        if col not in have:
+            con.execute(f"ALTER TABLE agent_conv ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
     con.commit()
     return con
 
@@ -429,7 +435,7 @@ def _pick(cfg: dict[str, Any], connector_id: str, model: str) -> tuple[dict | No
 
 def save_conversation(con: sqlite3.Connection, cid: str = "", **changes: Any) -> dict[str, Any]:
     """Create a conversation (no `cid`) or change one: title, connector, model,
-    full_tools, context_turns, hidden."""
+    full_tools, context_turns, hidden, draft (with `draft_at`; an older edit than the stored one is ignored)."""
     cfg = load_config()
     ts = now_iso()
     if not cid:
@@ -462,6 +468,10 @@ def save_conversation(con: sqlite3.Connection, cid: str = "", **changes: Any) ->
         sets["context_turns"] = _turns(changes["context_turns"])
     if "hidden" in changes:
         sets["hidden"] = int(bool(changes["hidden"]))
+    if "draft" in changes:
+        at = str(changes.get("draft_at") or now_iso())[:40]
+        if at >= cur["draft_at"]:
+            sets.update(draft=str(changes["draft"] or "")[:TEXT_MAX], draft_at=at)
     if sets:
         con.execute(f"UPDATE agent_conv SET {', '.join(f'{k}=?' for k in sets)} WHERE id=?",
                     (*sets.values(), cid))

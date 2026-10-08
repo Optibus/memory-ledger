@@ -237,7 +237,7 @@ since the dashboard lists tasks and a kind with none would be dead UI.
 | `/api/trigger-decline` | `{request_id, reason, rule?}` | what the session calls for a request that breaks a rule: marks it `declined`, logs the rule and reason, and returns the policy `notice` (with `{reason}` filled) and the `signature` to post |
 | `/api/agent-send` | `{text, attachments?, conversation?, connector?, model?, full_tools?, context_turns?}` | stores the message (with a link to each attached file) and queues the reply in the background; with no `conversation`, makes one titled from the message. **Starts a model call** |
 | `/api/agent-attach` | `{name, data}` (base64, up to 25 MB) | saves a file the owner attached under `<home>/attachments/` and returns its `path`; no model call |
-| `/api/agent-conversation` | `{id?, title?, connector?, model?, full_tools?, context_turns?, hidden?}` | creates a conversation (no `id`) or changes one; only the keys sent change |
+| `/api/agent-conversation` | `{id?, title?, connector?, model?, full_tools?, context_turns?, hidden?, draft?, draft_at?}` | creates a conversation (no `id`) or changes one; only the keys sent change. A `draft` older than the stored `draft_at` is ignored |
 | `/api/agent-retry` | `{id}` | runs a failed reply again with the conversation's current connector. **Starts a model call** |
 | `/api/agent-cancel` | `{id}` | stops a queued or running reply: it fails at once as cancelled (Retry runs it again). A Claude session is killed; an Ollama chat stops at its next round |
 | `/api/agent-plugin` | `{key, enabled}` | turns an installed plugin on or off in `~/.claude/settings.json` (`enabledPlugins`, which every Claude session reads); answers the new `/api/agent-commands` payload |

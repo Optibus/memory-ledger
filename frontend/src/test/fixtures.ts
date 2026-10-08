@@ -943,7 +943,7 @@ export const agentsFixture: import("@/api/types").AgentsStatus = {
 const conv = (id: string, title: string, extra: Partial<import("@/api/types").AgentConversation> = {}) => ({
   id, title, created_at: "2026-09-30T10:00:00Z", updated_at: "2026-09-30T10:00:00Z",
   connector: "claude", model: "claude-sonnet-5-5", full_tools: false, context_turns: 1,
-  hidden: false, node_id: "", messages: 2, cost_usd: 0.0123, cost_estimated: false,
+  hidden: false, draft: "", draft_at: "", node_id: "", messages: 2, cost_usd: 0.0123, cost_estimated: false,
   tokens_in: 1000, tokens_out: 50, last: null, state: "done" as const, ...extra,
 });
 

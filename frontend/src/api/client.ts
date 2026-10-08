@@ -307,6 +307,8 @@ export const api = {
     full_tools?: boolean;
     context_turns?: number;
     hidden?: boolean;
+    draft?: string;
+    draft_at?: string;
   }) =>
     post<{ ok: boolean; conversation: import("./types").AgentConversation; created: boolean }>(
       "/api/agent-conversation",

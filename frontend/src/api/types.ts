@@ -1323,6 +1323,9 @@ export interface AgentConversation {
   full_tools: boolean;
   context_turns: number;
   hidden: boolean;
+  /** The unsent message in the composer and when it was edited (ISO); the newest of this and the local copy wins. */
+  draft: string;
+  draft_at: string;
   node_id: string;
   state?: AgentConvState;
   last?: { role: "user" | "agent"; text: string; at: string } | null;
