@@ -27,7 +27,7 @@ DEFAULT_MIN_CHARS = 40
 
 # --- structural noise: never typed by the person -------------------------------
 _SYSTEM_TAGS = re.compile(
-    r"^\s*<(?:system-reminder|task-notification|command-name|command-message|"
+    r"^\s*<(?:pasted_content|system-reminder|task-notification|command-name|command-message|"
     r"command-args|local-command-stdout|local-command-stderr|"
     r"user-prompt-submit-hook|bash-input|bash-stdout|bash-stderr)\b", re.I)
 _IMAGE_REF = re.compile(r"\[Image(?:\s*#\d+|:[^\]]*)?\]", re.I)
@@ -158,14 +158,15 @@ def looks_like_raw_prompt(title: str) -> bool:
 
     Real to-dos are short imperative statements. A prompt-shaped title is one
     that was cut off ("…"), opens like a message to the assistant, is a question,
-    carries pasted markup, or is run-on prose."""
+    or carries pasted markup. Length alone is not a signal: real requirements
+    are often long."""
     t = " ".join((title or "").split())
     if not t:
         return False
-    if t.endswith("…") or t.endswith("..."):
+    if "…" in t or t.endswith("..."):    # a cut-off prompt (hook titles are clipped)
         return True
     if _SYSTEM_TAGS.match(t) or _IMAGE_REF.search(t) or is_json_blob(t):
         return True
     if t.endswith("?") or _PROMPTY_START.match(t):
         return True
-    return len(t) > 90
+    return False

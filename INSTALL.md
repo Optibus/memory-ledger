@@ -250,6 +250,8 @@ Once installed, hooks run in **pure Python/SQL — no model call**:
   cannot read it. If you want it to run even on days you never open Claude
   Code, add a launchd agent calling `graph.py consolidate --older-than 1`.
 - **UserPromptSubmit** → `capture_prompt.py` stores each prompt as a `capture` node
+  (routine ones — "ok", slash commands, pasted markup — are filtered first;
+  `capture_filter`: `drop` | `cold` | `off`)
   and auto-creates `task` nodes for explicit to-dos ("remind me…", "todo:", "follow
   up…"), linked back to the turn. It injects nothing unless you opt in to gated
   recall (the Prompt recall switch on the Settings page, or `"prompt_recall": true`

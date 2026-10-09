@@ -43,7 +43,10 @@ cannot index inside it; see [Known limits](performance.md#known-limits).
 
 Three hooks, none of which call a model:
 
-- **`capture_prompt.py`** (`UserPromptSubmit`) stores the prompt as a `capture`
+- **`capture_prompt.py`** (`UserPromptSubmit`) first filters routine prompts
+  (`scripts/noise.py`, regex: acks, slash commands, pasted markup, image-only,
+  short no-verb; counted on the conversation node, or parked in the `cold` realm),
+  then stores the prompt as a `capture`
   node and regex-detects explicit to-dos, creating `task` nodes for them. It
   prints nothing by default. With the opt-in `prompt_recall` setting it runs a
   gated FTS match and injects at most two ≤200-char snippets, each tagged with
