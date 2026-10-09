@@ -7,11 +7,14 @@ export type Segment = { said: string; thought?: boolean; events: AgentEvent[] };
  * folded log. The last thing said, when it is the reply itself, already shown below,
  * is dropped once the reply has landed.
  */
+const MARKERS = /[ \t`]*\[\[(?:next:[\s\S]*?|needs-answer)\]\][ \t`]*/g;
+const bare = (text: string) => text.replace(MARKERS, "").trim();
+
 export function segments(events: AgentEvent[], landed: boolean, reply: string): Segment[] {
   const said = (e: AgentEvent) => (e.kind === "text" || (e.kind === "thinking" && !e.parent)) && !!(e.output ?? "").trim();
   const isText = (e: AgentEvent) => e.kind === "text";
   let last = -1;
-  if (landed) events.forEach((e, i) => (last = said(e) && isText(e) && !e.parent && (e.output ?? "").trim() === reply.trim() ? i : last));
+  if (landed) events.forEach((e, i) => (last = said(e) && isText(e) && !e.parent && bare(e.output ?? "") === reply.trim() ? i : last));
   const out: Segment[] = [];
   events.forEach((e, i) => {
     if (i === last) return;
