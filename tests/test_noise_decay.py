@@ -100,6 +100,10 @@ def test_filter():
        noise.classify("explain how decay works in the engine")[1] == "content")
     ck("min_chars is a knob", noise.classify("the second one", min_chars=5)[0])
     ck("a slash path is not a slash command", noise.classify("/Users/a/b.py why")[0])
+    ck("a slash command naming a ticket is kept",
+       noise.classify("/delegate OS-85380") == (True, "ticket"))
+    ck("a slash command with plain args is still noise",
+       noise.classify("/loop 5m") == (False, "slash-command"))
 
 
 def test_raw_prompt_titles():
@@ -137,6 +141,12 @@ def test_decay_math():
     ck("rank_weight: props.kind beats type",
        decay.rank_weight({"type": "note", "props": {"kind": "decision"}, "created": iso(90)},
                          at=now) > 0.49)
+    ck("rank_weight: an open task does not decay",
+       decay.rank_weight({"type": "task", "status": "open", "props": {}, "created": iso(60)},
+                         at=now) == 1.0)
+    ck("rank_weight: a closed task decays",
+       decay.rank_weight({"type": "task", "status": "done", "props": {}, "created": iso(14)},
+                         at=now) < 0.51)
     ck("rank_weight: unlisted type does not decay",
        decay.rank_weight({"type": "person", "props": {}, "created": iso(900)}, at=now) == 1.0)
 
@@ -217,11 +227,14 @@ def test_decay_command():
          {"role": "assistant", "session_id": "d"})
     seed(con, "cap_new", "capture", "brand new prompt", 1, {"role": "user"})
     seed(con, "t_raw", "task", "Can we push it to them without they need to do anything?",
-         20, status="open")
+         20, {"source": "auto-capture"}, status="open")
     seed(con, "t_trunc", "task", "I want to build this tool https://x.io and then…", 20,
+         {"source": "auto-capture"}, status="open")
+    seed(con, "t_real", "task", "Check Legato renewal deadline with Nitsan", 20, {"source": "auto-capture"},
          status="open")
-    seed(con, "t_real", "task", "Check Legato renewal deadline with Nitsan", 20, status="open")
-    seed(con, "t_young", "task", "Can we ship it?", 3, status="open")
+    seed(con, "t_young", "task", "Can we ship it?", 3, {"source": "auto-capture"}, status="open")
+    # prompt-shaped, but written by a person or a skill, not the capture hook
+    seed(con, "t_human", "task", "Check if CI passes on OS-1?", 20, status="open")
     seed(con, "t_done", "task", "Why is the sky blue?", 30, status="done")
     con.close()
     before = db().execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
@@ -236,7 +249,7 @@ def test_decay_command():
     ck("dry-run wrote nothing", db().execute("SELECT COUNT(*) FROM nodes").fetchone()[0] == before)
     ck("dry-run left tasks open",
        db().execute("SELECT COUNT(*) FROM nodes WHERE status='open' AND type='task'")
-       .fetchone()[0] >= 4)
+       .fetchone()[0] >= 5)
     ck("report carries no private '_' keys", not any(k.startswith("_") for k in r))
 
     r = g("decay", "--apply", "--no-backup")
@@ -261,6 +274,7 @@ def test_decay_command():
     ck("raw-prompt tasks closed as dropped", st["t_raw"] == "dropped" and st["t_trunc"] == "dropped")
     ck("real, young and done tasks untouched",
        st["t_real"] == "open" and st["t_young"] == "open" and st["t_done"] == "done")
+    ck("a task not spun up by the capture hook is never dropped", st["t_human"] == "open")
     ck("nothing was deleted", con.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
        == before + 1)
 

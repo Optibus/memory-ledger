@@ -134,9 +134,13 @@ def classify(text: str, min_chars: int = DEFAULT_MIN_CHARS) -> tuple[bool, str]:
         return False, "json-blob"
     if image_only(t):
         return False, "image-only"
-    if _SLASH_ONLY.match(t):
-        return False, "slash-command"
     sig = signal(t)
+    if _SLASH_ONLY.match(t):
+        # a bare command is noise; one whose arguments name a ticket, URL, path or
+        # config change ("/delegate OS-123") says what the turn was about: keep it
+        args = t.split(None, 1)[1] if " " in t else ""
+        if not (args and signal(args)):
+            return False, "slash-command"
     if sig:
         return True, sig
     if is_bare_ack(t):

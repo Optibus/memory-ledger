@@ -100,8 +100,21 @@ def _age_days(iso: str, at: datetime | None = None) -> float:
     return max(0.0, ((at or datetime.now(timezone.utc)) - then).total_seconds() / 86400.0)
 
 
+_CLOSED = ("done", "cancelled", "dropped", "closed", "answered", "resolved",
+           "merged", "shipped", "deployed", "declined")
+
+
+# Node types that are open loops (graph.LOOP_TYPES): while open they do not decay,
+# an overdue task is exactly what recall must still surface.
+_LOOP_TYPES = ("task", "subtask", "reminder", "pr", "email", "message")
+
+
 def rank_weight(node: dict, table: dict | None = None, at: datetime | None = None) -> float:
-    """The multiplier `recall` applies to this node's score."""
+    """The multiplier `recall` applies to this node's score. An open loop keeps
+    full weight; it starts to decay once closed."""
+    if (node.get("type") in _LOOP_TYPES
+            and (node.get("status") or "").strip().lower() not in _CLOSED):
+        return 1.0
     table = table or half_lives()
     hl = half_life_for(node.get("type") or "", node.get("props"), table)
     if hl is None:
@@ -135,10 +148,6 @@ def digest_body(week: str, caps: list[dict]) -> str:
             f"({len(asked)} prompts). Originals kept and linked.")
     tail = [f"- … and {more} more prompts"] if more > 0 else []
     return head + "\n\n" + "\n".join(lines[:DIGEST_BULLETS] + tail)
-
-
-_CLOSED = ("done", "cancelled", "dropped", "closed", "answered", "resolved",
-           "merged", "shipped", "deployed", "declined")
 
 
 def plan(con, at: datetime | None = None, table: dict | None = None,
@@ -183,7 +192,14 @@ def plan(con, at: datetime | None = None, table: dict | None = None,
             f"AND lower(status) NOT IN ({marks}) ORDER BY created", _CLOSED):
         open_tasks += 1
         age = _age_days(r["created"], at)
-        if age > stale_days and noise.looks_like_raw_prompt(r["title"]):
+        try:
+            src = json.loads(r["props"] or "{}").get("source")
+        except Exception:
+            src = None
+        # only tasks the capture hook spun up from a prompt; a task a person or a
+        # skill wrote ("Check if CI passes on OS-1") is never closed by decay
+        if (src == "auto-capture" and age > stale_days
+                and noise.looks_like_raw_prompt(r["title"])):
             tasks.append({"id": r["id"], "title": r["title"], "age_days": round(age, 1)})
 
     return {"half_lives": table, "capture_age_buckets": hist,
