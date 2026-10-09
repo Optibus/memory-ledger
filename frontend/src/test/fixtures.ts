@@ -996,3 +996,30 @@ export const agentCommandsFixture: import("@/api/types").AgentCommands = {
     { key: "chrome-devtools-mcp@chrome-devtools-plugins", name: "chrome-devtools-mcp", version: "0.21.0", enabled: false, commands: 6 },
   ],
 };
+
+export const voiceFixture: import("@/api/types").VoiceStatus = {
+  ok: true,
+  config: {
+    stt_language: "pt",
+    stt_auto: false,
+    tts_language: "pt",
+    tts_auto: true,
+    translate: false,
+    translate_target: "en",
+    tts_enabled: false,
+    tts_background: false,
+    silence_s: 5,
+    tts_voices: {},
+    verbosity: "default",
+  },
+  stt: { available: true, model: "medium", problem: "" },
+  tts: {
+    available: true,
+    engine: "say",
+    problem: "",
+    voices: [
+      { id: "Luciana", name: "Luciana", language: "pt" },
+      { id: "Samantha", name: "Samantha", language: "en" },
+    ],
+  },
+};

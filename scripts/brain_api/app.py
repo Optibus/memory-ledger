@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 import agents
 
-from . import errors, reads, state, sync_runtime, trigger_runtime, writes
+from . import errors, reads, state, sync_runtime, trigger_runtime, voice_api, writes
 
 TAGS = [
     {"name": "graph", "description": "Nodes, edges, and what connects to what."},
@@ -41,6 +41,8 @@ TAGS = [
                                       "one stateless call per turn, its context recalled "
                                       "from the graph (docs/agents.md). The only routes "
                                       "that start a model call."},
+    {"name": "voice", "description": "Dictation (faster-whisper over a WebSocket) and reading "
+                                      "aloud for the Agents chat (docs/agents.md#voice)."},
     {"name": "b2b", "description": "Brain 2 Brain: this brain's account on the B2B relay, "
                                    "its peers, and the messages sent (docs/b2b.md)."},
 ]
@@ -145,6 +147,8 @@ def create_app(dist: Path, missing_ui: str) -> FastAPI:
                   servers=[{"url": "/", "description": "This server."}])
     errors.install(app)
     app.add_middleware(NoStore)
+    # Before reads: its `/api/{view}` catch-all would swallow /api/voice.
+    app.include_router(voice_api.router)
     app.include_router(reads.router)
     app.include_router(writes.router)
 

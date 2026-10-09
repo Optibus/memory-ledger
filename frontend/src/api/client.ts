@@ -168,6 +168,7 @@ export const api = {
   /** A document an agent wrote, by its path under <home>/exports. */
   document: (path: string, area: "exports" | "attachments" = "exports", signal?: AbortSignal) =>
     get<import("./types").AgentDocument>("/api/document", area === "exports" ? { path } : { path, area }, signal),
+  voice: (signal?: AbortSignal) => get<import("./types").VoiceStatus>("/api/voice", undefined, signal),
   agentThread: (id: string, signal?: AbortSignal) =>
     get<import("./types").AgentThread>("/api/agent-thread", { id }, signal),
   b2b: (signal?: AbortSignal) =>
@@ -307,6 +308,8 @@ export const api = {
     full_tools?: boolean;
     context_turns?: number;
     hidden?: boolean;
+    verbosity?: string;
+    tts?: string;
     draft?: string;
     draft_at?: string;
   }) =>
@@ -314,6 +317,26 @@ export const api = {
       "/api/agent-conversation",
       body,
     ),
+  saveVoice: (body: Partial<import("./types").VoiceConfig>) =>
+    post<import("./types").VoiceStatus>("/api/voice-config", body),
+  /** Translate one block; skipped by the server when it is already in the target. Starts a model call. */
+  translateBlock: (text: string, target: string, signal?: AbortSignal) =>
+    post<import("./types").VoiceTranslation>("/api/voice-translate", { text, target }, signal),
+  /** One block as audio (WAV), or null when nothing is left to say after cleaning it. */
+  speak: async (text: string, language = "", signal?: AbortSignal): Promise<Blob | null> => {
+    const res = await fetch(`${BASE}/api/voice-speak`, {
+      method: "POST",
+      signal,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text, language }),
+    });
+    if (res.status === 204) return null;
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new ApiError(body.error || `could not speak (${res.status})`, res.status);
+    }
+    return res.blob();
+  },
   retryAgent: (id: string) => post<{ ok: boolean; reply_id: string }>("/api/agent-retry", { id }),
   /** Stop a queued or running reply; it fails as cancelled, so Retry runs it again. */
   cancelAgent: (id: string) => post<{ ok: boolean; reply_id: string; was: string }>("/api/agent-cancel", { id }),

@@ -1,10 +1,10 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 import { AgentsSection } from "./AgentsSection";
 import { renderApp } from "@/test/utils";
 import { resetWrites, server, writes } from "@/test/server";
-import { agentThreadFixture } from "@/test/fixtures";
+import { agentThreadFixture, voiceFixture } from "@/test/fixtures";
 import { toText, formatCost } from "./export";
 
 beforeEach(() => {
@@ -250,5 +250,52 @@ describe("agent export", () => {
     await waitFor(() =>
       expect(sent("/api/agent-plugin")).toEqual([{ key: "chrome-devtools-mcp@chrome-devtools-plugins", enabled: true }]),
     );
+  });
+});
+
+describe("Agents voice", () => {
+  it("offers dictation, conversation mode, speech and narration above the composer", async () => {
+    // jsdom has no microphone; a browser that does is what the button needs.
+    Object.defineProperty(navigator, "mediaDevices", { value: { getUserMedia: vi.fn() }, configurable: true });
+    vi.stubGlobal("AudioWorkletNode", class {});
+    renderApp(<AgentsSection />, { route: "/agents?c=c1" });
+    const bar = await screen.findByRole("group", { name: "voice controls" });
+    await waitFor(() => expect(within(bar).getByRole("button", { name: "Dictate" })).toBeEnabled());
+    expect(within(bar).getByRole("checkbox", { name: "Conversation mode" })).toBeEnabled();
+    expect(within(bar).getByRole("checkbox", { name: "Speak" })).not.toBeChecked();
+    expect(within(bar).queryByRole("button", { name: "Stop speaking" })).not.toBeInTheDocument();
+    expect(within(bar).queryByRole("button", { name: "Stop dictation" })).not.toBeInTheDocument();
+  });
+
+  it("saves speech and narration as this chat's own", async () => {
+    const { user } = renderApp(<AgentsSection />, { route: "/agents?c=c1" });
+    const bar = await screen.findByRole("group", { name: "voice controls" });
+    await user.click(within(bar).getByRole("checkbox", { name: "Speak" }));
+    await waitFor(() => expect(sent("/api/agent-conversation")).toContainEqual(expect.objectContaining({ id: "c1", tts: "on" })));
+    await user.selectOptions(within(bar).getByRole("combobox", { name: "narration" }), "verbose");
+    await waitFor(() => expect(sent("/api/agent-conversation")).toContainEqual(expect.objectContaining({ id: "c1", verbosity: "verbose" })));
+  });
+
+  it("says why dictation is not available instead of failing on click", async () => {
+    server.use(
+      http.get("/api/voice", () =>
+        HttpResponse.json({ ...voiceFixture, stt: { available: false, model: "medium", problem: "no Python with faster-whisper found" } }),
+      ),
+    );
+    renderApp(<AgentsSection />, { route: "/agents?c=c1" });
+    const bar = await screen.findByRole("group", { name: "voice controls" });
+    await waitFor(() => expect(within(bar).getByRole("button", { name: "Dictate" })).toBeDisabled());
+    expect(within(bar).getByRole("button", { name: "Dictate" })).toHaveAttribute("title", "no Python with faster-whisper found");
+  });
+
+  it("shows each block translated, with the original a click away, when conversion is on", async () => {
+    server.use(
+      http.get("/api/voice", () => HttpResponse.json({ ...voiceFixture, config: { ...voiceFixture.config, translate: true, translate_target: "it" } })),
+    );
+    renderApp(<AgentsSection />, { route: "/agents?c=c1" });
+    const reply = await screen.findByRole("listitem", { name: "agent reply" });
+    await waitFor(() => expect(within(reply).getByText("[it] Let me look for permits.")).toBeInTheDocument());
+    expect(within(reply).getAllByText("original").length).toBeGreaterThan(0);
+    expect(sent("/api/voice-translate")).toContainEqual({ text: "Let me look for permits.", target: "it" });
   });
 });

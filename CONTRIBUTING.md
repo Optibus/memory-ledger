@@ -157,6 +157,7 @@ python3 tests/test_trigger.py         # the trigger engine, against fake Slack/J
 python3 tests/test_usage_report.py    # the usage report: deterministic, true to its nodes
 python3 tests/test_usage_ingest.py    # session logs -> usage-week nodes (synthetic logs), idempotency, hook, end to end
 python3 tests/test_agents.py         # the Agents tab: turns, context, connectors, against fake claude/Ollama
+python3 tests/test_voice.py          # voice: language, cleaning, the segmenter, narration, the dictation socket (fake transcriber)
 python3 tests/test_learned_rules.py   # the learned-rules detector: off by default, proposes, never applies
 cd frontend && npm test               # the UI: unit + integration
 ```

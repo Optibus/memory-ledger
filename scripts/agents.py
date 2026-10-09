@@ -47,6 +47,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import documents  # noqa: E402
 import graph  # noqa: E402
+import voice  # noqa: E402
 
 CONFIG_NAME = "agents.json"
 KINDS = ("claude", "ollama")
@@ -133,7 +134,9 @@ CREATE TABLE IF NOT EXISTS agent_conv (
     hidden        INTEGER NOT NULL DEFAULT 0,
     draft         TEXT NOT NULL DEFAULT '',    -- the unsent message in the composer
     draft_at      TEXT NOT NULL DEFAULT '',    -- when the draft was last edited (the newest wins)
-    node_id       TEXT NOT NULL DEFAULT ''     -- its `conversation` node in the graph
+    node_id       TEXT NOT NULL DEFAULT '',    -- its `conversation` node in the graph
+    verbosity     TEXT NOT NULL DEFAULT '',    -- voice.VERBOSITIES, or '' to follow the global one
+    tts           TEXT NOT NULL DEFAULT ''     -- 'on' | 'off', or '' to follow the global one
 );
 CREATE TABLE IF NOT EXISTS agent_msg (
     id            TEXT PRIMARY KEY,
@@ -324,7 +327,7 @@ def db() -> sqlite3.Connection:
         if col not in have:
             con.execute(f"ALTER TABLE agent_msg ADD COLUMN {col} {ddl}")
     have = {r["name"] for r in con.execute("PRAGMA table_info(agent_conv)")}
-    for col in ("draft", "draft_at"):
+    for col in ("draft", "draft_at", "verbosity", "tts"):
         if col not in have:
             con.execute(f"ALTER TABLE agent_conv ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
     con.commit()
@@ -392,7 +395,20 @@ def thread(con: sqlite3.Connection, cid: str) -> dict[str, Any] | None:
     c["cost_estimated"] = any(m["cost_estimated"] for m in msgs)
     c["tokens_in"] = sum(m["tokens_in"] for m in msgs)
     c["tokens_out"] = sum(m["tokens_out"] for m in msgs)
+    c["turn_end"] = turn_end(msgs)
     return {"ok": True, "conversation": c, "messages": msgs}
+
+
+def turn_end(msgs: list[dict[str, Any]]) -> dict[str, str] | None:
+    """How the latest turn ended: `{id, status}` with status ok | error | cancelled, or None
+    while it still runs. The voice mode reopens the microphone on it, so it must always
+    settle: a failed or cancelled reply is a turn end too."""
+    last = next((m for m in reversed(msgs) if m["role"] == "agent"), None)
+    if not last or last["status"] in PENDING:
+        return None
+    if last["status"] == "error":
+        return {"id": last["id"], "status": "cancelled" if last["error"] == CANCELLED else "error"}
+    return {"id": last["id"], "status": "ok"}
 
 
 def thread_text(con: sqlite3.Connection, cid: str, limit: int = 0) -> str:
@@ -435,7 +451,7 @@ def _pick(cfg: dict[str, Any], connector_id: str, model: str) -> tuple[dict | No
 
 def save_conversation(con: sqlite3.Connection, cid: str = "", **changes: Any) -> dict[str, Any]:
     """Create a conversation (no `cid`) or change one: title, connector, model,
-    full_tools, context_turns, hidden, draft (with `draft_at`; an older edit than the stored one is ignored)."""
+    full_tools, context_turns, hidden, verbosity, tts, draft (with `draft_at`; an older edit than the stored one is ignored)."""
     cfg = load_config()
     ts = now_iso()
     if not cid:
@@ -468,6 +484,10 @@ def save_conversation(con: sqlite3.Connection, cid: str = "", **changes: Any) ->
         sets["context_turns"] = _turns(changes["context_turns"])
     if "hidden" in changes:
         sets["hidden"] = int(bool(changes["hidden"]))
+    if "verbosity" in changes:
+        sets["verbosity"] = changes["verbosity"] if changes["verbosity"] in voice.VERBOSITIES else ""
+    if "tts" in changes:
+        sets["tts"] = changes["tts"] if changes["tts"] in ("on", "off") else ""
     if "draft" in changes:
         at = str(changes.get("draft_at") or now_iso())[:40]
         if at >= cur["draft_at"]:
@@ -678,7 +698,9 @@ def build_turn(con: sqlite3.Connection, reply: dict[str, Any]) -> dict[str, Any]
                  f"can go on, its last line is exactly {QUESTION_MARK}.)")
     cid = reply.get("connector") or (conv or {}).get("connector") or ""
     kind = (connector(cfg, cid) or {}).get("kind", "claude")
-    return {"system": system_prompt(conv, len(history), kind), "prompt": "\n".join(parts),
+    system = "\n".join(x for x in (system_prompt(conv, len(history), kind),
+                                    voice.reply_language_instruction(question)) if x)
+    return {"system": system, "prompt": "\n".join(parts),
             "context": [r["id"] for r in recalled if r.get("id")], "question": question}
 
 
@@ -736,6 +758,12 @@ def system_prompt(conv: dict[str, Any] | None, carried: int, kind: str = "claude
                      "and look up (files, the web, Jira, Slack, mail, calendar, Drive) but "
                      "change nothing. If the owner asks for such a change, say what you "
                      "would do and that they can turn tools on for this conversation.")
+    cfg = voice.load_config()
+    tts_on = (conv or {}).get("tts") == "on" or (
+        cfg["tts_enabled"] and (conv or {}).get("tts") != "off")
+    narrate = voice.verbosity_instruction((conv or {}).get("verbosity", ""), cfg, tts_on)
+    if narrate:
+        lines.append(narrate)
     return "\n".join(lines)
 
 

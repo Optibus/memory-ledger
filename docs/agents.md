@@ -254,3 +254,60 @@ conversation that does not exist yet keeps only a local draft.
 Texts from subagents show as bubbles like the agent's own; only their thinking
 stays folded in the tool log. The last text is dropped only when it equals the
 final reply exactly.
+
+## Voice
+
+Dictation, reading aloud and a hands-free conversation mode, in the chat and in
+**Settings → Voice** (saved to `<home>/voice.json`). Everything is off until asked:
+the microphone opens only on a click, speech defaults off, narration defaults to
+today's behaviour.
+
+**Dictation.** The 🎤 button opens `WS /api/voice-stt` and streams the microphone as
+PCM16 16 kHz mono (an `AudioWorklet`, `voice/worklet.ts`). The server cuts segments on
+pauses (`voice.Segmenter`: an energy threshold that follows the room's noise floor, so
+silence is never sent to Whisper) and answers `partial` (the open segment, replaced as
+it grows) and `final` (a closed one). The text goes into the box at once. **Stop** keeps
+it; **Cancel** takes back only what that session inserted (`voice/insert.ts` finds it
+again wherever typing moved it). One voice session per user: a second tab is refused.
+A dropped socket is reopened once, then the session ends as a Stop.
+
+Messages: client `start {language: "pt"|"auto"}`, binary frames, `stop`, `cancel`;
+server `ready`, `partial`, `final`, `language_detected`, `stopped`, `error`.
+
+**STT runs outside the server's environment.** `scripts/stt_worker.py` is a child process
+under a Python that has `faster-whisper` (`$BRAIN_VOICE_PYTHON`, else the first
+`python3` that can import it), so the server's venv gains only `websockets`. The model is
+`$BRAIN_STT_MODEL` (default `medium`; `$BRAIN_STT_DEVICE`, `$BRAIN_STT_COMPUTE` for a GPU),
+loaded on the first session and kept. The first load downloads the model: it needs the
+network once. A load failure comes back as an `error` on the socket and in Settings.
+
+**Speech.** `POST /api/voice-speak` cleans the block (markdown, code, URLs, long paths,
+emoji out; nothing left is a 204), picks the language (a stopword vote per block, the
+default when unsure) and the voice, and answers a WAV. The engine is a `TTSEngine`
+(`scripts/voice.py`); the shipped one is macOS `say` + ffmpeg. A Piper or Kokoro engine is
+one more subclass in `ENGINES` (`$BRAIN_TTS_ENGINE`). The browser keeps **one global FIFO
+queue** (`voice/speech.ts`): each block is synthesised the moment it is queued, so the
+next is ready when the current one ends. **Stop speaking** cuts the audio and clears the
+queue and never touches the agent. By default only the open chat speaks; with
+**Read chats that are not on screen** the others join the same queue, announced by name
+when the chat changes, and a short "finished" follows their turn. Opening a chat never reads
+its history: a block is spoken only if it arrived after the chat was first seen.
+
+**Conversation mode.** Listening → after `silence_s` (2 to 15, default 5) without new words
+and with text, the message is sent and the microphone shut → waiting while the agent works
+and the voice reads → listening again only when the turn ended **and** the queue is empty.
+Never an empty message. `turn_end` is derived, not pushed: `conversation.turn_end` on
+`/api/agent-thread` is `{id, status: ok|error|cancelled}` from the latest reply, or null
+while it runs, so an error or a cancel also hands the microphone back. Needs an existing
+conversation (a new chat becomes one on its first send; dictation works before that).
+
+**Narration.** `verbosity` (`default`, `verbose`, `verbose_tts`) is global in `voice.json`
+and overridden per chat (`/api/agent-conversation`). `verbose_tts` narrates only while
+speech is on for that chat. The effective one adds a short instruction to the agent's
+system prompt (`voice.verbosity_instruction`).
+
+**Translation.** With *Translate every block* on, each block is translated into the target
+language before it shows and before it is spoken (`POST /api/voice-translate`: one Claude
+Haiku call per block, names, commands and identifiers kept; skipped when the block is
+already in the target). The original is behind an "original" expander. It is the only voice
+feature that calls a model, so it is off by default.
