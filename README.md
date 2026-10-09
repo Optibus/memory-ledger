@@ -374,7 +374,8 @@ a decision word, a URL, a file path or a config/git change is always kept. Set
 `capture_filter` to `cold` to park the raw prompts in a `cold` realm instead.
 
 Memory also ages by kind: decisions halve every 90 days, tasks and bugfixes every
-14, captures and changes every 7 (`scripts/decay.py`, configurable). `recall`
+14 once closed (an open loop never fades), captures and changes every 7
+(`scripts/decay.py`, configurable). `recall`
 applies it. To tidy up:
 
 ```bash
