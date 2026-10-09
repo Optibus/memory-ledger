@@ -707,6 +707,10 @@ use `--host 0.0.0.0` (behind a tunnel) to reach it from your phone. The dashboar
 **writes** too (see above), and the write API is unauthenticated — add
 `--no-write` for a read-only server when exposing it.
 
+### Voice in the Agents chat
+
+Dictation, reading aloud and conversation mode are opt-in (Settings > Voice, `voice.json`). Reading uses macOS `say` by default; set `BRAIN_TTS_ENGINE=piper` and `BRAIN_PIPER_PYTHON` (a Python with `piper-tts`; voices in `~/.cache/brain-piper`) to use Piper. The agent replies in the language of your message, typed or dictated: `reply_language_instruction` in `scripts/voice.py` detects it from the text and adds "reply in that language" to the system prompt.
+
 ## Install
 
 See **[INSTALL.md](INSTALL.md)** for the full flow. In short:

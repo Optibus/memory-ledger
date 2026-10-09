@@ -8,7 +8,7 @@ server's own environment:
     faster-whisper (`$BRAIN_VOICE_PYTHON`, else the first `python3` that can
     import it). The model loads once, on the first session, and stays loaded.
   * TTS is an engine behind `TTSEngine`. The one shipped is macOS `say`
-    (+ ffmpeg to WAV); a Piper or Kokoro engine is one more subclass.
+    (+ ffmpeg to WAV); `PiperEngine` is the portable one (Windows, Android client).
 
 The settings live in `<home>/voice.json`. The agent's verbosity is one of them
 and is the only one the model ever sees (`verbosity_instruction`).
@@ -418,7 +418,58 @@ class SayEngine(TTSEngine):
             return Path(wav).read_bytes(), "audio/wav"
 
 
-ENGINES: dict[str, type[TTSEngine]] = {"say": SayEngine}
+class PiperEngine(TTSEngine):
+    """Piper (pip `piper-tts`): offline, same voices on macOS, Windows and Linux, writes WAV itself.
+    Voices are `<locale>-<name>-<quality>.onnx` files (+ `.onnx.json`) in `$BRAIN_PIPER_VOICES`
+    (default `~/.cache/brain-piper`); fetch one with
+    `python -m piper.download_voices pt_BR-faber-medium --data-dir <dir>`."""
+    name = "piper"
+    LOCALES = {"pt": "pt_BR", "en": "en_US", "es": "es_ES", "it": "it_IT"}
+
+    def _dir(self) -> Path:
+        return Path(os.environ.get("BRAIN_PIPER_VOICES") or Path.home() / ".cache" / "brain-piper")
+
+    def _python(self) -> str:
+        want = os.environ.get("BRAIN_PIPER_PYTHON", "").strip()
+        for py in dict.fromkeys(c for c in (want, sys.executable) if c):
+            try:
+                if subprocess.run([py, "-c", "import piper"], capture_output=True, timeout=60).returncode == 0:
+                    return py
+            except (OSError, subprocess.SubprocessError):
+                continue
+        return ""
+
+    def problem(self) -> str:
+        if not self._python():
+            return "Piper is not installed: pip install piper-tts (or set BRAIN_PIPER_PYTHON)"
+        if not self.voices():
+            return f"no Piper voice in {self._dir()}: python -m piper.download_voices pt_BR-faber-medium --data-dir {self._dir()}"
+        return ""
+
+    def voices(self) -> list[dict[str, str]]:
+        found = []
+        for f in sorted(self._dir().glob("*.onnx")):
+            for lang, loc in self.LOCALES.items():
+                if f.stem.startswith(loc + "-"):
+                    found.append({"id": f.stem, "name": f.stem, "language": lang})
+        return found
+
+    def synth(self, text: str, language: str, voice: str) -> tuple[bytes, str]:
+        have = [v["id"] for v in self.voices() if v["language"] == language]
+        if voice not in have:
+            if not have:
+                raise RuntimeError(f"no Piper voice for {language} in {self._dir()}")
+            voice = have[0]
+        with tempfile.TemporaryDirectory(prefix="brain-tts-") as d:
+            wav = os.path.join(d, "s.wav")
+            r = subprocess.run([self._python(), "-m", "piper", "-m", str(self._dir() / f"{voice}.onnx"),
+                                "-f", wav], input=text[:4000].encode(), capture_output=True, timeout=120)
+            if r.returncode != 0:
+                raise RuntimeError(r.stderr.decode(errors="replace").strip() or "piper failed")
+            return Path(wav).read_bytes(), "audio/wav"
+
+
+ENGINES: dict[str, type[TTSEngine]] = {"say": SayEngine, "piper": PiperEngine}
 
 
 def engine() -> TTSEngine:
@@ -465,6 +516,15 @@ TRANSLATE_PROMPT = (
     "identifiers, ticket ids, code and technical terms exactly as they are. Keep the markdown. "
     "Answer with the translation only, no tags, no comments.")
 LANG_NAME = {"pt": "Brazilian Portuguese", "en": "English", "es": "Spanish", "it": "Italian"}
+
+
+def reply_language_instruction(text: str) -> str:
+    """What to add to the system prompt so the answer comes in the language the owner
+    spoke or typed: the detected one, nothing when the vote is not clear."""
+    lang, conf = detect_language(text)
+    if lang and conf >= 0.2:
+        return f"The owner's message is in {LANG_NAME.get(lang, lang)}: reply in that language."
+    return ""
 
 
 def translate(text: str, target: str, claude_bin: str = "claude") -> tuple[str, bool]:

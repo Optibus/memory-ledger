@@ -698,7 +698,9 @@ def build_turn(con: sqlite3.Connection, reply: dict[str, Any]) -> dict[str, Any]
                  f"can go on, its last line is exactly {QUESTION_MARK}.)")
     cid = reply.get("connector") or (conv or {}).get("connector") or ""
     kind = (connector(cfg, cid) or {}).get("kind", "claude")
-    return {"system": system_prompt(conv, len(history), kind), "prompt": "\n".join(parts),
+    system = "\n".join(x for x in (system_prompt(conv, len(history), kind),
+                                    voice.reply_language_instruction(question)) if x)
+    return {"system": system, "prompt": "\n".join(parts),
             "context": [r["id"] for r in recalled if r.get("id")], "question": question}
 
 
