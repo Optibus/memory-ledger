@@ -45,10 +45,13 @@ GET_ROUTES = [
     "/api/rule", "/api/rule-proposals", "/api/settings", "/api/timezones", "/api/status", "/api/meta",
     "/api/suggest-links", "/api/search", "/api/trigger", "/api/trigger-request", "/api/trigger-people", "/api/b2b",
     "/api/b2b-conversations", "/api/b2b-thread",
-    "/api/agents", "/api/agent-commands", "/api/agent-conversations", "/api/agent-thread", "/api/document", "/api/document-file",
+    "/api/agents", "/api/voice", "/api/agent-commands", "/api/agent-conversations", "/api/agent-thread", "/api/document", "/api/document-file",
     "/api/scripts", "/api/script", "/api/tasks", "/api/task", "/api/usage-report", "/api/usage-summary",
 ]
+# Open on a --no-write server too: reading aloud changes nothing and calls no model.
+OPEN_POST_ROUTES = ["/api/voice-speak"]
 POST_ROUTES = [
+    "/api/voice-config", "/api/voice-translate",
     "/api/set-due", "/api/add-task", "/api/complete", "/api/set-status",
     "/api/set-assignee", "/api/assign", "/api/merge-person", "/api/add-alias",
     "/api/update-node", "/api/link", "/api/unlink", "/api/propose-idea", "/api/settings",
@@ -247,12 +250,12 @@ def test_docs(s: Server):
     self_describing = {"/api/openapi.json", "/api/docs"}
     missing_get = [p for p in GET_ROUTES
                    if p not in self_describing and "get" not in paths.get(p, {})]
-    missing_post = [p for p in POST_ROUTES if "post" not in paths.get(p, {})]
+    missing_post = [p for p in POST_ROUTES + OPEN_POST_ROUTES if "post" not in paths.get(p, {})]
     ck("every read route is in it", not missing_get, ", ".join(missing_get))
     ck("every write route is in it", not missing_post, ", ".join(missing_post))
     ck("and the dashboard views, as the one templated route",
        "get" in paths.get("/api/{view}", {}), str([p for p in paths if "{" in p]))
-    known = set(GET_ROUTES) | set(POST_ROUTES) | {"/api/{view}"}
+    known = set(GET_ROUTES) | set(POST_ROUTES) | set(OPEN_POST_ROUTES) | {"/api/{view}"}
     extra = sorted(p for p in paths if p not in known)
     ck("and nothing this suite has never heard of", not extra, ", ".join(extra))
 

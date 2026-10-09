@@ -11,3 +11,7 @@ slack_sdk==3.44.1
 # B2B's keys (scripts/b2b_crypto.py): X25519, HKDF and AES-GCM for the brain's identity
 # and the messages it seals and opens.
 cryptography==50.0.2
+# The voice socket (brain_api/voice_api.py): uvicorn serves WebSockets through it.
+# Dictation itself runs in a child process under a Python with faster-whisper
+# (scripts/stt_worker.py), so none of that is installed here.
+websockets==17.2

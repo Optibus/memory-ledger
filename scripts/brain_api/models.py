@@ -401,8 +401,36 @@ class AgentConversation(Body):
     full_tools: Any = Field(None, description="Tools on, or read-only.")
     context_turns: Any = Field(None, description="Earlier exchanges each turn carries, 0 to 10.")
     hidden: Any = Field(None, description="Hidden from the active list.")
+    verbosity: Any = Field(None, description="`default`, `verbose` or `verbose_tts`; empty follows the global setting.")
+    tts: Any = Field(None, description="`on` or `off` for this chat's speech; empty follows the global setting.")
     draft: Any = Field(None, description="The unsent message in the composer.")
     draft_at: Any = Field(None, description="When the draft was edited (ISO); an older one than the stored draft is ignored.")
+
+
+class VoiceConfig(Body):
+    """A patch of the voice settings; only the keys sent change."""
+    stt_language: Any = Field(None, description="Spoken language expected: pt, en, es or it.")
+    stt_auto: Any = Field(None, description="Let Whisper detect the language each session.")
+    tts_language: Any = Field(None, description="Default language of the voice.")
+    tts_auto: Any = Field(None, description="Detect each block's language to pick the voice.")
+    translate: Any = Field(None, description="Translate every block into `translate_target`.")
+    translate_target: Any = Field(None, description="The language blocks are translated into.")
+    tts_enabled: Any = Field(None, description="Speak the agent's blocks.")
+    tts_background: Any = Field(None, description="Also speak chats that are not on screen.")
+    silence_s: Any = Field(None, description="Seconds of silence that send the message in conversation mode, 2 to 15.")
+    tts_voices: Any = Field(None, description="Voice per language, e.g. {\"pt\": \"Luciana\"}.")
+    verbosity: Any = Field(None, description="`default`, `verbose` or `verbose_tts`.")
+
+
+class VoiceSpeak(Body):
+    text: Text = T("The block to read aloud; markdown is cleaned first.")
+    language: Text = T("pt, en, es or it; empty detects it from the text.")
+    voice: Text = T("A voice id from `/api/voice`; empty picks the configured one.")
+
+
+class VoiceTranslate(Body):
+    text: Text = T("The block to translate.")
+    target: Text = T("pt, en, es or it; empty uses the configured target.")
 
 
 class AgentRetry(Body):

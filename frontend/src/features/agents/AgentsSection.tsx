@@ -21,6 +21,13 @@ import {
 import { Section } from "@/features/shell/Section";
 import { UsageMeter } from "@/features/shell/UsageMeter";
 import { formatDate, truncate } from "@/lib/format";
+import { segments } from "./segments";
+import { useSpeakBlocks } from "./voice/useSpeakBlocks";
+import type { TurnEnd } from "./voice/useSpeakBlocks";
+import { useVoiceSession } from "./voice/useVoiceSession";
+import { VoiceBar } from "./voice/VoiceBar";
+import { speech } from "./voice/speech";
+import { useTranslated } from "./voice/translate";
 import { splitAttachments } from "@/lib/markdown";
 import { plainText } from "@/lib/richText";
 import type {
@@ -29,6 +36,9 @@ import type {
   AgentConversation,
   AgentEvent,
   AgentMessage,
+  VoiceConfig,
+  VoiceStatus,
+  VoiceVerbosity,
 } from "@/api/types";
 import { exportConversation, formatCost } from "./export";
 import type { ExportFormat } from "./export";
@@ -57,6 +67,7 @@ export function AgentsSection() {
   const [showHidden, setShowHidden] = useState(false);
 
   const status = usePolling((signal) => api.agents(signal), { intervalMs: 60_000 });
+  const voice = usePolling((signal) => api.voice(signal), { intervalMs: 60_000 });
   const [anyPending, setAnyPending] = useState(false);
   const convs = usePolling((signal) => api.agentConversations(signal), {
     intervalMs: anyPending ? 2_500 : 15_000,
@@ -74,6 +85,16 @@ export function AgentsSection() {
 
   const open = (id: string) => setParams(id ? { c: id } : {});
   const current = all.find((c) => c.id === selected);
+
+  // Chats that are not on screen keep being read when asked to: a chat that is working
+  // and speaks is watched until its turn ends, even after the list stops calling it pending.
+  const vcfg = voice.data?.config ?? null;
+  const [watch, setWatch] = useState<string[]>([]);
+  useEffect(() => {
+    if (!vcfg?.tts_background) return setWatch([]);
+    const wanted = all.filter((c) => c.state === "pending" && c.id !== selected && speaksIn(c, vcfg)).map((c) => c.id);
+    setWatch((w) => (wanted.every((id) => w.includes(id)) ? w : [...new Set([...w, ...wanted])]));
+  }, [all, selected, vcfg]);
 
   return (
     <Section title="Agents" fill bare>
@@ -111,9 +132,18 @@ export function AgentsSection() {
         </aside>
 
         <section className="ml-agents__main" aria-label="agent conversation">
+          {vcfg?.tts_background
+            ? watch
+                .filter((id) => id !== selected)
+                .map((id) => {
+                  const c = all.find((x) => x.id === id);
+                  return c ? <BackgroundVoice key={id} conv={c} cfg={vcfg} onDone={() => setWatch((w) => w.filter((x) => x !== id))} /> : null;
+                })
+            : null}
           <Thread
             key={selected || "new"}
             id={selected}
+            voice={voice.data}
             summary={current}
             connectors={status.data?.connectors ?? null}
             defaults={status.data?.config ?? null}
@@ -128,6 +158,36 @@ export function AgentsSection() {
       </div>
     </Section>
   );
+}
+
+/** Speech is on for a chat: its own choice, else the global one. */
+function speaksIn(c: Pick2, cfg: VoiceConfig): boolean {
+  return c?.tts === "on" || (cfg.tts_enabled && c?.tts !== "off");
+}
+type Pick2 = { tts?: "on" | "off" | "" } | undefined;
+
+const DONE: Record<string, string> = { pt: "concluiu", en: "finished", es: "terminó", it: "ha finito" };
+
+/**
+ * Reads a chat that is not on screen: polls its thread while it works and queues its
+ * blocks, then says that it finished. Rendered only when "Speak background chats" is on.
+ */
+function BackgroundVoice({ conv, cfg, onDone }: { conv: AgentConversation; cfg: VoiceConfig; onDone: () => void }) {
+  const thread = usePolling((signal) => api.agentThread(conv.id, signal), { intervalMs: 2_000, key: conv.id });
+  useSpeakBlocks({
+    id: conv.id,
+    title: conv.title,
+    messages: thread.data?.messages ?? null,
+    turnEnd: thread.data?.conversation.turn_end,
+    enabled: speaksIn(conv, cfg),
+    translateTo: cfg.translate ? cfg.translate_target : null,
+    onSettled: (end) => {
+      const lang = cfg.translate ? cfg.translate_target : cfg.tts_language;
+      speech.enqueue({ chat: conv.id, chatTitle: conv.title, text: `${DONE[lang] ?? DONE.en}${end.status === "ok" ? "" : ` (${end.status})`}` });
+      onDone();
+    },
+  });
+  return null;
 }
 
 function ConvList({
@@ -195,6 +255,7 @@ export function StateIcon({ state }: { state: AgentConvState }) {
 
 interface ThreadProps {
   id: string;
+  voice: VoiceStatus | null;
   summary: AgentConversation | undefined;
   connectors: AgentConnector[] | null;
   defaults: { default_connector: string; context_turns: number } | null;
@@ -210,7 +271,7 @@ interface Pick {
   context_turns: number;
 }
 
-function Thread({ id, summary, connectors, defaults, writable, onCreated, onChanged }: ThreadProps) {
+function Thread({ id, voice, summary, connectors, defaults, writable, onCreated, onChanged }: ThreadProps) {
   const [fast, setFast] = useState(false);
   const thread = usePolling((signal) => api.agentThread(id, signal), {
     // Fast while a reply runs, so its log and its cost move as it works.
@@ -228,6 +289,17 @@ function Thread({ id, summary, connectors, defaults, writable, onCreated, onChan
     if (wasLive.current && !live) onChanged();
     wasLive.current = live;
   }, [live, onChanged]);
+
+  const vcfg = voice?.config ?? null;
+  const ttsOn = !!vcfg && speaksIn(conv, vcfg);
+  const settled = useSpeakBlocks({
+    id,
+    title: conv?.title ?? "",
+    messages,
+    turnEnd: thread.data?.conversation.turn_end,
+    enabled: ttsOn,
+    translateTo: vcfg?.translate ? vcfg.translate_target : null,
+  });
 
   const [draft, setDraft] = useState<Pick | null>(null);
   const pick: Pick | null = conv
@@ -250,6 +322,19 @@ function Thread({ id, summary, connectors, defaults, writable, onCreated, onChan
     setError(null);
     try {
       await api.saveAgentConversation({ id: conv.id, ...next, ...(next.connector ? { model: merged.model } : {}) });
+      thread.refresh();
+      onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  /** Voice settings of this chat (speech, narration): saved as its own, beside the model picks. */
+  const change2 = async (patch: { tts?: string; verbosity?: string }) => {
+    if (!conv) return;
+    setError(null);
+    try {
+      await api.saveAgentConversation({ id: conv.id, ...patch });
       thread.refresh();
       onChanged();
     } catch (err) {
@@ -360,6 +445,7 @@ function Thread({ id, summary, connectors, defaults, writable, onCreated, onChan
           <MessageItem
             key={m.id}
             m={m}
+            translateTo={vcfg?.translate ? vcfg.translate_target : null}
             writable={writable}
             onRetry={() => void api.retryAgent(m.id).then(() => { thread.refresh(); onChanged(); }, (e: Error) => setError(e.message))}
             onCancel={() => void api.cancelAgent(m.id).then(() => { thread.refresh(); onChanged(); }, (e: Error) => setError(e.message))}
@@ -369,6 +455,11 @@ function Thread({ id, summary, connectors, defaults, writable, onCreated, onChan
 
       <Composer
         conv={conv}
+        voice={voice}
+        settled={settled}
+        ttsOn={ttsOn}
+        onTts={(on) => void change2({ tts: on ? "on" : "off" })}
+        onVerbosity={(v) => void change2({ verbosity: v })}
         pick={pick}
         connectors={connectors}
         writable={writable}
@@ -399,8 +490,26 @@ function initialPick(connectors: AgentConnector[], defaults: { default_connector
   return { connector: c?.id ?? "", model: c?.default_model ?? "", full_tools: false, context_turns: defaults.context_turns };
 }
 
-function MessageItem({ m, writable, onRetry, onCancel }: {
+/** An agent's text, shown in the target language when translation is on, with the original a click away. */
+function Said({ text, target }: { text: string; target: string | null }) {
+  const { shown, original } = useTranslated(text, target);
+  return (
+    <>
+      <Markdown text={shown} />
+      {original ? (
+        <details className="ml-agents__original">
+          <summary>original</summary>
+          <Markdown text={original} />
+        </details>
+      ) : null}
+    </>
+  );
+}
+
+function MessageItem({ m, writable, translateTo, onRetry, onCancel }: {
   m: AgentMessage;
+  /** Show the agent's text translated into this language, or as written when null. */
+  translateTo: string | null;
   writable: boolean;
   onRetry: () => void;
   /** Stop the reply while it is queued or running; it fails as cancelled. */
@@ -416,7 +525,7 @@ function MessageItem({ m, writable, onRetry, onCancel }: {
             seg.said ? (
               <div key={i} className={`ml-agents__bubble ml-agents__bubble--said${seg.thought ? " ml-agents__bubble--thinking" : ""}`}>
                 {seg.thought ? <div className="ml-agents__muted">💭 thinking</div> : null}
-                <Markdown text={seg.said} />
+                <Said text={seg.said} target={translateTo} />
               </div>
             ) : (
               <EventLog key={i} events={seg.events} running={running && i === segs.length - 1} />
@@ -439,7 +548,7 @@ function MessageItem({ m, writable, onRetry, onCancel }: {
         </div>
       ) : (
         <div className="ml-agents__bubble">
-          {m.role === "agent" ? <Markdown text={m.text} /> : <UserText text={m.text} />}
+          {m.role === "agent" ? <Said text={m.text} target={translateTo} /> : <UserText text={m.text} />}
         </div>
       )}
       <div className="ml-agents__meta">
@@ -460,28 +569,6 @@ function MessageItem({ m, writable, onRetry, onCancel }: {
       </div>
     </li>
   );
-}
-
-type Segment = { said: string; thought?: boolean; events: AgentEvent[] };
-
-/**
- * The reply's events in order: what the agent said on its own (a `text` event, a subagent's too) or thought (a top-level `thinking` event, labelled) as a message, each run of tool calls between those as one
- * folded log. The last thing said, when it is the reply itself, already shown below,
- * is dropped once the reply has landed.
- */
-function segments(events: AgentEvent[], landed: boolean, reply: string): Segment[] {
-  const said = (e: AgentEvent) => (e.kind === "text" || (e.kind === "thinking" && !e.parent)) && !!(e.output ?? "").trim();
-  const isText = (e: AgentEvent) => e.kind === "text";
-  let last = -1;
-  if (landed) events.forEach((e, i) => (last = said(e) && isText(e) && !e.parent && (e.output ?? "").trim() === reply.trim() ? i : last));
-  const out: Segment[] = [];
-  events.forEach((e, i) => {
-    if (i === last) return;
-    if (said(e)) out.push({ said: e.output ?? "", thought: !isText(e), events: [] });
-    else if (out.length && !out[out.length - 1]!.said) out[out.length - 1]!.events.push(e);
-    else out.push({ said: "", events: [e] });
-  });
-  return out;
 }
 
 const KIND_ICON: Record<string, string> = { tool: "🔧", skill: "🧩", agent: "🤖", mcp: "🔌", thinking: "💭", text: "💬", note: "ℹ" };
@@ -550,6 +637,12 @@ const toBase64 = (file: File): Promise<string> =>
 
 interface ComposerProps {
   conv: AgentConversation | undefined;
+  voice: VoiceStatus | null;
+  /** The latest turn end, once every block before it has been queued for speech. */
+  settled: TurnEnd | null;
+  ttsOn: boolean;
+  onTts: (on: boolean) => void;
+  onVerbosity: (v: VoiceVerbosity | "") => void;
   pick: Pick | null;
   connectors: AgentConnector[] | null;
   writable: boolean;
@@ -585,7 +678,7 @@ const TURN_OPTIONS = Array.from({ length: 11 }, (_, n) => ({
   label: n === 0 ? "no history" : `last ${n} exchange${n > 1 ? "s" : ""}`,
 }));
 
-function Composer({ conv, pick, connectors, writable, busy, suggestion, error, onError, onPick, onSent }: ComposerProps) {
+function Composer({ conv, voice, settled, ttsOn, onTts, onVerbosity, pick, connectors, writable, busy, suggestion, error, onError, onPick, onSent }: ComposerProps) {
   const draftKey = conv?.id ?? "";
   const [text, setText] = useState(() => readDraft(draftKey).text);
   const [sending, setSending] = useState(false);
@@ -612,7 +705,10 @@ function Composer({ conv, pick, connectors, writable, busy, suggestion, error, o
   const pushed = useRef<ReturnType<typeof setTimeout>>();
   const shown = useRef({ key: draftKey, text });
   shown.current = { key: draftKey, text };
+  const textRef = useRef(text);
+  textRef.current = text;
   const edit = (next: string) => {
+    textRef.current = next;
     setText(next);
     const at = new Date().toISOString();
     writeDraft(draftKey, next, at);
@@ -668,13 +764,15 @@ function Composer({ conv, pick, connectors, writable, busy, suggestion, error, o
 
   const hasFiles = (e: DragEvent<HTMLElement>) => Array.from(e.dataTransfer?.types ?? []).includes("Files");
 
-  const send = async () => {
-    if (!canSend || !pick) return;
+  const send = async (): Promise<string> => {
+    // From the ref, not the render: a voice session sends right after its last words landed.
+    const body = textRef.current.trim();
+    if (!(writable && usable && !sending && !saving && (!!body || ready.length > 0)) || !pick) return "";
     setSending(true);
     onError(null);
     try {
       const res = await api.sendAgent({
-        text: text.trim(),
+        text: body,
         ...(ready.length ? { attachments: ready.map((f) => f.path) } : {}),
         conversation: conv?.id,
         connector: pick.connector,
@@ -685,17 +783,30 @@ function Composer({ conv, pick, connectors, writable, busy, suggestion, error, o
       if (conv) void api.saveAgentConversation({ id: conv.id, draft: "", draft_at: new Date().toISOString() }).catch(() => {});
       clearTimeout(pushed.current);
       writeDraft(draftKey, "", new Date().toISOString());
+      textRef.current = "";
       setText("");
       files.forEach((f) => f.preview && URL.revokeObjectURL(f.preview));
       setFiles([]);
       onSent(res.conversation.id);
       box.current?.focus();
+      return res.reply_id;
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err));
+      return "";
     } finally {
       setSending(false);
     }
   };
+
+  const session = useVoiceSession({
+    config: voice?.config ?? null,
+    getText: () => textRef.current,
+    update: (fn) => edit(fn(textRef.current)),
+    send,
+    settled,
+    onError,
+    focus: () => box.current?.focus(),
+  });
 
   const choose = (cmd: { name: string; writes: boolean }) => {
     if (readOnly && cmd.writes) return;
@@ -796,6 +907,7 @@ function Composer({ conv, pick, connectors, writable, busy, suggestion, error, o
         <Spinner label="reading connectors" />
       )}
       {cmds.error ? <StatusMessage tone="error">{cmds.error}</StatusMessage> : null}
+      <VoiceBar session={session} status={voice} conv={conv} ttsOn={ttsOn} writable={writable} onTts={onTts} onVerbosity={onVerbosity} />
       {files.length ? (
         <ul className="ml-agents__files" aria-label="attached files">
           {files.map((f) => (

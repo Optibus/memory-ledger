@@ -181,3 +181,11 @@
   background: transparent; border: 0; color: var(--muted); font-size: 16px; line-height: 1; cursor: pointer; padding: 0 4px;
 }
 .ml-agents__file-x:hover { color: var(--fg); }
+
+/* ---- voice */
+.ml-agents__voice { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; }
+.ml-agents__voice .ml-input--select { width: auto; max-width: 230px; }
+.ml-agents__voice-state { margin-left: auto; font-size: 11.5px; color: var(--accent); min-height: 1em; }
+.ml-agents__voice-err { color: var(--danger); }
+.ml-agents__original { margin-top: var(--space-2); font-size: 11.5px; color: var(--muted); }
+.ml-agents__original summary { cursor: pointer; }

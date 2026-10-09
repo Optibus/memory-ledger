@@ -1327,6 +1327,11 @@ export interface AgentConversation {
   draft: string;
   draft_at: string;
   node_id: string;
+  /** Voice: "" follows the global setting. */
+  verbosity?: VoiceVerbosity | "";
+  tts?: "on" | "off" | "";
+  /** How the latest turn ended, or null while it runs (thread only). */
+  turn_end?: { id: string; status: "ok" | "error" | "cancelled" } | null;
   state?: AgentConvState;
   last?: { role: "user" | "agent"; text: string; at: string } | null;
   messages?: number;
@@ -1410,4 +1415,39 @@ export interface AgentDocument extends Envelope {
   size: number;
   /** Markdown, text and HTML only; a PDF is shown from /api/document-file. */
   text: string | null;
+}
+
+export type VoiceLang = "pt" | "en" | "es" | "it";
+export type VoiceVerbosity = "default" | "verbose" | "verbose_tts";
+
+/** `<home>/voice.json`: the voice settings (GET/POST /api/voice, /api/voice-config). */
+export interface VoiceConfig {
+  stt_language: VoiceLang;
+  stt_auto: boolean;
+  tts_language: VoiceLang;
+  tts_auto: boolean;
+  translate: boolean;
+  translate_target: VoiceLang;
+  tts_enabled: boolean;
+  tts_background: boolean;
+  silence_s: number;
+  tts_voices: Partial<Record<VoiceLang, string>>;
+  verbosity: VoiceVerbosity;
+}
+
+export interface VoiceStatus extends Envelope {
+  config: VoiceConfig;
+  stt: { available: boolean; model: string; problem: string };
+  tts: {
+    available: boolean;
+    engine: string;
+    problem: string;
+    voices: { id: string; name: string; language: VoiceLang }[];
+  };
+}
+
+export interface VoiceTranslation extends Envelope {
+  text: string;
+  translated: boolean;
+  language: VoiceLang;
 }

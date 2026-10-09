@@ -14,6 +14,7 @@ import binascii
 import json
 import re
 import secrets
+import subprocess
 from urllib.parse import quote
 
 from fastapi import APIRouter, Body as BodyParam, Depends
@@ -25,6 +26,7 @@ import b2b
 import documents
 import graph
 import trigger
+import voice
 
 from . import commands, models as m, payloads, state, trigger_runtime
 from .errors import Refused
@@ -772,9 +774,9 @@ def agent_send(data: m.AgentSend = body(m.AgentSend)):
                          "or context window. Only the keys sent change.")
 def agent_conversation(data: m.AgentConversation = body(m.AgentConversation)):
     changes = {k: getattr(data, k) for k in ("title", "connector", "model", "full_tools",
-                                             "context_turns", "hidden", "draft", "draft_at")
+                                             "context_turns", "hidden", "verbosity", "tts", "draft", "draft_at")
                if getattr(data, k) is not None}
-    for k in ("title", "connector", "model"):
+    for k in ("title", "connector", "model", "verbosity", "tts"):
         if k in changes:
             changes[k] = clip(changes[k], 200)
     if "draft" in changes:
@@ -813,6 +815,28 @@ def agent_config(data: m.AgentConfig = body(m.AgentConfig)):
     if res.get("ok"):
         res = agents.status_payload()
     return reply(res)
+
+
+@router.post("/voice-config", tags=["voice"], summary="Change the voice settings",
+             description="Only the keys sent change. Answers the same payload as `GET /api/voice`.")
+def voice_config(data: m.VoiceConfig = body(m.VoiceConfig)):
+    voice.save_config({k: v for k, v in data.model_dump().items() if v is not None})
+    return reply(voice.status())
+
+
+@router.post("/voice-translate", tags=["voice"], summary="Translate a block",
+             description="Into the given or the configured target language, keeping names, "
+                         "commands and identifiers. Skipped when the block is already in it. "
+                         "**Starts a model call.**")
+def voice_translate(data: m.VoiceTranslate = body(m.VoiceTranslate)):
+    target = data.target if data.target in voice.LANGS else voice.load_config()["translate_target"]
+    c = agents.connector(agents.load_config(), "claude") or {}
+    try:
+        text, done = voice.translate(clip(data.text, agents.TEXT_MAX), target,
+                                     str(c.get("bin") or "claude"))
+    except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+        return reply({"ok": False, "error": f"could not translate: {e}"})
+    return reply({"ok": True, "text": text, "translated": done, "language": target})
 
 
 # ------------------------------------------- authoring skills and rules
