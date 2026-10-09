@@ -50,6 +50,20 @@ So: effectively free, **not literally zero**.
 Say "no model call" when you mean it. Re-measure with the recipe in
 [`docs/performance.md`](docs/performance.md).
 
+**Capture noise filter.** `UserPromptSubmit` runs every prompt through
+`scripts/noise.py` BEFORE any write — regex only, no model. Dropped: bare acks
+("continue", "ok", "yes", "go"), a slash command with no real arguments, a pasted
+`<system-reminder>` / task-notification / JSON blob, an image-only paste
+(`[Image #n]`), and a prompt under `capture_min_chars` (default 40) with no verb.
+Always kept: an error string, a decision word (decided / always / never / from now
+on), a URL, a file path, a config/git change, a ticket key, and any prompt
+`detect_tasks` would turn into a to-do. Nothing is lost silently: the count per
+session is on the conversation node (`props.noise_dropped`, per rule in
+`props.noise_reasons`). `capture_filter` setting (or
+`MEMORY_LEDGER_CAPTURE_FILTER`): `drop` (default), `cold` (store the raw prompt in
+the `cold` realm, counted as `props.noise_cold`) or `off` (the old behaviour).
+
+
 - **Recall first.** Before answering, `match-skills` / `search` the graph (or the
   free `brain_query.py` views) so you build on prior context instead of starting
   cold.
@@ -188,6 +202,7 @@ Commands:
 | `park [--body TEXT] [--title T] [--about ID] [--area A]` | **Move context OUT of the window** (§2j): stores the blob (stdin or `--body`) and returns a tiny receipt, so the model can drop the content. |
 | `unpark --id ID [--offset N] [--chars N]` | Read parked context back, whole or sliced. |
 | `resume [--budget CHARS] [--days N] [--limit N]` | **Rehydrate after `/clear`** (§2j) — the thread that was in play, what's parked, what's open, inside a budget. No model call. |
+| `decay [--apply] [--stale-days N] [--no-backup]` | Per-type decay tiers (§2h, `scripts/decay.py`). **Dry-run unless `--apply`.** Reports captures past the capture half-life (7 d), the open tasks the capture hook created (`props.source=auto-capture`) older than N days (default 14) whose title is really a pasted prompt, and how many stored prompts today's noise filter would refuse. `--apply` folds expired captures into one `note` per ISO week (`note_week_<YYYY-Www>`, compressed bullets; originals kept, linked `part-of`, stamped `expired_at`/`expired_into`) and closes the flagged tasks as `dropped` (archived, hidden from `list`). Backs up first; never deletes; idempotent. |
 | `maintain [--keep-days N]` | Brain-side upkeep: consolidate old captures into per-day digests, repair reversed digest links, report the read reduction. Non-destructive, idempotent, schedulable. |
 | `genome [--refresh] [--out DIR]` | The brain's own rebuild blueprint (§2i). `--refresh` re-derives the API surface + DB schema from the code; `--out` writes the full kit for an AI with no plugin. |
 | `due [--within-days N]` | Tasks/reminders due within N days (flags `overdue`). |
@@ -691,6 +706,17 @@ nodes they return. Strength decays with disuse on a ~21-day half-life, so a note
 used weekly outranks one written once and never reopened. Nothing is ever deleted;
 a faded memory just stops winning the ranking. A node accessed 3× reads 0.56 fresh,
 0.28 after three untouched weeks, 0.00 after six months.
+
+**Decay tiers.** Strength (above) is per-node use; the *tier* is per-kind age.
+`scripts/decay.py` gives each kind a half-life — decision 90 d, discovery 60 d,
+bugfix/task 14 d, change/capture 7 d, by `props.kind` first then node type; kinds
+not listed (person, project, skill…) do not decay, and an open loop (task, pr,
+reminder…) keeps full weight until it is closed. Override with the
+`decay_half_lives` setting (JSON, e.g. `{"capture": 5}`). `recall` multiplies a
+node's score by `0.5^(age/half-life)`, floored at 0.2, so a 60-day-old decision
+still beats a 60-day-old bugfix. `graph.py decay` (dry-run by default) is the
+housekeeping side: weekly digest notes for expired captures and a list of stale
+raw-prompt tasks. Decay changes rank and what is surfaced, never existence.
 
 **Spreading activation.** `recall` seeds on FTS, then spreads across edges to
 `--depth` (default 2), summing convergent paths so independent evidence adds up.

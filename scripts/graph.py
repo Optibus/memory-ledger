@@ -40,6 +40,7 @@ from _switch import (  # noqa: E402,F401
     flag, flag_source, BOOL_SETTINGS,
     settings as _switch_settings,
 )
+import decay as _decay  # noqa: E402  (per-type half-lives; pure, imports no engine)
 
 
 # Default section (realm) for new nodes; override with $SECOND_BRAIN_REALM or
@@ -139,7 +140,7 @@ TREE_HUBS = {
 }
 
 # statuses that count as "archived" — kept forever, hidden from active views
-DONE_STATUSES = ("done", "cancelled")
+DONE_STATUSES = ("done", "cancelled", "dropped")
 
 
 def now() -> str:
@@ -4890,6 +4891,7 @@ def api_recall(con, q: str, *, limit=8, depth=None, budget=None, include_all=Fal
         f" AS n FROM nodes WHERE id IN ({ph})", ids).fetchall()}
 
     import math
+    _decay_table = _decay_half_lives()
     scored = []
     for nid, a in act.items():
         d = nodes.get(nid)
@@ -4903,6 +4905,7 @@ def api_recall(con, q: str, *, limit=8, depth=None, budget=None, include_all=Fal
             continue
         s = _strength(d["props"])
         score = a * (0.55 + 0.45 * s)
+        score *= _decay.rank_weight(d, _decay_table)   # per-type half-life (decay.py)
         # A node linked to everything (the owner's own person node, a hub channel)
         # is structurally uninformative — it answers every query and distinguishes
         # none. Penalise ubiquity, but only when the node was merely ASSOCIATED;
@@ -5343,6 +5346,36 @@ def capture_days(con, day: str = "", older_than=None) -> list:
         " ORDER BY d", params).fetchall()]
 
 
+def _decay_half_lives(overrides=None) -> dict:
+    """Half-lives by kind/type: defaults < `decay_half_lives` setting (JSON, env
+    or settings.json) < overrides."""
+    raw = setting("decay_half_lives", "") or settings().get("decay_half_lives")
+    return _decay.half_lives(overrides, raw)
+
+
+def cmd_decay(args):
+    """Per-type decay tiers (decay.py): expire captures past their half-life into
+    one weekly digest note, and list — with --apply, close as `dropped` — open
+    tasks older than 14 d whose title is really a pasted prompt. DRY-RUN by
+    default; nothing is ever deleted."""
+    con = connect()
+    p = _decay.plan(con, table=_decay_half_lives(), stale_days=args.stale_days)
+    res = {k: v for k, v in p.items() if not k.startswith("_")}
+    if not args.apply:
+        out({"ok": True, "dry_run": True, "destructive": False, **res,
+             "hint": "re-run with --apply to write; list is capped, "
+                     "see `stale_tasks.flagged` for the full count",
+             "note": "nothing was written"})
+        return
+    backup = None
+    if not args.no_backup:
+        backup = backup_db("decay")
+        prune_backups()
+    done = _decay.apply(con, p, sys.modules[__name__])
+    out({"ok": True, "dry_run": False, "destructive": False, "backup": backup,
+         **res, "applied": done})
+
+
 def cmd_consolidate(args):
     """Sleep-style consolidation: episodic captures -> one semantic digest per
     day, linked back to the originals. NON-DESTRUCTIVE — every capture is kept;
@@ -5416,7 +5449,7 @@ def cmd_consolidate(args):
 # ---------------------------------------------------------------------------
 # A node is an OPEN LOOP until its state says otherwise. State persists (stays
 # the same) until explicitly changed via set-state / update-node.
-CLOSED_STATES = {"done", "cancelled", "closed", "answered", "resolved",
+CLOSED_STATES = {"done", "cancelled", "dropped", "closed", "answered", "resolved",
                  "merged", "shipped", "deployed", "declined"}
 LOOP_TYPES = {"task", "subtask", "reminder", "pr", "email", "message"}
 
@@ -6946,6 +6979,19 @@ def build_parser():
     a.add_argument("--no-wire", dest="wire", action="store_false",
                    help="do not create Hebbian co-activation edges")
     a.set_defaults(wire=True)
+
+    a = sub.add_parser("decay", description=(
+        "Per-type decay tiers: expire old captures into weekly digest notes, flag "
+        "stale open tasks that are really raw prompts. Dry-run unless --apply. "
+        "Never deletes."))
+    a.set_defaults(func=cmd_decay)
+    a.add_argument("--apply", action="store_true",
+                   help="write: weekly digests, expire captures, close stale raw-prompt "
+                        "tasks as `dropped` (default: report only)")
+    a.add_argument("--stale-days", type=float, default=14.0, dest="stale_days",
+                   help="an open task older than this and prompt-shaped is flagged (default 14)")
+    a.add_argument("--no-backup", action="store_true", dest="no_backup",
+                   help="skip the pre-apply snapshot")
 
     a = sub.add_parser("consolidate"); a.set_defaults(func=cmd_consolidate)
     a.add_argument("--day", help="YYYY-MM-DD (default: every day with captures)")

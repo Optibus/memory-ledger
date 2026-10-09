@@ -41,6 +41,7 @@ sys.path.insert(0, str(HERE.parent / "scripts"))
 os.environ.setdefault("SECOND_BRAIN_NO_AUTOSYNC", "1")
 
 import graph  # noqa: E402  (the engine — single source of truth for the DB)
+import noise  # noqa: E402  (the deterministic noise heuristics — pure regex)
 from _switch import hook_context  # noqa: E402,F401  (the one output shape hooks print)
 
 GRAPH_PY = str(HERE.parent / "scripts" / "graph.py")
@@ -164,6 +165,59 @@ def is_capturable(text: str) -> bool:
     if t.startswith("/"):          # a Claude Code slash command, not content
         return False
     return True
+
+
+# --- the capture noise filter (CONVENTIONS §0) -----------------------------
+# `capture_filter` setting: "drop" (default) skips routine prompts, "cold" keeps
+# them in the `cold` realm instead, "off" captures everything as before.
+# `capture_min_chars` is the length under which a prompt with no verb is noise.
+NOISE_SETTING = "capture_filter"
+NOISE_MIN_SETTING = "capture_min_chars"
+COLD_REALM = "cold"
+
+
+def noise_mode() -> str:
+    try:
+        mode = graph.setting(NOISE_SETTING, "drop").strip().lower()
+    except Exception:
+        return "drop"
+    return mode if mode in ("drop", "cold", "off") else "drop"
+
+
+def noise_min_chars() -> int:
+    try:
+        return max(0, int(graph.setting(NOISE_MIN_SETTING, str(noise.DEFAULT_MIN_CHARS))))
+    except Exception:
+        return noise.DEFAULT_MIN_CHARS
+
+
+def filter_prompt(text: str) -> tuple[bool, str]:
+    """(keep, reason) for a raw prompt. Runs before any write and never calls a
+    model. A prompt that carries an explicit to-do cue is always kept, so the
+    filter can never swallow something `detect_tasks` would have turned into a
+    task."""
+    if noise_mode() == "off":
+        return is_capturable(text), "filter-off"
+    keep, reason = noise.classify(text, noise_min_chars())
+    if not keep and reason in ("ack", "short-no-verb", "slash-command") and detect_tasks(text):
+        return True, "task-cue"
+    return keep, reason
+
+
+def record_noise(con, session_id: str, cwd: str, reason: str, cold: bool) -> None:
+    """Count a filtered prompt on the session's conversation node, so nothing is
+    silently lost: `props.noise_dropped` (or `noise_cold` when kept in the cold
+    realm) plus `props.noise_reasons` per rule."""
+    conv = conversation_for(con, session_id, cwd)
+    if not conv:
+        return
+    row = con.execute("SELECT props FROM nodes WHERE id=?", (conv,)).fetchone()
+    props = json.loads((row["props"] if row else "") or "{}")
+    key = "noise_cold" if cold else "noise_dropped"
+    reasons = dict(props.get("noise_reasons") or {})
+    reasons[reason] = int(reasons.get(reason) or 0) + 1
+    graph.api_update_node(con, conv, props_patch={
+        key: int(props.get(key) or 0) + 1, "noise_reasons": reasons})
 
 
 _TASK_CUES = re.compile(

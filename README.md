@@ -364,6 +364,27 @@ person to what they connect to, and puts the duplicate groups at the top with th
 merge one click away. Same matching, same merge, no model call — the CLI is no
 longer the only place identity gets tidied.
 
+## Less noise, tiered decay
+
+Not every prompt deserves a node. The `UserPromptSubmit` hook runs a regex filter
+(`scripts/noise.py`, no model) before it writes: bare "continue"/"ok", slash
+commands, pasted system-reminders and JSON, image-only pastes and short no-verb
+fragments are dropped — and counted on the session's conversation node. An error,
+a decision word, a URL, a file path or a config/git change is always kept. Set
+`capture_filter` to `cold` to park the raw prompts in a `cold` realm instead.
+
+Memory also ages by kind: decisions halve every 90 days, tasks and bugfixes every
+14 once closed (an open loop never fades), captures and changes every 7
+(`scripts/decay.py`, configurable). `recall`
+applies it. To tidy up:
+
+```bash
+python3 scripts/graph.py decay            # dry-run: what would expire, which tasks look like raw prompts
+python3 scripts/graph.py decay --apply    # weekly digest notes; stale raw-prompt tasks -> dropped
+```
+
+Nothing is deleted. See CONVENTIONS §0 and §2h.
+
 ## Recall behaves like memory
 
 `recall` is the retrieval path — prefer it over `search`. It seeds on full-text,
