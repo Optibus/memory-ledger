@@ -20,6 +20,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Body as BodyParam, Depends
 from fastapi.responses import JSONResponse
 
+import _platform
 import agent_commands
 import agents
 import b2b
@@ -397,10 +398,7 @@ def save_neo4j(data: m.Neo4jConfig = body(m.Neo4jConfig)):
         return reply({"ok": False, "error": "password required"})
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
-    try:
-        f.chmod(0o600)      # it holds a password
-    except OSError:
-        pass
+    _platform.owner_only(f)     # it holds a password: mode 600, or an owner-only ACL on Windows
     ok, err = graph._neo4j_call([{"statement": "RETURN 1"}])
     return reply({"ok": True, "saved": True, "reachable": ok, "error": err,
                   **payloads.status_payload()})

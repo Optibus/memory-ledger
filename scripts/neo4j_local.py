@@ -49,6 +49,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _platform  # noqa: E402
 import graph  # noqa: E402  (same-dir engine import, as the other scripts do)
 
 DEFAULT_NAME = "second-brain-neo4j"
@@ -65,10 +66,13 @@ WAIT_SECONDS = 180
 # docker plumbing
 # ---------------------------------------------------------------------------
 def _docker_bin() -> str | None:
-    """Docker Desktop on macOS is not always on a non-login shell's PATH."""
+    """Docker Desktop is not always on a non-login shell's PATH (macOS), nor on
+    a fresh terminal's right after install (Windows)."""
+    pf = os.environ.get("ProgramFiles") or r"C:\Program Files"
     return shutil.which("docker") or next(
-        (p for p in ("/usr/local/bin/docker", "/opt/homebrew/bin/docker",
-                     "/Applications/Docker.app/Contents/Resources/bin/docker")
+        (p for p in ("/usr/local/bin/docker", "/opt/homebrew/bin/docker", "/usr/bin/docker",
+                     "/Applications/Docker.app/Contents/Resources/bin/docker",
+                     os.path.join(pf, "Docker", "Docker", "resources", "bin", "docker.exe"))
          if Path(p).exists()), None)
 
 
@@ -182,18 +186,12 @@ def _write_config(url: str, password: str, db="neo4j", user="neo4j") -> dict:
             stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             backup = f.with_name(f"neo4j.json.bak-{stamp}")
             backup.write_text(f.read_text(encoding="utf-8"), encoding="utf-8")
-            try:
-                backup.chmod(0o600)
-            except OSError:
-                pass
+            _platform.owner_only(backup)
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(json.dumps({"url": url, "db": db, "user": user,
                              "password": password}, indent=2) + "\n",
                  encoding="utf-8")
-    try:
-        f.chmod(0o600)          # it holds a password
-    except OSError:
-        pass
+    _platform.owner_only(f)     # it holds a password: mode 600, or an owner-only ACL on Windows
     return {"file": str(f), "backup": str(backup) if backup else None}
 
 

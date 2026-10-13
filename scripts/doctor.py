@@ -36,6 +36,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _platform  # noqa: E402
 import graph as G  # noqa: E402  (path must be set up first)
 
 
@@ -74,10 +75,10 @@ def check_paths():
     # machine predates the rename and was adopted; two real directories mean
     # two separate brains, and only a human can say which one is the brain.
     link = None
-    if home.is_symlink():
+    if _platform.is_link(home):
         try:
             link = os.readlink(str(home))
-        except OSError:
+        except (OSError, ValueError):
             link = "?"
     strays = [str(x) for x in G.legacy_homes()]
     return {"ok": db_exists, "home": str(home), "home_exists": home_exists,

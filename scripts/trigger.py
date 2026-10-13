@@ -3835,7 +3835,7 @@ def save_config(patch: dict) -> dict:
     fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(json.dumps(raw, indent=2, ensure_ascii=False, sort_keys=True) + "\n")
-    os.chmod(tmp, 0o600)
+    _platform.owner_only(tmp)   # mode 600, or an owner-only ACL on Windows
     os.replace(tmp, p)
     return {"ok": True, "config": config_summary(load_config())}
 

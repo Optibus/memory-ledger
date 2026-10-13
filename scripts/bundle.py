@@ -51,6 +51,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "scripts"))
+import _platform  # noqa: E402
 PLUGIN_JSON = REPO / ".claude-plugin" / "plugin.json"
 
 # Docs a person reads first, in the order they need them. Named so a missing one
@@ -362,7 +363,7 @@ def _build(args, files, info, ver, extras, attached, tmp: Path) -> int:
         z.writestr(f"{root}/INSTALL-FROM-ZIP.md", install)
         z.writestr(f"{root}/BUNDLE.txt", manifest(files, info, ver, extras, brain))
     if args.with_brain:
-        target.chmod(0o600)            # personal data: owner-only, like neo4j.json
+        _platform.owner_only(target)   # personal data: owner-only, like neo4j.json
 
     size = target.stat().st_size / 1024
     print(f"{target}  ({size:.0f} KiB, "

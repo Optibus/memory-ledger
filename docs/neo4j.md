@@ -353,7 +353,9 @@ actual argument for neo4j.
 - The brain is personal data: meetings, decisions, colleagues, tickets. If it goes
   on a shared host, that is a different privacy posture than a local file, and it
   deserves a deliberate decision rather than a default.
-- Keep `neo4j.json` at `chmod 600`. It holds a password in plaintext.
+- Keep `neo4j.json` at `chmod 600`. It holds a password in plaintext. On Windows
+  the brain writes it with an owner-only ACL instead (`icacls /inheritance:r
+  /grant:r <you>:F`), since the mode bits do nothing there.
 - Do not commit it — it lives in `~/.second_brain/`, outside the repo, and the
   repo ignores the brain home for exactly this reason.
 - `neo4j_local.py` binds to `127.0.0.1` by default and generates the password

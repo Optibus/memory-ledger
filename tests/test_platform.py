@@ -96,5 +96,19 @@ _platform.kill_tree(tree)
 ck("and is safe on a process that already exited", tree.poll() is not None)
 ck("our own group is never the one killed", _platform.pid_alive(os.getpid()))
 
+print("secrets and links")
+secret = HOME / "secret.json"
+secret.write_text("{}", encoding="utf-8")
+ck("a secret file is made owner-only", _platform.owner_only(secret))
+if not _platform.WINDOWS:
+    ck("which on POSIX is mode 600", (secret.stat().st_mode & 0o777) == 0o600, oct(secret.stat().st_mode))
+(HOME / "legacy").mkdir()
+how = _platform.link_dir(HOME / "canonical", HOME / "legacy")
+(HOME / "legacy" / "x").write_text("1", encoding="utf-8")
+ck("a directory link reaches its target", (HOME / "canonical" / "x").read_text(encoding="utf-8") == "1")
+ck("and is a link, symlink or junction", _platform.is_link(HOME / "canonical") and how in ("symlink", "junction"))
+ck("a relative symlink when the two are siblings",
+   how != "symlink" or os.readlink(HOME / "canonical") == "legacy")
+
 print(f"\n{len(FAILS)} failed" if FAILS else "\nall passed")
 raise SystemExit(1 if FAILS else 0)

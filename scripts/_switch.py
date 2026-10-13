@@ -25,6 +25,8 @@ import json
 import os
 from pathlib import Path
 
+import _platform  # scripts/ is on the path of whoever imported this
+
 
 def _env(name: str, default: str = "") -> str:
     """Config env lookup: MEMORY_LEDGER_<name>, else the legacy
@@ -148,8 +150,11 @@ def adopt_canonical_home() -> dict:
                 # account, a remounted volume, a $HOME that differs between a
                 # login shell and a launchd agent. An absolute link would break
                 # in exactly the cases a symlink is supposed to survive.
-                canonical.symlink_to(legacy.name, target_is_directory=True)
-                return {"action": "linked", "path": str(canonical), "legacy": str(legacy)}
+                # On Windows, where a symlink needs developer mode or admin,
+                # a junction (absolute, but needing no privilege) stands in.
+                how = _platform.link_dir(canonical, legacy)
+                return {"action": "linked", "path": str(canonical), "legacy": str(legacy),
+                        "how": how}
         canonical.mkdir(parents=True, exist_ok=True)
         return {"action": "created", "path": str(canonical)}
     except Exception as e:                # never block a session over this

@@ -110,7 +110,8 @@ token travels in a header.
 
 ## The brain's side
 
-Configuration is `<home>/b2b.json`, written mode 600. The private key is
+Configuration is `<home>/b2b.json`, written mode 600 (on Windows, which ignores the
+mode, with an ACL that grants only the current user, through `icacls`). The private key is
 write-only everywhere, like the trigger tokens:
 `MEMORY_LEDGER_B2B_PRIVATE_KEY` outranks the file. The command line needs
 `cryptography`; run from a plain `python3` it re-runs itself under the server's

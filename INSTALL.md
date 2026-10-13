@@ -244,7 +244,8 @@ already have exported breaks.
 
 **The home directory is now `~/.memory-ledger`, and your data still isn't
 moving.** On a machine that predates the rename, the first session creates
-`~/.memory-ledger` as a *symlink* to the existing `~/.second_brain`. Nothing is
+`~/.memory-ledger` as a *symlink* to the existing `~/.second_brain` (on Windows,
+where a symlink needs developer mode or admin, a *junction*). Nothing is
 copied, nothing is renamed, and every absolute path you have already baked into a
 cron job, a backup or a `$SECOND_BRAIN_DB` keeps resolving. Both names work, and
 so do `$MEMORY_LEDGER_HOME` and `$SECOND_BRAIN_HOME`.

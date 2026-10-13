@@ -52,6 +52,58 @@ def powershell() -> str | None:
     return shutil.which("pwsh") or shutil.which("powershell")
 
 
+def owner_only(path: Path) -> bool:
+    """Make a file holding a secret readable by its owner alone. POSIX: mode
+    600. Windows ignores the mode bits, so there the inherited ACL is replaced
+    by one that grants the current user full control and no one else
+    anything (icacls). False when it could not be done."""
+    path = Path(path)
+    if not WINDOWS:
+        try:
+            path.chmod(0o600)
+            return True
+        except OSError:
+            return False
+    user = os.environ.get("USERNAME", "").strip()
+    if not user:
+        return False
+    try:
+        r = subprocess.run(["icacls", str(path), "/inheritance:r", "/grant:r", f"{user}:F"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           stdin=subprocess.DEVNULL, timeout=30)
+        return r.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def link_dir(link: Path, target: Path) -> str:
+    """Make `link` reach the directory `target`: a relative symlink, else on
+    Windows (no symlinks without developer mode or admin) a junction, which
+    needs no privilege. Returns "symlink" or "junction"; raises OSError when
+    neither can be made."""
+    link, target = Path(link), Path(target)
+    try:
+        link.symlink_to(target.name if target.parent == link.parent else target,
+                        target_is_directory=True)
+        return "symlink"
+    except OSError:
+        if not WINDOWS:
+            raise
+    r = subprocess.run([os.environ.get("COMSPEC") or "cmd.exe", "/d", "/c", "mklink", "/J",
+                        str(link), str(target.resolve())],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+                       timeout=30)
+    if r.returncode != 0:
+        raise OSError(f"mklink /J failed: {r.stderr.decode('utf-8', errors='replace').strip()}")
+    return "junction"
+
+
+def is_link(path: Path) -> bool:
+    """A symlink, or on Windows a junction."""
+    path = Path(path)
+    return path.is_symlink() or bool(getattr(path, "is_junction", lambda: False)())
+
+
 def cache_dir() -> Path:
     """Where rebuildable things go: $XDG_CACHE_HOME, else %LOCALAPPDATA% on
     Windows, else ~/.cache."""
