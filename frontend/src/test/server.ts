@@ -12,6 +12,8 @@ import {
   b2bThreadFixture,
   backupsFixture,
   captureFixture,
+  customTriggerDetailFixture,
+  customTriggersFixture,
   consolidationPreviewFixture,
   doctorFixture,
   graphFixture,
@@ -190,6 +192,25 @@ export const handlers = [
   write("/api/b2b-identity", () => ok({ user_id: b2bFixture.config.user_id, note: "Key pair made." })),
   write("/api/b2b-peer", () => ok({ peers: b2bFixture.peers })),
   write("/api/b2b-allowed", () => ok({ allowed: b2bFixture.allowed })),
+  http.get("/api/custom-triggers", () => HttpResponse.json(customTriggersFixture)),
+  http.get("/api/custom-trigger", () => HttpResponse.json(customTriggerDetailFixture)),
+  write("/api/custom-trigger", (body: { id?: string; check_only?: boolean; text?: string }) =>
+    body.check_only
+      ? ok({ id: body.id, valid: !(body.text ?? "").includes("interval: 1s"),
+             errors: (body.text ?? "").includes("interval: 1s") ? ["interval must be at least 30s"] : [],
+             warnings: [] })
+      : ok({ id: body.id, saved: true, created: body.id !== "site-health", errors: [], warnings: [] }),
+  ),
+  write("/api/custom-trigger-dry-run", (body: { id?: string }) =>
+    ok({
+      id: body.id, dry_run: true, status: "ok", error: "",
+      events: [{ event_id: "site-health:503", text: "site down: 503", meta: { payload: { status: 503 } } }],
+      checkpoint: { now: "", would_be: null },
+    }),
+  ),
+  write("/api/custom-trigger-enable", (body: { id?: string; enabled?: boolean }) =>
+    ok({ id: body.id, enabled: body.enabled }),
+  ),
   write("/api/trigger-reprocess", (body: { request_id?: string }) =>
     ok({ request_id: body.request_id, status: "queued", was: "failed" }),
   ),

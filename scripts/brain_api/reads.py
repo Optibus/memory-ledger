@@ -19,6 +19,7 @@ import agents
 import b2b
 import documents
 import brain_query
+import custom_trigger
 import graph
 import trigger
 import usage_ingest
@@ -280,6 +281,28 @@ def agent_thread(id: str = Query("", description="The conversation id.")):
     if not id:
         return {"ok": False, "error": "missing id"}
     return agents.thread(agents.db(), id) or {"ok": False, "error": f"no conversation {id}"}
+
+
+@router.get("/custom-triggers", tags=["trigger"],
+            summary="Custom triggers: every file in <home>/triggers, with its last run",
+            description="Whether custom triggers run here (`active`: the master switch and "
+                        "`custom.enabled`), and one row per trigger. A starting template "
+                        "for a new one is in `template`.")
+def custom_triggers():
+    cfg = trigger.load_config()
+    con = custom_trigger.db()
+    return {"ok": True, "dir": str(custom_trigger.triggers_dir()),
+            "active": trigger.source_enabled(cfg, "custom"),
+            "secrets": sorted(custom_trigger.secret_values(cfg)),
+            "triggers": [custom_trigger.summary(t, con) for t in custom_trigger.list_ids()],
+            "template": custom_trigger.template()}
+
+
+@router.get("/custom-trigger", tags=["trigger"],
+            summary="One custom trigger: its file, verdict, state, checkpoint and runs")
+def custom_trigger_detail(id: str = Query("", description="The trigger's id."),
+                          limit: int = Query(20, ge=1, le=200)):
+    return custom_trigger.detail(id, limit=limit)
 
 
 @router.get("/trigger-request", tags=["trigger"],

@@ -301,6 +301,21 @@ class TriggerCheck(Body):
     offline: Any = Field(False, description="true skips the calls to Slack and Jira.")
 
 
+class CustomTrigger(Body):
+    id: Text = T("The trigger's id, which is also its file name in `<home>/triggers`.")
+    text: Text = T("The whole YAML, as written.")
+    check_only: Any = Field(False, description="true validates and writes nothing.")
+
+
+class CustomTriggerId(Body):
+    id: Text = T("The trigger's id.")
+
+
+class CustomTriggerEnable(Body):
+    id: Text = T("The trigger's id.")
+    enabled: Any = Field(None, description="true or false: rewrites only `enabled:` in its file.")
+
+
 class TriggerAction(Body):
     request_id: Text = T("The request the action was taken for.")
     kind: Text = T("What was done: `reply`, `jira-transition`, `slack-message`, ...")

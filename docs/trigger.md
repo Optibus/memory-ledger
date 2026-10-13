@@ -518,6 +518,13 @@ another process, and if it overlaps a scheduled run the dedupe keeps the
 events to one task each. The scheduler's state is `runtime.custom` in
 `GET /api/trigger`.
 
+**Settings → Custom triggers** lists them with their last run and an on/off
+box each, and opens a file in an editor: the YAML itself, the same format the
+CLI and the skill write. **Validate** checks the text without saving, **Save**
+refuses what does not validate, **Dry run** runs the saved file and creates
+nothing, and the runs and the checkpoint are under it. A new trigger starts
+from a template. Secret values are never shown, only their names.
+
 The **`custom-trigger-builder`** skill writes a trigger with you: it shows the
 YAML with one sentence per block, validates it, runs it dry, and saves it
 switched off.
@@ -1045,6 +1052,5 @@ Then:
 - DMs to the bot (`message.im`) — today only `app_mention` in channels.
 - Catch-up for the Slack channel events and your DMs: they are live only.
 - Allowed and blocked lists for Jira and GitHub; only Slack has them.
-- Settings has no editor for custom triggers yet: the file and the CLI only.
 - Custom triggers: webhooks, branching, loops, parallel blocks, languages other
   than Python in a script block, and switching a failing trigger off by itself.

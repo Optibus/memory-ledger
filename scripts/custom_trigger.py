@@ -693,3 +693,83 @@ def run_due(cfg: dict, dispatch, con=None) -> list:
         finally:
             lock.release()
     return [r for r in done if r.get("status") != "not_due"]
+
+
+# ---------------------------------------------------------------- the page
+TEXT_MAX = 64_000
+TEMPLATE = """id: {id}
+name: {id}
+enabled: false
+mode: poll
+interval: 5m
+# What the brain does with each event. {{event_title}} and {{event_payload}} are there.
+do: "Tell me that {{event_title}}."
+config:
+  url: https://example.com/health
+secrets: []
+blocks:
+  - id: check
+    type: http_request
+    url: "{{{{config.url}}}}"
+    on_error: continue
+  - id: down
+    type: condition
+    if: "prev.status == None or prev.status >= 400"
+    then: continue
+    else: stop
+  - id: alert
+    type: emit
+    event:
+      id: "{id}:{{{{prev.status}}}}"
+      title: "{id}: status {{{{prev.status}}}}"
+      payload: {{status: "{{{{prev.status}}}}"}}
+"""
+
+
+def template(tid: str = "my-trigger") -> str:
+    return TEMPLATE.format(id=tid if id_ok(tid) else "my-trigger")
+
+
+def raw_text(tid: str) -> str:
+    p = path_of(tid)
+    return p.read_text(encoding="utf-8") if p is not None and p.is_file() else ""
+
+
+def check_text(tid: str, text: str, cfg: dict | None = None) -> dict:
+    """Parse and validate what the page holds, without writing it."""
+    if not id_ok(tid):
+        return {"ok": False, "errors": [f"{tid!r} is not a trigger id: letters, digits, - "
+                                        "and _"], "warnings": []}
+    if len(text or "") > TEXT_MAX:
+        return {"ok": False, "errors": [f"a trigger is at most {TEXT_MAX} characters"],
+                "warnings": []}
+    try:
+        defn = parse_text(text or "")
+    except ValueError as e:
+        return {"ok": False, "errors": [str(e)], "warnings": []}
+    return validate(defn, cfg, expect_id=tid)
+
+
+def save_text(tid: str, text: str, cfg: dict | None = None) -> dict:
+    """Write the file, as written, only when it validates."""
+    res = check_text(tid, text, cfg)
+    if not res["ok"]:
+        return {**res, "id": tid, "saved": False,
+                "error": "not saved: " + "; ".join(res["errors"])[:500]}
+    triggers_dir().mkdir(parents=True, exist_ok=True)
+    existed = path_of(tid).is_file()
+    path_of(tid).write_text(text if text.endswith("\n") else text + "\n", encoding="utf-8")
+    return {**res, "id": tid, "saved": True, "created": not existed}
+
+
+def detail(tid: str, con=None, limit: int = 20) -> dict:
+    """One trigger for the page: the file as written, its verdict, state,
+    checkpoint and newest runs."""
+    con = con if con is not None else db()
+    text = raw_text(tid)
+    if not text:
+        return {"ok": False, "error": f"no trigger {tid}"}
+    return {"ok": True, "id": tid, "text": text, **check_text(tid, text),
+            "state": get_state(con, tid),
+            "checkpoint": trigger.get_checkpoint(con, SOURCE_PREFIX + tid),
+            "runs": runs(con, tid, limit)}

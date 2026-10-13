@@ -598,6 +598,9 @@ hamburger menu on the left (`m` toggles it):
   **doctor** on demand, the database connection (local mirror + neo4j master,
   with a test and a queue flush), and **consolidation** — which shows what it
   would change, asks, and snapshots the whole graph first (kept 5 days).
+  **Custom triggers** lists your [block polls](docs/trigger.md#custom-triggers)
+  with their last run and an on/off box, and edits each one's YAML with
+  validate, save and a dry run that creates nothing.
 
   Preferences are saved to `~/.second_brain/settings.json`, so the CLI, the hooks
   and any cron read the same answer as the page — not to the browser. What you

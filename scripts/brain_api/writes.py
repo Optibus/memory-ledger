@@ -24,6 +24,7 @@ import _platform
 import agent_commands
 import agents
 import b2b
+import custom_trigger
 import documents
 import graph
 import trigger
@@ -526,6 +527,48 @@ def trigger_config(data: m.TriggerConfig = body(m.TriggerConfig)):
         res["runtime"] = trigger_runtime.restart() if state.TRIGGERS else trigger_runtime.status()
         res["watching"] = state.TRIGGERS
     return reply(res)
+
+
+@router.post("/custom-trigger", tags=["trigger"], summary="Save a custom trigger",
+             description="Validates the YAML and writes `<home>/triggers/<id>.yaml` only when "
+                         "it is valid. With `check_only` it writes nothing and answers 200 "
+                         "with the verdict in `valid`. `errors` and `warnings` are what "
+                         "`trigger.py custom validate` says.")
+def custom_trigger_save(data: m.CustomTrigger = body(m.CustomTrigger)):
+    tid, text = clip(data.id, 64), data.text or ""
+    if data.check_only is True:
+        v = custom_trigger.check_text(tid, text)
+        return reply({"ok": True, "id": tid, "valid": v["ok"], "errors": v["errors"],
+                      "warnings": v["warnings"]})
+    return reply(custom_trigger.save_text(tid, text))
+
+
+@router.post("/custom-trigger-dry-run", tags=["trigger"],
+             summary="Run a saved custom trigger's blocks without creating anything",
+             description="Calls what its blocks call and answers the events it would create "
+                         "and the checkpoint it would set. No task, no checkpoint, no run is "
+                         "written.")
+def custom_trigger_dry_run(data: m.CustomTriggerId = body(m.CustomTriggerId)):
+    return reply(custom_trigger.execute(clip(data.id, 64), dry_run=True))
+
+
+@router.post("/custom-trigger-enable", tags=["trigger"],
+             summary="Switch a custom trigger on or off",
+             description="Rewrites only the `enabled:` line of its file. Switching on refuses a "
+                         "trigger that does not validate. The scheduler sees it on its next "
+                         "pass.")
+def custom_trigger_enable(data: m.CustomTriggerEnable = body(m.CustomTriggerEnable)):
+    if not isinstance(data.enabled, bool):
+        return reply({"ok": False, "error": "enabled must be true or false"})
+    tid = clip(data.id, 64)
+    if data.enabled:
+        defn, err = custom_trigger.load(tid)
+        v = custom_trigger.validate(defn, expect_id=tid) if not err else {"ok": False,
+                                                                          "errors": [err]}
+        if not v["ok"]:
+            return reply({"ok": False, "error": "fix it before switching it on: "
+                          + "; ".join(v["errors"])[:500], **v})
+    return reply(custom_trigger.set_enabled(tid, data.enabled))
 
 
 @router.post("/trigger-check", tags=["trigger"], summary="Check that a service is ready",

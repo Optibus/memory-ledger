@@ -1023,3 +1023,52 @@ export const voiceFixture: import("@/api/types").VoiceStatus = {
     ],
   },
 };
+
+export const customTriggersFixture: import("@/api/types").CustomTriggerList = {
+  ok: true,
+  dir: "/home/alex/.second_brain/triggers",
+  active: true,
+  secrets: ["STATUS_TOKEN"],
+  template: "id: my-trigger\ninterval: 5m\nblocks:\n  - id: alert\n    type: emit\n    event:\n      id: my-trigger:fixed\n",
+  triggers: [
+    {
+      id: "site-health",
+      file: "/home/alex/.second_brain/triggers/site-health.yaml",
+      ok: true,
+      name: "Site health",
+      enabled: false,
+      interval: "5m",
+      blocks: 3,
+      state: { last_run_at: "2026-10-12T21:00:00+00:00", last_status: "ok", last_error: "" },
+    },
+    {
+      id: "broken",
+      file: "/home/alex/.second_brain/triggers/broken.yaml",
+      ok: false,
+      error: "broken.yaml: not valid YAML",
+      state: { last_status: "invalid", last_error: "broken.yaml: not valid YAML" },
+    },
+  ],
+};
+
+export const customTriggerDetailFixture: import("@/api/types").CustomTriggerDetail = {
+  ok: true,
+  id: "site-health",
+  text: "id: site-health\nname: Site health\nenabled: false\ninterval: 5m\nblocks: []\n",
+  errors: [],
+  warnings: ["the last block is not an emit"],
+  state: { last_status: "ok" },
+  checkpoint: "",
+  runs: [
+    {
+      run_id: "run-1",
+      started_at: "2026-10-12T21:00:00+00:00",
+      finished_at: "2026-10-12T21:00:01+00:00",
+      status: "ok",
+      attempts: 1,
+      events: 1,
+      created: 1,
+      error: "",
+    },
+  ],
+};
