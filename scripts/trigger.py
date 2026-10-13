@@ -2214,6 +2214,8 @@ def http_raw(method: str, url: str, *, headers=None, data: bytes | None = None,
         return e.code, e.read().decode("utf-8", "replace")
     except urllib.error.URLError as e:
         raise TriggerError(f"{method} {url.split('?')[0]}: {e.reason}") from None
+    except (http.client.HTTPException, OSError, ValueError) as e:
+        raise TriggerError(f"{method} {url.split('?')[0]}: {e}") from None
 
 
 def render_http(spec: dict, values: dict) -> dict:

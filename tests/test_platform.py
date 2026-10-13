@@ -1,7 +1,6 @@
-#!/usr/bin/env python3
 """What differs between macOS, Linux and Windows (scripts/_platform.py), against a THROWAWAY home.
 
-    python3 tests/test_platform.py
+    python -m pytest tests/test_platform.py
 """
 
 from __future__ import annotations
@@ -10,105 +9,171 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
+import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-HOME = Path(tempfile.mkdtemp(prefix="second-brain-platform-"))
-os.environ["SECOND_BRAIN_HOME"] = str(HOME)
-os.environ.pop("SECOND_BRAIN_DB", None)
-sys.path.insert(0, str(ROOT / "scripts"))
+import pytest
 
-import _platform  # noqa: E402
-import graph  # noqa: E402
-import trigger  # noqa: E402
+import _platform
+import graph
+import trigger
 
-FAILS: list[str] = []
-
-
-def ck(name: str, ok: bool, detail: str = "") -> None:
-    print(("ok   " if ok else "FAIL ") + name + (f"  ({detail})" if detail and not ok else ""))
-    if not ok:
-        FAILS.append(name)
+UTF8 = "utf-8"
+NO_SUCH_PROGRAM = "no-such-program-xyz"
+SLEEP_FOREVER = "import time; time.sleep(60)"
+INJECTION = "mundo; echo injected"
+KILL_WAIT_STEPS = 50
+KILL_WAIT_STEP_S = 0.1
 
 
-print("finding programs")
-ck("a path is used as given, with ~ expanded",
-   _platform.resolve_bin("~/bin/claude") == str(Path("~/bin/claude").expanduser()))
-ck("a bare name is looked up on PATH", _platform.resolve_bin("python3") == (shutil.which("python3") or "python3"))
-ck("a name that is nowhere comes back as is, so the error names it",
-   _platform.resolve_bin("no-such-program-xyz") == "no-such-program-xyz")
-ck("the trigger engine resolves claude the same way",
-   trigger.claude_bin({"claude": {"bin": "no-such-program-xyz"}}) == "no-such-program-xyz")
+# ------------------------------------------------------- finding programs
+def test_a_path_is_used_as_given_with_tilde_expanded():
+    assert _platform.resolve_bin("~/bin/claude") == str(Path("~/bin/claude").expanduser())
 
-print("interpreters")
-ck("a .py runs with this Python", _platform.interpreter("python", Path("x.py")) == [sys.executable])
-sh = _platform.interpreter("shell", Path("x.sh"))
-ck("a .sh runs with the bash on PATH", sh is not None and Path(sh[0]).name in ("bash", "bash.exe", "sh"), str(sh))
-ps = _platform.interpreter("powershell", Path("x.ps1"))
-ck("a .ps1 runs with PowerShell, by file, without the profile, or not at all",
-   ps is None if not _platform.powershell() else (ps[-1] == "-File" and "-NoProfile" in ps), str(ps))
-ck("a .bat runs with cmd on Windows only",
-   (_platform.interpreter("batch", Path("x.bat")) is None) != _platform.WINDOWS)
-ck("an unknown language has no interpreter", _platform.interpreter("text", Path("x.txt")) is None)
-ck("graph knows .ps1 and .bat", graph._script_lang("a.ps1", "") == "powershell"
-   and graph._script_lang("a.bat", "") == "batch" and graph._script_lang("a.cmd", "") == "batch")
 
-print("a script that is not executable runs with its interpreter")
-graph.scripts_dir().mkdir(parents=True, exist_ok=True)
-script = graph.scripts_dir() / "hello.sh"
-script.write_text('echo "olá $1"\n', encoding="utf-8")
-script.chmod(0o644)
-argv, err = trigger.script_argv("hello.sh")
-ck("its argv is the interpreter and the path, as separate items",
-   not err and argv[-1] == str(script) and len(argv) == 2, f"{argv} {err}")
-if argv and sh:
-    out = subprocess.run([*argv, "mundo; echo injected"], capture_output=True, text=True,
-                         encoding="utf-8", errors="replace").stdout
-    ck("an argument is data, never shell text", out.strip() == "olá mundo; echo injected", out)
+def test_a_bare_name_is_looked_up_on_path():
+    assert _platform.resolve_bin("python3") == (shutil.which("python3") or "python3")
 
-print("processes")
-import time  # noqa: E402
 
-ck("this process is alive", _platform.pid_alive(os.getpid()))
-dead = subprocess.Popen([sys.executable, "-c", "pass"])
-dead.wait()
-ck("one that exited is not, and asking does not signal anything", not _platform.pid_alive(dead.pid))
-ck("a pid that cannot exist is not alive", not _platform.pid_alive(0) and not _platform.pid_alive(-1))
+def test_a_name_that_is_nowhere_comes_back_as_is_so_the_error_names_it():
+    assert _platform.resolve_bin(NO_SUCH_PROGRAM) == NO_SUCH_PROGRAM
 
-# a parent that starts a grandchild and prints its pid, then sleeps
-tree = subprocess.Popen(
-    [sys.executable, "-c",
-     "import subprocess, sys, time\n"
-     "c = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
-     "print(c.pid, flush=True)\n"
-     "time.sleep(60)"],
-    stdout=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", **_platform.group_kwargs())
-grandchild = int(tree.stdout.readline())
-_platform.kill_tree(tree)
-tree.wait(timeout=10)
-for _ in range(50):
-    if not _platform.pid_alive(grandchild):
-        break
-    time.sleep(0.1)
-ck("kill_tree takes the grandchildren with it", not _platform.pid_alive(grandchild))
-_platform.kill_tree(tree)
-ck("and is safe on a process that already exited", tree.poll() is not None)
-ck("our own group is never the one killed", _platform.pid_alive(os.getpid()))
 
-print("secrets and links")
-secret = HOME / "secret.json"
-secret.write_text("{}", encoding="utf-8")
-ck("a secret file is made owner-only", _platform.owner_only(secret))
-if not _platform.WINDOWS:
-    ck("which on POSIX is mode 600", (secret.stat().st_mode & 0o777) == 0o600, oct(secret.stat().st_mode))
-(HOME / "legacy").mkdir()
-how = _platform.link_dir(HOME / "canonical", HOME / "legacy")
-(HOME / "legacy" / "x").write_text("1", encoding="utf-8")
-ck("a directory link reaches its target", (HOME / "canonical" / "x").read_text(encoding="utf-8") == "1")
-ck("and is a link, symlink or junction", _platform.is_link(HOME / "canonical") and how in ("symlink", "junction"))
-ck("a relative symlink when the two are siblings",
-   how != "symlink" or os.readlink(HOME / "canonical") == "legacy")
+def test_the_trigger_engine_resolves_claude_the_same_way():
+    assert trigger.claude_bin({"claude": {"bin": NO_SUCH_PROGRAM}}) == NO_SUCH_PROGRAM
 
-print(f"\n{len(FAILS)} failed" if FAILS else "\nall passed")
-raise SystemExit(1 if FAILS else 0)
+
+# ------------------------------------------------------------ interpreters
+def test_a_py_runs_with_this_python():
+    assert _platform.interpreter("python", Path("x.py")) == [sys.executable]
+
+
+def test_a_sh_runs_with_the_bash_on_path():
+    sh = _platform.interpreter("shell", Path("x.sh"))
+    assert sh is not None and Path(sh[0]).name in ("bash", "bash.exe", "sh"), sh
+
+
+def test_a_ps1_runs_with_powershell_by_file_without_the_profile_or_not_at_all():
+    ps = _platform.interpreter("powershell", Path("x.ps1"))
+    if not _platform.powershell():
+        assert ps is None
+    else:
+        assert ps[-1] == "-File" and "-NoProfile" in ps
+
+
+def test_a_bat_runs_with_cmd_on_windows_only():
+    assert (_platform.interpreter("batch", Path("x.bat")) is None) != _platform.WINDOWS
+
+
+def test_an_unknown_language_has_no_interpreter():
+    assert _platform.interpreter("text", Path("x.txt")) is None
+
+
+@pytest.mark.parametrize("name, lang", [("a.ps1", "powershell"), ("a.bat", "batch"), ("a.cmd", "batch")])
+def test_graph_knows_ps1_and_bat(name, lang):
+    assert graph._script_lang(name, "") == lang
+
+
+# ----------------------------------- a script that is not executable runs
+@pytest.fixture
+def hello_script(brain_home: Path) -> Path:
+    graph.scripts_dir().mkdir(parents=True, exist_ok=True)
+    script = graph.scripts_dir() / "hello.sh"
+    script.write_text('echo "olá $1"\n', encoding=UTF8)
+    script.chmod(0o644)
+    return script
+
+
+def test_its_argv_is_the_interpreter_and_the_path_as_separate_items(hello_script):
+    argv, err = trigger.script_argv("hello.sh")
+    assert not err, err
+    assert argv[-1] == str(hello_script)
+    assert len(argv) == 2
+
+
+@pytest.mark.skipif(_platform.interpreter("shell", Path("x.sh")) is None, reason="no shell interpreter")
+def test_an_argument_is_data_never_shell_text(hello_script):
+    argv, _ = trigger.script_argv("hello.sh")
+    out = subprocess.run([*argv, INJECTION], capture_output=True, text=True,
+                         encoding=UTF8, errors="replace").stdout
+    assert out.strip() == f"olá {INJECTION}"
+
+
+# --------------------------------------------------------------- processes
+def test_this_process_is_alive():
+    assert _platform.pid_alive(os.getpid())
+
+
+def test_a_pid_that_exited_is_not_alive_and_asking_signals_nothing():
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    assert not _platform.pid_alive(dead.pid)
+
+
+@pytest.mark.parametrize("pid", [0, -1])
+def test_a_pid_that_cannot_exist_is_not_alive(pid):
+    assert not _platform.pid_alive(pid)
+
+
+def test_kill_tree_takes_the_grandchildren_with_it():
+    # a parent that starts a grandchild and prints its pid, then sleeps
+    tree = subprocess.Popen(
+        [sys.executable, "-c",
+         "import subprocess, sys, time\n"
+         f"c = subprocess.Popen([sys.executable, '-c', {SLEEP_FOREVER!r}])\n"
+         "print(c.pid, flush=True)\n"
+         "time.sleep(60)"],
+        stdout=subprocess.PIPE, text=True, encoding=UTF8, errors="replace",
+        **_platform.group_kwargs())
+    try:
+        grandchild = int(tree.stdout.readline())
+        _platform.kill_tree(tree)
+        tree.wait(timeout=10)
+        for _ in range(KILL_WAIT_STEPS):
+            if not _platform.pid_alive(grandchild):
+                break
+            time.sleep(KILL_WAIT_STEP_S)
+        assert not _platform.pid_alive(grandchild)
+        # safe on a process that already exited, and never our own group
+        _platform.kill_tree(tree)
+        assert tree.poll() is not None
+        assert _platform.pid_alive(os.getpid())
+    finally:
+        tree.stdout.close()
+        if tree.poll() is None:
+            tree.kill()
+
+
+# --------------------------------------------------------- secrets and links
+def test_a_secret_file_is_made_owner_only(brain_home):
+    secret = brain_home / "secret.json"
+    secret.write_text("{}", encoding=UTF8)
+    assert _platform.owner_only(secret)
+    if not _platform.WINDOWS:
+        assert (secret.stat().st_mode & 0o777) == 0o600, oct(secret.stat().st_mode)
+
+
+@pytest.fixture
+def linked(brain_home: Path):
+    (brain_home / "legacy").mkdir()
+    how = _platform.link_dir(brain_home / "canonical", brain_home / "legacy")
+    (brain_home / "legacy" / "x").write_text("1", encoding=UTF8)
+    return brain_home, how
+
+
+def test_a_directory_link_reaches_its_target(linked):
+    home, _ = linked
+    assert (home / "canonical" / "x").read_text(encoding=UTF8) == "1"
+
+
+def test_it_is_a_link_symlink_or_junction(linked):
+    home, how = linked
+    assert _platform.is_link(home / "canonical")
+    assert how in ("symlink", "junction")
+
+
+def test_a_relative_symlink_when_the_two_are_siblings(linked):
+    home, how = linked
+    if how != "symlink":
+        pytest.skip("not a symlink on this platform")
+    assert os.readlink(home / "canonical") == "legacy"

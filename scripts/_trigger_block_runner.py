@@ -30,6 +30,7 @@ import runpy
 import sys
 import urllib.error
 import urllib.parse
+import http.client
 import urllib.request
 from datetime import datetime, timezone
 
@@ -236,7 +237,7 @@ def http_raw(method: str, url: str, *, headers=None, data: bytes | None = None,
         return e.code, e.read(BODY_MAX).decode("utf-8", "replace")
     except urllib.error.URLError as e:
         raise BlockError(f"{method} {url.split('?')[0]}: {e.reason}") from None
-    except (OSError, ValueError) as e:
+    except (http.client.HTTPException, OSError, ValueError) as e:
         raise BlockError(f"{method} {url.split('?')[0]}: {e}") from None
 
 

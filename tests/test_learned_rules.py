@@ -1,224 +1,362 @@
-#!/usr/bin/env python3
-"""The learned-rules detector (CONVENTIONS §2i): it proposes, a person decides.
+"""The learned-rules detector (CONVENTIONS section 2i): it proposes, a person decides.
 
-    python3 tests/test_learned_rules.py
+    python -m pytest tests/test_learned_rules.py
 
-Stdlib only. Runs the real CLI and the real hooks against a THROWAWAY brain,
-with synthetic prompts. What it guards: the switch is OFF until asked, a
-proposal is never returned by match-rules, accepting is the only road to an
-active learned rule, rejecting sticks, and nothing is ever deleted.
+Runs the real CLI and the real hooks against a THROWAWAY brain, with synthetic
+prompts. What it guards: the switch is OFF until asked, a proposal is never
+returned by match-rules, accepting is the only road to an active learned rule,
+rejecting sticks, and nothing is ever deleted.
+
+The phases build on one brain (the order in the file is the order they run in):
+captures, then proposals, then accept, then reject, then off again.
 """
+
+from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+import graph
 
 ROOT = Path(__file__).resolve().parent.parent
-BRAIN = tempfile.mkdtemp(prefix="second-brain-learned-")
-# a brain from scratch is seeded with the built-in skills; these checks count nodes in an empty one
-os.environ["SECOND_BRAIN_NO_SKILL_SEED"] = "1"
-ENV = {**os.environ, "SECOND_BRAIN_HOME": BRAIN, "SECOND_BRAIN_NO_AUTOSYNC": "1"}
-for _k in list(ENV):
-    if _k.startswith(("MEMORY_LEDGER_NO_", "SECOND_BRAIN_NO_LEARNED")):
-        del ENV[_k]
-ENV["SECOND_BRAIN_NO_AUTOSYNC"] = "1"
-FAILS = []
+GRAPH_PY = ROOT / "scripts" / "graph.py"
+CAPTURE_HOOK = ROOT / "hooks" / "capture_prompt.py"
+BRIEF_HOOK = ROOT / "hooks" / "open_loops_brief.py"
+UTF8 = "utf-8"
+
+EMOJI_PROMPT = "No, never use emojis in the commit messages please"
+TODO_PROMPT = "Don't forget to add the tests for the new parser module"
+ONCE_PROMPT = "Always run the formatter before you open the pull request"
+RELEASE_PROMPT = "Never commit directly to the release branch without review"
+RELEASE_PROMPT_REWORDED = "Never commit directly to the release branch without a review"
+SQUASH_PROMPT = "Never squash the release commits into one big commit"
+EMOJI_RULE_TITLE = "No emojis in commit messages"
+EMOJI_RULE_TEXT = "Never put emojis in commit messages."
+EMOJI_SCENARIO = "emojis commit messages"
+NO_LEARNED_VAR = "MEMORY_LEDGER_NO_LEARNED_RULES"
+PROPOSAL_COUNT_SQL = "SELECT COUNT(*) FROM nodes WHERE type='rule-proposal'"
 
 
-def ck(label, cond, extra=""):
-    print(("  PASS  " if cond else "  FAIL  ") + label + (f"  {extra}" if extra else ""))
-    if not cond:
-        FAILS.append(label)
+class Brain:
+    """One throwaway brain, driven through the real CLI and hooks."""
+
+    def __init__(self, home: Path) -> None:
+        self.home = home
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith(("MEMORY_LEDGER_NO_", "SECOND_BRAIN_NO_LEARNED"))}
+        env.update(SECOND_BRAIN_HOME=str(home), SECOND_BRAIN_NO_AUTOSYNC="1",
+                   # a brain from scratch is seeded with the built-in skills; these
+                   # checks count nodes in an empty one
+                   SECOND_BRAIN_NO_SKILL_SEED="1")
+        self.env = env
+
+    def _run(self, script: Path, *args: str, env: dict | None = None, stdin: str | None = None,
+             check: bool = False) -> subprocess.CompletedProcess:
+        return subprocess.run([sys.executable, str(script), *args], input=stdin,
+                              capture_output=True, text=True, encoding=UTF8, errors="replace",
+                              env=env or self.env, check=check)
+
+    def g(self, *args: str, env: dict | None = None) -> dict:
+        p = self._run(GRAPH_PY, *args, env=env)
+        try:
+            return json.loads(p.stdout)
+        except ValueError:
+            return {"ok": False, "raw": p.stdout[:300], "stderr": p.stderr[:300]}
+
+    def say(self, session: str, prompt: str) -> None:
+        """A prompt, captured by the real hook."""
+        self._run(CAPTURE_HOOK, stdin=json.dumps({"session_id": session, "cwd": "/tmp", "prompt": prompt}),
+                  check=True)
+
+    def brief(self) -> subprocess.CompletedProcess:
+        return self._run(BRIEF_HOOK, stdin=json.dumps({"session_id": "h"}))
+
+    def count(self, sql: str, *params) -> int:
+        con = sqlite3.connect(str(self.home / "graph.db"))
+        try:
+            return con.execute(sql, params).fetchone()[0]
+        finally:
+            con.close()
+
+    def proposals(self) -> int:
+        return self.count(PROPOSAL_COUNT_SQL)
+
+    def dry_texts(self) -> list[str]:
+        return [p["text"] for p in self.g("propose-rules", "--dry-run").get("proposed", [])]
 
 
-def g(*a):
-    p = subprocess.run([sys.executable, str(ROOT / "scripts" / "graph.py"), *a],
-                       capture_output=True, text=True, encoding="utf-8", errors="replace", env=ENV)
-    try:
-        return json.loads(p.stdout)
-    except Exception:
-        return {"ok": False, "raw": p.stdout[:300], "stderr": p.stderr[:300]}
+@pytest.fixture(scope="module")
+def brain(tmp_path_factory) -> Brain:
+    return Brain(tmp_path_factory.mktemp("learned"))
 
 
-def say(session, prompt):
-    """A prompt, captured by the real hook."""
-    subprocess.run([sys.executable, str(ROOT / "hooks" / "capture_prompt.py")],
-                   input=json.dumps({"session_id": session, "cwd": "/tmp", "prompt": prompt}),
-                   capture_output=True, text=True, encoding="utf-8", errors="replace", env=ENV, check=True)
+@pytest.fixture(scope="module")
+def captured(brain: Brain) -> Brain:
+    """Three sessions saying the same correction, plus two prompts that must not count."""
+    for s in ("s1", "s2", "s3"):
+        brain.say(s, EMOJI_PROMPT)
+    brain.say("s1", TODO_PROMPT)   # a to-do, not a correction
+    brain.say("s1", ONCE_PROMPT)   # once only
+    return brain
 
 
-def count(sql):
-    import sqlite3
-    con = sqlite3.connect(os.path.join(BRAIN, "graph.db"))
-    try:
-        return con.execute(sql).fetchone()[0]
-    finally:
-        con.close()
+# ---------------------------------------------------------- the pure heuristic
+correction_of = graph.correction_of
 
 
-# --- the pure heuristic ---------------------------------------------------
-sys.path.insert(0, str(ROOT / "scripts"))
-os.environ["SECOND_BRAIN_HOME"] = BRAIN
-import graph  # noqa: E402
+@pytest.mark.parametrize("prompt", [
+    "No, never use emojis in commit messages",
+    "não, nunca use emojis nas mensagens de commit",
+    "Pare de adicionar comentarios nos arquivos gerados",
+    "Always run the linter before committing changes",
+    "I said keep the changelog entries short and factual",
+], ids=["english", "portuguese", "pare-de", "always", "i-said"])
+def test_a_correction_is_spotted(prompt):
+    assert correction_of(prompt)
 
-print("the heuristic")
-ce = graph.correction_of
-ck("an English correction is spotted", ce("No, never use emojis in commit messages"))
-ck("a Portuguese one too", ce("não, nunca use emojis nas mensagens de commit"))
-ck("'pare de' opens a correction", ce("Pare de adicionar comentarios nos arquivos gerados"))
-ck("'always' opens one", ce("Always run the linter before committing changes"))
-ck("'I said' opens one", ce("I said keep the changelog entries short and factual"))
-ck("an ordinary request is not one", ce("Please add a retry to the upload function") is None)
-ck("'no' inside a sentence is not one", ce("There is no way to know which file changed") is None)
-ck("a question is not one", ce("Never mind, can you explain the merge logic here?") is None)
-ck("too vague is not one", ce("No, stop that") is None)
-ck("a long prompt is a task, not a correction", ce("Don't " + "touch the parser " * 40) is None)
-ck("code is not a correction", ce("never use this:\n```\nx = 1\n```") is None)
-ck("never and always do not cluster",
-   graph._lr_jaccard(ce("never squash the release commits")["tokens"],
-                     ce("always squash the release commits")["tokens"]) < graph.LR_SIMILARITY)
 
-print("off by default")
-st = g("learned-rules", "status")
-ck("status reports off", st.get("ok") and st.get("enabled") is False, str(st)[:160])
-for s in ("s1", "s2", "s3"):
-    say(s, "No, never use emojis in the commit messages please")
-say("s1", "Don't forget to add the tests for the new parser module")  # a to-do, not a correction
-say("s1", "Always run the formatter before you open the pull request")  # once only
-off = g("propose-rules")
-ck("propose-rules says it is off and how to turn it on",
-   off.get("enabled") is False and off.get("ran") is False and "learned-rules on" in off.get("hint", ""),
-   str(off)[:200])
-ck("nothing was proposed while off", count("SELECT COUNT(*) FROM nodes WHERE type='rule-proposal'") == 0)
-ck("the settings file holds no switch", "learned_rules" not in
-   json.loads(Path(BRAIN, "settings.json").read_text(encoding="utf-8")) if Path(BRAIN, "settings.json").exists() else True)
+@pytest.mark.parametrize("prompt", [
+    "Please add a retry to the upload function",
+    "There is no way to know which file changed",
+    "Never mind, can you explain the merge logic here?",
+    "No, stop that",
+    "Don't " + "touch the parser " * 40,
+    "never use this:\n```\nx = 1\n```",
+], ids=["ordinary-request", "no-inside-a-sentence", "question", "too-vague", "long-task", "code"])
+def test_these_are_not_corrections(prompt):
+    assert correction_of(prompt) is None
 
-print("on: repeated corrections across sessions are proposed")
-on = g("learned-rules", "on")
-ck("turning it on is stored and reported", on.get("enabled") is True and on.get("source") == "settings")
-dry = g("propose-rules", "--dry-run")
-ck("a dry run reports the cluster", len(dry.get("proposed", [])) == 1 and dry.get("dry_run") is True, str(dry)[:200])
-ck("and writes nothing", count("SELECT COUNT(*) FROM nodes WHERE type='rule-proposal'") == 0)
-run = g("propose-rules")
-props = run.get("proposed", [])
-ck("the repeated correction is proposed", len(props) == 1, str(run)[:200])
-ck("the once-only correction is not", all("formatter" not in p["text"] for p in props))
-ck("the to-do is not", all("tests" not in p["text"] for p in props))
-pid = props[0]["id"] if props else ""
-ck("it carries its evidence and counts",
-   props and props[0]["count"] == 3 and props[0]["sessions"] == 3 and len(props[0]["evidence"]) == 3)
-node = g("get-node", "--id", pid)
-ck("stored as a rule-proposal with status proposed",
-   (node.get("node") or node).get("type") == "rule-proposal" and (node.get("node") or node).get("status") == "proposed",
-   str(node)[:160])
-ck("linked to the prompts it came from",
-   count(f"SELECT COUNT(*) FROM edges WHERE src='{pid}' AND rel='learned-from'") == 3)
-again = g("propose-rules")
-ck("a second run proposes nothing new", again.get("proposed") == [])
-ck("still one proposal", count("SELECT COUNT(*) FROM nodes WHERE type='rule-proposal'") == 1)
 
-print("one occurrence, or one session, is not enough")
-say("s9", "Never commit directly to the release branch without review")
-ck("a single occurrence is not proposed",
-   all("release branch" not in p["text"] for p in g("propose-rules", "--dry-run").get("proposed", [])))
-say("s9", "Never commit directly to the release branch without review")
-ck("two in ONE session is not proposed either",
-   all("release branch" not in p["text"] for p in g("propose-rules", "--dry-run").get("proposed", [])))
-say("s10", "Never commit directly to the release branch without review")
-ck("a second session makes it a proposal",
-   any("release branch" in p["text"] for p in g("propose-rules", "--dry-run").get("proposed", [])))
+def test_never_and_always_do_not_cluster():
+    sim = graph._lr_jaccard(correction_of("never squash the release commits")["tokens"],
+                            correction_of("always squash the release commits")["tokens"])
+    assert sim < graph.LR_SIMILARITY
 
-print("a proposal is not a rule")
-lst = g("rule-proposals")
-ck("rule-proposals lists it, budgeted",
-   lst.get("count") == 1 and lst.get("budget") and "chars" in lst and lst.get("truncated") is False
-   and lst["proposals"][0]["id"] == pid, str(lst)[:160])
-mr = g("match-rules", "never use emojis commit messages", "--full")
-ck("match-rules does not return a proposal", pid not in json.dumps(mr) and all(
-   r["props"].get("source") != "learned" for r in mr.get("results", [])))
 
-print("accept")
-g("add-rule", "--title", "Commit message emojis", "--source", "user", "--scenario",
-  "emojis commit messages", "--body", "THE RULE\n\nUser version.\n\nJUDGED AGAINST\n\nn/a")
-acc = g("accept-rule", "--id", pid, "--title", "No emojis in commit messages",
-        "--text", "Never put emojis in commit messages.")
-ck("accept makes a learned rule at precedence 50",
-   acc.get("ok") and acc.get("source") == "learned" and acc.get("precedence") == 50, str(acc)[:200])
-rid = acc.get("rule", "")
-full = g("match-rules", "emojis commit messages", "--full")
-learned = [r for r in full.get("results", []) if r["id"] == rid]
-ck("the rule now matches, as learned", learned and learned[0]["props"]["source"] == "learned"
-   and learned[0]["props"]["precedence"] == 50 and "Never put emojis" in learned[0]["body"],
-   str([r["id"] for r in full.get("results", [])]))
-ids = [r["id"] for r in full.get("results", [])]
-user_ids = [r["id"] for r in full.get("results", []) if r["props"].get("source") == "user"]
-ck("a user rule ranks above it", user_ids and ids.index(user_ids[0]) < ids.index(rid), str(ids))
-ck("the proposal is marked accepted and kept",
-   g("rule-proposals", "--status", "accepted").get("count") == 1)
-ck("the rule is linked to its proposal and evidence",
-   count(f"SELECT COUNT(*) FROM edges WHERE src='{rid}' AND rel='learned-from'") >= 4)
-ck("accepting twice is refused", g("accept-rule", "--id", pid).get("ok") is False)
+# ------------------------------------------------------------ off by default
+class TestOffByDefault:
+    def test_status_reports_off(self, brain):
+        st = brain.g("learned-rules", "status")
+        assert st.get("ok") and st.get("enabled") is False, st
 
-print("reject")
-rp = [p for p in g("rule-proposals").get("proposals", []) if "release branch" in p["text"]]
-ck("the release-branch proposal exists", len(rp) == 0)   # not yet proposed: no run since
-g("propose-rules")
-rp = [p for p in g("rule-proposals").get("proposals", []) if "release branch" in p["text"]]
-ck("now it is proposed", len(rp) == 1)
-rej = g("reject-rule", "--id", rp[0]["id"], "--reason", "not a rule")
-ck("reject marks it rejected and kept", rej.get("ok") and rej.get("kept") is True, str(rej)[:160])
-say("s11", "Never commit directly to the release branch without a review")
-before = count("SELECT COUNT(*) FROM nodes WHERE type='rule-proposal'")
-run = g("propose-rules")
-ck("a rejected cluster is not proposed again, even reworded",
-   run.get("proposed") == [] and count("SELECT COUNT(*) FROM nodes WHERE type='rule-proposal'") == before,
-   str(run)[:200])
-ck("match-rules never returns a rejected proposal",
-   rp[0]["id"] not in json.dumps(g("match-rules", "release branch commit review", "--full")))
+    def test_propose_rules_says_it_is_off_and_how_to_turn_it_on(self, captured):
+        off = captured.g("propose-rules")
+        assert off.get("enabled") is False and off.get("ran") is False
+        assert "learned-rules on" in off.get("hint", "")
 
-print("nothing is deleted")
-ck("every capture is still there", count("SELECT COUNT(*) FROM nodes WHERE type='capture'") >= 9)
-ck("both proposals are still there", count("SELECT COUNT(*) FROM nodes WHERE type='rule-proposal'") == 2)
+    def test_nothing_was_proposed_while_off(self, captured):
+        assert captured.proposals() == 0
 
-print("off again stops the detector, keeps the data")
-g("learned-rules", "off")
-say("s12", "Never squash the release commits into one big commit")
-say("s13", "Never squash the release commits into one big commit")
-ck("off: propose-rules is a no-op", g("propose-rules").get("ran") is False)
-ck("off: the proposals are still listed", g("rule-proposals", "--status", "all").get("of") == 2)
-ENV2 = {**ENV, "MEMORY_LEDGER_NO_LEARNED_RULES": "1"}
-g("learned-rules", "on")
-p = subprocess.run([sys.executable, str(ROOT / "scripts" / "graph.py"), "learned-rules", "status"],
-                   capture_output=True, text=True, encoding="utf-8", errors="replace", env=ENV2)
-ck("the NO_ env var outranks the file", json.loads(p.stdout).get("enabled") is False
-   and json.loads(p.stdout).get("source") == "env")
+    def test_the_settings_file_holds_no_switch(self, captured):
+        path = captured.home / "settings.json"
+        if path.exists():
+            assert "learned_rules" not in json.loads(path.read_text(encoding=UTF8))
 
-print("the SessionStart hook")
-g("learned-rules", "off")
-stamp = Path(BRAIN, ".last_learned_rules")
-hp = subprocess.run([sys.executable, str(ROOT / "hooks" / "open_loops_brief.py")],
-                    input=json.dumps({"session_id": "h"}), capture_output=True, text=True, encoding="utf-8", errors="replace", env=ENV)
-ck("off: the hook stamps nothing and runs nothing", not stamp.exists())
-try:
-    json.loads(hp.stdout or "{}")
-    ck("off: the hook still emits valid JSON", True)
-except ValueError:
-    ck("off: the hook still emits valid JSON", False, hp.stdout[:120])
-g("learned-rules", "on")
-hp = subprocess.run([sys.executable, str(ROOT / "hooks" / "open_loops_brief.py")],
-                    input=json.dumps({"session_id": "h"}), capture_output=True, text=True, encoding="utf-8", errors="replace", env=ENV)
-ck("on: the hook stamps the day", stamp.exists())
-try:
-    json.loads(hp.stdout or "{}")
-    ck("on: and its stdout is still valid JSON", True)
-except ValueError:
-    ck("on: and its stdout is still valid JSON", False, hp.stdout[:120])
 
-print()
-if FAILS:
-    print(f"{len(FAILS)} FAILED")
-    sys.exit(1)
-print("all passed")
+# ------------------------------- on: repeated corrections across sessions are proposed
+@pytest.fixture(scope="module")
+def proposed(captured: Brain) -> SimpleNamespace:
+    on = captured.g("learned-rules", "on")
+    dry = captured.g("propose-rules", "--dry-run")
+    after_dry = captured.proposals()
+    run = captured.g("propose-rules")
+    props = run.get("proposed", [])
+    return SimpleNamespace(brain=captured, on=on, dry=dry, after_dry=after_dry, run=run,
+                           props=props, pid=props[0]["id"] if props else "")
+
+
+class TestOn:
+    def test_turning_it_on_is_stored_and_reported(self, proposed):
+        assert proposed.on.get("enabled") is True and proposed.on.get("source") == "settings"
+
+    def test_a_dry_run_reports_the_cluster_and_writes_nothing(self, proposed):
+        assert len(proposed.dry.get("proposed", [])) == 1 and proposed.dry.get("dry_run") is True
+        assert proposed.after_dry == 0
+
+    def test_the_repeated_correction_is_proposed(self, proposed):
+        assert len(proposed.props) == 1, proposed.run
+
+    def test_the_once_only_correction_is_not(self, proposed):
+        assert all("formatter" not in p["text"] for p in proposed.props)
+
+    def test_the_to_do_is_not(self, proposed):
+        assert all("tests" not in p["text"] for p in proposed.props)
+
+    def test_it_carries_its_evidence_and_counts(self, proposed):
+        p = proposed.props[0]
+        assert (p["count"], p["sessions"], len(p["evidence"])) == (3, 3, 3)
+
+    def test_stored_as_a_rule_proposal_with_status_proposed(self, proposed):
+        node = proposed.brain.g("get-node", "--id", proposed.pid)
+        node = node.get("node") or node
+        assert (node.get("type"), node.get("status")) == ("rule-proposal", "proposed")
+
+    def test_linked_to_the_prompts_it_came_from(self, proposed):
+        n = proposed.brain.count("SELECT COUNT(*) FROM edges WHERE src=? AND rel='learned-from'",
+                                 proposed.pid)
+        assert n == 3
+
+    def test_a_second_run_proposes_nothing_new(self, proposed):
+        assert proposed.brain.g("propose-rules").get("proposed") == []
+        assert proposed.brain.proposals() == 1
+
+
+# ------------------------------------ one occurrence, or one session, is not enough
+class TestThreshold:
+    def test_a_single_occurrence_is_not_proposed(self, proposed):
+        proposed.brain.say("s9", RELEASE_PROMPT)
+        assert all("release branch" not in t for t in proposed.brain.dry_texts())
+
+    def test_two_in_one_session_is_not_proposed_either(self, proposed):
+        proposed.brain.say("s9", RELEASE_PROMPT)
+        assert all("release branch" not in t for t in proposed.brain.dry_texts())
+
+    def test_a_second_session_makes_it_a_proposal(self, proposed):
+        proposed.brain.say("s10", RELEASE_PROMPT)
+        assert any("release branch" in t for t in proposed.brain.dry_texts())
+
+
+# ------------------------------------------------------ a proposal is not a rule
+class TestProposalIsNotARule:
+    def test_rule_proposals_lists_it_budgeted(self, proposed):
+        lst = proposed.brain.g("rule-proposals")
+        assert lst.get("count") == 1 and lst.get("budget") and "chars" in lst, lst
+        assert lst.get("truncated") is False
+        assert lst["proposals"][0]["id"] == proposed.pid
+
+    def test_match_rules_does_not_return_a_proposal(self, proposed):
+        mr = proposed.brain.g("match-rules", "never use emojis commit messages", "--full")
+        assert proposed.pid not in json.dumps(mr)
+        assert all(r["props"].get("source") != "learned" for r in mr.get("results", []))
+
+
+# ----------------------------------------------------------------------- accept
+@pytest.fixture(scope="module")
+def accepted(proposed: SimpleNamespace) -> SimpleNamespace:
+    b = proposed.brain
+    b.g("add-rule", "--title", "Commit message emojis", "--source", "user", "--scenario",
+        EMOJI_SCENARIO, "--body", "THE RULE\n\nUser version.\n\nJUDGED AGAINST\n\nn/a")
+    acc = b.g("accept-rule", "--id", proposed.pid, "--title", EMOJI_RULE_TITLE, "--text", EMOJI_RULE_TEXT)
+    full = b.g("match-rules", EMOJI_SCENARIO, "--full")
+    return SimpleNamespace(brain=b, pid=proposed.pid, acc=acc, rid=acc.get("rule", ""), full=full,
+                           again=b.g("accept-rule", "--id", proposed.pid))
+
+
+class TestAccept:
+    def test_accept_makes_a_learned_rule_at_precedence_50(self, accepted):
+        acc = accepted.acc
+        assert acc.get("ok") and acc.get("source") == "learned" and acc.get("precedence") == 50, acc
+
+    def test_the_rule_now_matches_as_learned(self, accepted):
+        learned = [r for r in accepted.full.get("results", []) if r["id"] == accepted.rid]
+        assert learned, [r["id"] for r in accepted.full.get("results", [])]
+        assert learned[0]["props"]["source"] == "learned"
+        assert learned[0]["props"]["precedence"] == 50
+        assert "Never put emojis" in learned[0]["body"]
+
+    def test_a_user_rule_ranks_above_it(self, accepted):
+        results = accepted.full.get("results", [])
+        ids = [r["id"] for r in results]
+        user_ids = [r["id"] for r in results if r["props"].get("source") == "user"]
+        assert user_ids and ids.index(user_ids[0]) < ids.index(accepted.rid), ids
+
+    def test_the_proposal_is_marked_accepted_and_kept(self, accepted):
+        assert accepted.brain.g("rule-proposals", "--status", "accepted").get("count") == 1
+
+    def test_the_rule_is_linked_to_its_proposal_and_evidence(self, accepted):
+        n = accepted.brain.count("SELECT COUNT(*) FROM edges WHERE src=? AND rel='learned-from'",
+                                 accepted.rid)
+        assert n >= 4
+
+    def test_accepting_twice_is_refused(self, accepted):
+        assert accepted.again.get("ok") is False
+
+
+# ----------------------------------------------------------------------- reject
+class TestReject:
+    @pytest.fixture(scope="class")
+    def release(self, accepted: SimpleNamespace) -> SimpleNamespace:
+        b = accepted.brain
+        before_run = [p for p in b.g("rule-proposals").get("proposals", []) if "release branch" in p["text"]]
+        b.g("propose-rules")
+        after_run = [p for p in b.g("rule-proposals").get("proposals", []) if "release branch" in p["text"]]
+        return SimpleNamespace(brain=b, before=before_run, after=after_run)
+
+    def test_the_release_branch_proposal_does_not_exist_before_a_run(self, release):
+        assert release.before == []
+
+    def test_now_it_is_proposed(self, release):
+        assert len(release.after) == 1
+
+    def test_reject_marks_it_rejected_and_kept(self, release):
+        rej = release.brain.g("reject-rule", "--id", release.after[0]["id"], "--reason", "not a rule")
+        assert rej.get("ok") and rej.get("kept") is True, rej
+
+    def test_a_rejected_cluster_is_not_proposed_again_even_reworded(self, release):
+        b = release.brain
+        b.say("s11", RELEASE_PROMPT_REWORDED)
+        before = b.proposals()
+        run = b.g("propose-rules")
+        assert run.get("proposed") == [], run
+        assert b.proposals() == before
+
+    def test_match_rules_never_returns_a_rejected_proposal(self, release):
+        mr = release.brain.g("match-rules", "release branch commit review", "--full")
+        assert release.after[0]["id"] not in json.dumps(mr)
+
+
+# ------------------------------------------------------------ nothing is deleted
+class TestNothingIsDeleted:
+    def test_every_capture_is_still_there(self, accepted):
+        assert accepted.brain.count("SELECT COUNT(*) FROM nodes WHERE type='capture'") >= 9
+
+    def test_both_proposals_are_still_there(self, accepted):
+        assert accepted.brain.proposals() == 2
+
+
+# ------------------------------------ off again stops the detector, keeps the data
+class TestOffAgain:
+    @pytest.fixture(scope="class")
+    def off(self, accepted: SimpleNamespace) -> Brain:
+        b = accepted.brain
+        b.g("learned-rules", "off")
+        b.say("s12", SQUASH_PROMPT)
+        b.say("s13", SQUASH_PROMPT)
+        return b
+
+    def test_propose_rules_is_a_no_op(self, off):
+        assert off.g("propose-rules").get("ran") is False
+
+    def test_the_proposals_are_still_listed(self, off):
+        assert off.g("rule-proposals", "--status", "all").get("of") == 2
+
+    def test_the_no_env_var_outranks_the_file(self, off):
+        off.g("learned-rules", "on")
+        st = off.g("learned-rules", "status", env={**off.env, NO_LEARNED_VAR: "1"})
+        assert st.get("enabled") is False and st.get("source") == "env"
+
+
+# --------------------------------------------------------- the SessionStart hook
+class TestSessionStartHook:
+    @pytest.fixture(scope="class")
+    def stamp(self, accepted: SimpleNamespace) -> Path:
+        return accepted.brain.home / ".last_learned_rules"
+
+    def test_off_the_hook_stamps_nothing_and_still_emits_valid_json(self, accepted, stamp):
+        accepted.brain.g("learned-rules", "off")
+        hp = accepted.brain.brief()
+        assert not stamp.exists()
+        json.loads(hp.stdout or "{}")
+
+    def test_on_the_hook_stamps_the_day_and_its_stdout_is_still_valid_json(self, accepted, stamp):
+        accepted.brain.g("learned-rules", "on")
+        hp = accepted.brain.brief()
+        assert stamp.exists()
+        json.loads(hp.stdout or "{}")

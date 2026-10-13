@@ -1,67 +1,80 @@
-#!/usr/bin/env python3
 """A brain made from scratch carries the built-in skills, against THROWAWAY homes.
 
-    python3 tests/test_skill_seed.py
+    python -m pytest tests/test_skill_seed.py
 """
 
 from __future__ import annotations
 
 import json
-import os
-import subprocess
-import sys
-import tempfile
+import sqlite3
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
-FAILS: list[str] = []
+NO_SEED_VAR = "SECOND_BRAIN_NO_SKILL_SEED"
+MISSING_SKILL_ID = "skill_recall"
 
 
-def ck(name: str, ok: bool, detail: str = "") -> None:
-    print(("ok   " if ok else "FAIL ") + name + (f"  ({detail})" if detail and not ok else ""))
-    if not ok:
-        FAILS.append(name)
+@pytest.fixture
+def builtin() -> set[str]:
+    return {p.parent.name for p in (ROOT / "skills").glob("*/SKILL.md")}
 
 
-def run(script: str, *args: str, home: str, **env: str) -> subprocess.CompletedProcess:
-    e = {**os.environ, "SECOND_BRAIN_HOME": home, "SECOND_BRAIN_NO_AUTOSYNC": "1"}
-    e.pop("SECOND_BRAIN_NO_SKILL_SEED", None)
-    e.update(env)
-    return subprocess.run([sys.executable, str(ROOT / "scripts" / script), *args],
-                          capture_output=True, text=True, encoding="utf-8", errors="replace", env=e)
+@pytest.fixture
+def seeded(brain_home, run_script):
+    """A fresh home after its first command, plus a `cmd(script, *args)` helper
+    that returns the JSON a script prints."""
+    def cmd(script: str, *args: str, home: Path = brain_home, **env: str | None):
+        r = run_script(script, *args, home=home, env={NO_SEED_VAR: None, **env})
+        return json.loads(r.stdout or "{}")
+    cmd("graph.py", "stats")
+    cmd.home = brain_home
+    return cmd
 
 
-builtin = {p.parent.name for p in (ROOT / "skills").glob("*/SKILL.md")}
+def _drop_skill(home: Path) -> None:
+    con = sqlite3.connect(home / "graph.db")
+    try:
+        con.execute("DELETE FROM nodes WHERE id=?", (MISSING_SKILL_ID,))
+        con.commit()
+    finally:
+        con.close()
 
-home = tempfile.mkdtemp(prefix="second-brain-seed-")
-r = run("graph.py", "stats", home=home)
-st = json.loads(r.stdout or "{}")
-ck("the first command on a fresh home seeds every built-in skill",
-   st.get("by_type", {}).get("skill") == len(builtin), f"{st.get('by_type')} vs {len(builtin)}")
-first = Path(home, "graph.db").stat().st_mtime_ns
-run("graph.py", "stats", home=home)
-ck("an existing brain is not re-seeded on connect", Path(home, "graph.db").stat().st_mtime_ns == first)
 
-init = json.loads(run("graph.py", "init", home=home).stdout or "{}")
-ck("init on a seeded brain is a no-op", init.get("skills", {}).get("ingested") == 0, str(init.get("skills")))
+def test_the_first_command_on_a_fresh_home_seeds_every_builtin_skill(brain_home, run_script, builtin):
+    r = run_script("graph.py", "stats", home=brain_home, env={NO_SEED_VAR: None})
+    by_type = json.loads(r.stdout or "{}").get("by_type", {})
+    assert by_type.get("skill") == len(builtin)
 
-subprocess.run([sys.executable, "-c", "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]);"
-                "c.execute(\"DELETE FROM nodes WHERE id='skill_recall'\"); c.commit()",
-                str(Path(home, "graph.db"))], check=True)
-init = json.loads(run("graph.py", "init", home=home).stdout or "{}")
-ck("init brings back a built-in that is missing",
-   init.get("skills", {}).get("missing") == [] and init["skills"].get("ingested") == 1, str(init.get("skills")))
 
-subprocess.run([sys.executable, "-c", "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]);"
-                "c.execute(\"DELETE FROM nodes WHERE id='skill_recall'\"); c.commit()",
-                str(Path(home, "graph.db"))], check=True)
-doc = json.loads(run("doctor.py", "--json", home=home).stdout or "{}")
-ck("doctor brings it back too, and says so", (doc.get("skills") or {}).get("ingested") == 1, str(doc.get("skills")))
-ck("and the brain is healthy after", doc.get("ok") is True, str(doc.get("problems")))
+def test_an_existing_brain_is_not_reseeded_on_connect(seeded):
+    db = seeded.home / "graph.db"
+    first = db.stat().st_mtime_ns
+    seeded("graph.py", "stats")
+    assert db.stat().st_mtime_ns == first
 
-off = tempfile.mkdtemp(prefix="second-brain-noseed-")
-st = json.loads(run("graph.py", "stats", home=off, SECOND_BRAIN_NO_SKILL_SEED="1").stdout or "{}")
-ck("SECOND_BRAIN_NO_SKILL_SEED=1 leaves a fresh brain empty", not st.get("by_type", {}).get("skill"), str(st))
 
-print(f"\n{len(FAILS)} failed" if FAILS else "\nall passed")
-raise SystemExit(1 if FAILS else 0)
+def test_init_on_a_seeded_brain_is_a_no_op(seeded):
+    assert seeded("graph.py", "init").get("skills", {}).get("ingested") == 0
+
+
+def test_init_brings_back_a_builtin_that_is_missing(seeded):
+    _drop_skill(seeded.home)
+    skills = seeded("graph.py", "init").get("skills", {})
+    assert skills.get("missing") == []
+    assert skills.get("ingested") == 1
+
+
+def test_doctor_brings_it_back_too_and_the_brain_is_healthy(seeded):
+    _drop_skill(seeded.home)
+    doc = seeded("doctor.py", "--json")
+    assert (doc.get("skills") or {}).get("ingested") == 1
+    assert doc.get("ok") is True, doc.get("problems")
+
+
+def test_the_opt_out_leaves_a_fresh_brain_empty(tmp_path, run_script):
+    off = tmp_path / "noseed"
+    off.mkdir()
+    r = run_script("graph.py", "stats", home=off, env={NO_SEED_VAR: "1"})
+    assert not json.loads(r.stdout or "{}").get("by_type", {}).get("skill")

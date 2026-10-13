@@ -1,7 +1,6 @@
-#!/usr/bin/env python3
 """Every text-mode read, write and subprocess names its encoding.
 
-    python3 tests/test_encoding.py
+    python -m pytest tests/test_encoding.py
 
 Python's default text encoding is the locale's. On macOS and Linux that is
 UTF-8 and nothing shows; on Windows it is cp1252 (or another ANSI code page),
@@ -25,25 +24,31 @@ import ast
 import sys
 from pathlib import Path
 
+import _textio
+
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "scripts"))
+UTF8 = "utf-8"
+SOURCE_DIRS = ("scripts", "hooks", "services", "tests")
+SKIPPED_PARTS = ("node_modules", "__pycache__")
+PRE_COMMIT_HOOK = ROOT / ".githooks" / "pre-commit"
 
-FAILS: list[str] = []
-
-
-def ck(name: str, ok: bool) -> None:
-    print(("ok   " if ok else "FAIL ") + name)
-    if not ok:
-        FAILS.append(name)
+# what the checker must flag, and what it must let through
+PROBE_SOURCE = (
+    'subprocess.run(["x"], text=True)\n'
+    'open("f")\n'
+    'open("f", "rb")\n'
+    'Path("f").read_text()\n'
+    'Path("f").write_text("x", encoding="utf-8")\n'
+    'subprocess.run(["x"], text=True, encoding="utf-8")\n'
+)
+PROBE_FLAGGED = 3
 
 
 def sources() -> list[Path]:
-    files = [p for d in ("scripts", "hooks", "services", "tests")
-             for p in (ROOT / d).rglob("*.py")
-             if "node_modules" not in p.parts and "__pycache__" not in p.parts]
-    hook = ROOT / ".githooks" / "pre-commit"
-    if hook.is_file():
-        files.append(hook)
+    files = [p for d in SOURCE_DIRS for p in (ROOT / d).rglob("*.py")
+             if not any(part in p.parts for part in SKIPPED_PARTS)]
+    if PRE_COMMIT_HOOK.is_file():
+        files.append(PRE_COMMIT_HOOK)
     return sorted(files)
 
 
@@ -69,16 +74,18 @@ def _text_mode_open(call: ast.Call) -> bool:
     return False  # a computed mode: cannot tell, do not guess
 
 
-def findings(path: Path) -> list[str]:
+def findings(path: Path, label_root: Path = ROOT) -> list[str]:
     try:
-        tree = ast.parse(path.read_text(encoding="utf-8"), str(path))
+        tree = ast.parse(path.read_text(encoding=UTF8), str(path))
+    except FileNotFoundError:  # a scratch file that went away since the walk
+        return []
     except SyntaxError as e:
-        return [f"{path.relative_to(ROOT)}: does not parse ({e})"]
+        return [f"{path.relative_to(label_root)}: does not parse ({e})"]
     out = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call) or _kw(node, "encoding"):
             continue
-        where = f"{path.relative_to(ROOT)}:{node.lineno}"
+        where = f"{path.relative_to(label_root)}:{node.lineno}"
         f = node.func
         if _true(_kw(node, "text")) or _true(_kw(node, "universal_newlines")):
             out.append(f"{where}: text=True without encoding=")
@@ -93,34 +100,31 @@ def findings(path: Path) -> list[str]:
     return out
 
 
-every = [x for p in sources() for x in findings(p)]
-for x in every[:60]:
-    print("   " + x)
-ck(f"no text-mode I/O without an explicit encoding ({len(every)} found)", not every)
+def test_text_mode_io_names_its_encoding():
+    every = [x for p in sources() for x in findings(p)]
+    assert not every, f"{len(every)} found:\n" + "\n".join(every[:60])
 
-# the checker itself catches what it claims to
-probe = ast.parse('subprocess.run(["x"], text=True)\nopen("f")\nopen("f", "rb")\n'
-                  'Path("f").read_text()\nPath("f").write_text("x", encoding="utf-8")\n'
-                  'subprocess.run(["x"], text=True, encoding="utf-8")\n')
-tmp = ROOT / "tests" / "__encoding_probe__.py"
-try:
-    tmp.write_text(ast.unparse(probe), encoding="utf-8")
-    got = findings(tmp)
-finally:
-    tmp.unlink(missing_ok=True)
-ck("the checker flags text=True, a bare open() and a bare read_text()", len(got) == 3)
 
-# the helper: a child printing bytes that are not UTF-8 does not crash the reader
-import _textio  # noqa: E402
+def test_the_checker_flags_text_true_a_bare_open_and_a_bare_read_text(tmp_path):
+    probe = tmp_path / "probe.py"
+    probe.write_text(ast.unparse(ast.parse(PROBE_SOURCE)), encoding=UTF8)
+    assert len(findings(probe, tmp_path)) == PROBE_FLAGGED
 
-r = _textio.run_text([sys.executable, "-c",
-                      "import sys; sys.stdout.buffer.write(b'caf\\xc3\\xa9 \\x81 ok')"])
-ck("run_text decodes UTF-8 and replaces an invalid byte", r.stdout == "café � ok")
-r = _textio.run_text([sys.executable, "-c", "import sys; print(sys.flags.utf8_mode, sys.stdout.encoding)"])
-ck("run_text's child runs in UTF-8 mode", r.stdout.split() == ["1", "utf-8"])
-env = _textio.child_env({"X": "1"})
-ck("child_env sets PYTHONUTF8 and PYTHONIOENCODING and keeps the caller's vars",
-   env["PYTHONUTF8"] == "1" and env["PYTHONIOENCODING"] == "utf-8" and env["X"] == "1")
 
-print(f"\n{len(FAILS)} failed" if FAILS else "\nall passed")
-raise SystemExit(1 if FAILS else 0)
+def test_run_text_decodes_utf8_and_replaces_an_invalid_byte():
+    r = _textio.run_text([sys.executable, "-c",
+                          "import sys; sys.stdout.buffer.write(b'caf\\xc3\\xa9 \\x81 ok')"])
+    assert r.stdout == "café � ok"
+
+
+def test_run_text_child_runs_in_utf8_mode():
+    r = _textio.run_text([sys.executable, "-c",
+                          "import sys; print(sys.flags.utf8_mode, sys.stdout.encoding)"])
+    assert r.stdout.split() == ["1", "utf-8"]
+
+
+def test_child_env_sets_utf8_and_keeps_the_callers_vars():
+    env = _textio.child_env({"X": "1"})
+    assert env["PYTHONUTF8"] == "1"
+    assert env["PYTHONIOENCODING"] == "utf-8"
+    assert env["X"] == "1"

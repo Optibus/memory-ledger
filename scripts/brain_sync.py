@@ -252,40 +252,49 @@ def build_restore(target: Path, m: dict, upto: int = 0) -> dict:
     """Write the master's state into a brand-new database at `target`. `upto` is
     the master's clock read BEFORE the state was, so the new file's first sync
     pulls anything written while the restore ran."""
-    for prefix in ("MEMORY_LEDGER_", "SECOND_BRAIN_"):
-        os.environ[prefix + "DB"] = str(target)
-    import trigger                        # creates the trigger_* tables on db()
-    con = trigger.db()
-    con.executemany(
-        "INSERT OR REPLACE INTO nodes(id,type,title,body,props,status,due,realm,created,updated)"
-        " VALUES(?,?,?,?,?,?,?,?,?,?)", [_node_row(p) for p in m["nodes"]])
-    ids = {p["id"] for p in m["nodes"]}
-    edges = [_edge_row(s, d, p) for s, d, p in m["edges"] if s in ids and d in ids]
-    con.executemany("INSERT OR IGNORE INTO edges(src,dst,rel,props,created) VALUES(?,?,?,?,?)",
-                    edges)
-    rows = 0
-    for table, key, data in m["rows"]:
-        if table not in graph.MIRROR_TABLES:
-            continue
-        cols = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
-        d = {k: v for k, v in json.loads(data).items() if k in cols}
-        if d:
-            con.execute(f"INSERT OR REPLACE INTO {table}({', '.join(d)}) "
-                        f"VALUES({', '.join('?' * len(d))})", list(d.values()))
-            rows += 1
-    graph._rebuild_blocked(con)
-    # every insert above queued itself for the master it came from; drop that
-    con.execute("DELETE FROM outbox")
-    graph._sync_set(con, "pull_seq", upto)
-    for path, _content, sha in m["files"]:
-        graph._sync_set(con, "file:" + path, sha)
-    con.commit()
-    check = con.execute("PRAGMA integrity_check").fetchone()[0]
-    counts = {"nodes": con.execute("SELECT COUNT(*) FROM nodes").fetchone()[0],
-              "edges": con.execute("SELECT COUNT(*) FROM edges").fetchone()[0],
-              "rows": rows, "integrity": check}
-    con.close()
-    return counts
+    keys = ("MEMORY_LEDGER_DB", "SECOND_BRAIN_DB")
+    saved = {k: os.environ.get(k) for k in keys}
+    for k in keys:
+        os.environ[k] = str(target)
+    try:
+        import trigger                        # creates the trigger_* tables on db()
+        con = trigger.db()
+        con.executemany(
+            "INSERT OR REPLACE INTO nodes(id,type,title,body,props,status,due,realm,created,updated)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?)", [_node_row(p) for p in m["nodes"]])
+        ids = {p["id"] for p in m["nodes"]}
+        edges = [_edge_row(s, d, p) for s, d, p in m["edges"] if s in ids and d in ids]
+        con.executemany("INSERT OR IGNORE INTO edges(src,dst,rel,props,created) VALUES(?,?,?,?,?)",
+                        edges)
+        rows = 0
+        for table, key, data in m["rows"]:
+            if table not in graph.MIRROR_TABLES:
+                continue
+            cols = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
+            d = {k: v for k, v in json.loads(data).items() if k in cols}
+            if d:
+                con.execute(f"INSERT OR REPLACE INTO {table}({', '.join(d)}) "
+                            f"VALUES({', '.join('?' * len(d))})", list(d.values()))
+                rows += 1
+        graph._rebuild_blocked(con)
+        # every insert above queued itself for the master it came from; drop that
+        con.execute("DELETE FROM outbox")
+        graph._sync_set(con, "pull_seq", upto)
+        for path, _content, sha in m["files"]:
+            graph._sync_set(con, "file:" + path, sha)
+        con.commit()
+        check = con.execute("PRAGMA integrity_check").fetchone()[0]
+        counts = {"nodes": con.execute("SELECT COUNT(*) FROM nodes").fetchone()[0],
+                  "edges": con.execute("SELECT COUNT(*) FROM edges").fetchone()[0],
+                  "rows": rows, "integrity": check}
+        con.close()
+        return counts
+    finally:                              # the new file is for this call only
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
 
 def restore_files(home: Path, files, overwrite: bool) -> list[str]:

@@ -384,7 +384,7 @@ python3 scripts/graph.py list --type conversation --all --limit 3   # the tree's
 Run the traceability tests any time (a throwaway brain in a temp dir — it never
 touches `~/.second_brain`):
 ```
-python3 tests/test_traceability.py
+python3 -m pytest tests/test_traceability.py   # needs pytest: python3 -m pip install pytest
 ```
 
 ## No repo access? Install from a zip
