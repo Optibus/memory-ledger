@@ -140,6 +140,31 @@ def test_config_and_prompt():
 
 
 # ---------------------------------------------------------------- socket
+def test_engines():
+    print("\n== TTS engines: one per platform, with a fallback chain ==")
+    ck("each platform starts with its own engine",
+       voice.engine_chain("darwin")[0] == "say" and voice.engine_chain("win32")[0] == "sapi"
+       and voice.engine_chain("linux")[0] == "espeak-ng")
+    ck("Piper is in every chain", all("piper" in voice.engine_chain(p) for p in ("darwin", "win32", "linux")))
+    ck("an unknown platform gets the Linux chain", voice.engine_chain("freebsd14") == voice.engine_chain("linux"))
+    ck("every engine in a chain is registered",
+       all(n in voice.ENGINES for p in voice.CHAINS for n in voice.CHAINS[p]))
+    saved = os.environ.get("BRAIN_TTS_ENGINE")
+    try:
+        os.environ["BRAIN_TTS_ENGINE"] = "piper"
+        ck("$BRAIN_TTS_ENGINE picks the engine", voice.engine().name == "piper")
+        os.environ["BRAIN_TTS_ENGINE"] = "nope"
+        ck("an unknown $BRAIN_TTS_ENGINE falls back to the chain", voice.engine().name in voice.engine_chain())
+    finally:
+        if saved is None:
+            os.environ.pop("BRAIN_TTS_ENGINE", None)
+        else:
+            os.environ["BRAIN_TTS_ENGINE"] = saved
+    if os.name != "nt":
+        ck("SAPI says why it cannot speak off Windows", "Windows" in voice.SapiEngine().problem())
+    ck("the Python search starts with this interpreter", voice._python_candidates()[0] == (sys.executable,))
+
+
 def ws_connect(port: int, path: str) -> socket.socket:
     s = socket.create_connection(("127.0.0.1", port), timeout=20)
     key = base64.b64encode(os.urandom(16)).decode()
@@ -281,6 +306,7 @@ if __name__ == "__main__":
     test_clean()
     test_segmenter()
     test_config_and_prompt()
+    test_engines()
     test_socket()
     print("\n" + ("FAILED: " + ", ".join(FAILS) if FAILS else "all passed"))
     sys.exit(1 if FAILS else 0)

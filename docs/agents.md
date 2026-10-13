@@ -287,8 +287,9 @@ Messages: client `start {language: "pt"|"auto"}`, binary frames, `stop`, `cancel
 server `ready`, `partial`, `final`, `language_detected`, `stopped`, `error`.
 
 **STT runs outside the server's environment.** `scripts/stt_worker.py` is a child process
-under a Python that has `faster-whisper` (`$BRAIN_VOICE_PYTHON`, else the first
-`python3` that can import it), so the server's venv gains only `websockets`. The model is
+under a Python that has `faster-whisper` (`$BRAIN_VOICE_PYTHON`, else the first that can
+import it of: the server's own Python, `py -3` on Windows, `python3`/`python` on PATH, and
+the usual `/usr/bin`, Homebrew and `/usr/local` ones), so the server's venv gains only `websockets`. The model is
 `$BRAIN_STT_MODEL` (default `medium`; `$BRAIN_STT_DEVICE`, `$BRAIN_STT_COMPUTE` for a GPU),
 loaded on the first session and kept. The first load downloads the model: it needs the
 network once. A load failure comes back as an `error` on the socket and in Settings.
@@ -296,8 +297,12 @@ network once. A load failure comes back as an `error` on the socket and in Setti
 **Speech.** `POST /api/voice-speak` cleans the block (markdown, code, URLs, long paths,
 emoji out; nothing left is a 204), picks the language (a stopword vote per block, the
 default when unsure) and the voice, and answers a WAV. The engine is a `TTSEngine`
-(`scripts/voice.py`); the shipped one is macOS `say` + ffmpeg. A Piper or Kokoro engine is
-one more subclass in `ENGINES` (`$BRAIN_TTS_ENGINE`). The browser keeps **one global FIFO
+(`scripts/voice.py`). Shipped: `say` (macOS, + ffmpeg for the WAV), `sapi` (the Windows
+voices, through PowerShell's System.Speech), `espeak-ng` (Linux, or `espeak`) and `piper`
+(`pip install piper-tts` and a voice, on any OS). `$BRAIN_TTS_ENGINE` names one; otherwise
+the first that can speak here wins, in the platform's order (`voice.CHAINS`: macOS
+say → piper → espeak-ng, Windows sapi → piper, Linux espeak-ng → piper), and when none can,
+Settings shows what the first one needs. Another engine is one more subclass in `ENGINES`. The browser keeps **one global FIFO
 queue** (`voice/speech.ts`): each block is synthesised the moment it is queued, so the
 next is ready when the current one ends. **Stop speaking** cuts the audio and clears the
 queue and never touches the agent. By default only the open chat speaks; with

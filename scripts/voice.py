@@ -280,21 +280,34 @@ def _worker_script() -> Path:
     return Path(os.environ.get("BRAIN_STT_WORKER") or Path(__file__).with_name("stt_worker.py"))
 
 
-def _voice_python() -> str:
-    """A Python that can import faster-whisper, or "" when none can."""
+def _python_candidates() -> list[tuple[str, ...]]:
+    """Pythons to try, as argv prefixes: this one first, then `py -3` (the
+    Windows launcher), then python3/python on PATH, then the usual POSIX places."""
+    cands: list[tuple[str, ...]] = [(sys.executable,)] if sys.executable else []
+    if _platform.WINDOWS and shutil.which("py"):
+        cands.append((shutil.which("py") or "py", "-3"))
+    for name in ("python3", "python"):
+        if shutil.which(name):
+            cands.append((shutil.which(name) or name,))
+    if not _platform.WINDOWS:
+        cands += [(c,) for c in ("/usr/bin/python3", "/opt/homebrew/bin/python3",
+                                 "/usr/local/bin/python3") if Path(c).exists()]
+    return list(dict.fromkeys(cands))
+
+
+def _voice_python() -> list[str]:
+    """argv prefix of a Python that can import faster-whisper, or [] when none can."""
     if os.environ.get("BRAIN_STT_WORKER"):
-        return sys.executable
+        return [sys.executable]
     want = os.environ.get("BRAIN_VOICE_PYTHON", "").strip()
-    cands = [want] if want else [sys.executable, shutil.which("python3") or "", "/usr/bin/python3",
-                                 "/opt/homebrew/bin/python3", "/usr/local/bin/python3"]
-    for py in dict.fromkeys(c for c in cands if c):
+    for py in [(want,)] if want else _python_candidates():
         try:
-            if subprocess.run([py, "-c", "import faster_whisper, numpy"], capture_output=True,
-                              timeout=60).returncode == 0:
-                return py
+            if subprocess.run([*py, "-c", "import faster_whisper, numpy"], capture_output=True,
+                              stdin=subprocess.DEVNULL, timeout=60).returncode == 0:
+                return list(py)
         except (OSError, subprocess.SubprocessError):
             continue
-    return ""
+    return []
 
 
 class SttWorker:
@@ -313,7 +326,7 @@ class SttWorker:
             raise SttError("no Python with faster-whisper found: pip install faster-whisper, "
                            "or set $BRAIN_VOICE_PYTHON")
         self.proc = _platform.track(subprocess.Popen(
-            [py, str(_worker_script())], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            [*py, str(_worker_script())], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL, env=_textio.child_env(), **_platform.group_kwargs()))
         return self.proc
 
@@ -472,11 +485,128 @@ class PiperEngine(TTSEngine):
             return Path(wav).read_bytes(), "audio/wav"
 
 
-ENGINES: dict[str, type[TTSEngine]] = {"say": SayEngine, "piper": PiperEngine}
+class SapiEngine(TTSEngine):
+    """Windows' own voices (SAPI, through PowerShell's System.Speech), which
+    write WAV themselves. The text goes in on stdin and the voice and output
+    path through the environment, so nothing is quoted into a command."""
+    name = "sapi"
+    LOCALES = {"pt": ("pt-BR", "pt-PT"), "en": ("en-US", "en-GB"), "es": ("es-ES", "es-MX"),
+               "it": ("it-IT",)}
+    _LIST = ("Add-Type -AssemblyName System.Speech;"
+             "[Console]::OutputEncoding = [Text.Encoding]::UTF8;"
+             "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer;"
+             "foreach ($v in $s.GetInstalledVoices()) { if ($v.Enabled) {"
+             " $i = $v.VoiceInfo; [Console]::Out.WriteLine($i.Name + \"`t\" + $i.Culture.Name) } }")
+    _SPEAK = ("Add-Type -AssemblyName System.Speech;"
+              "[Console]::InputEncoding = [Text.Encoding]::UTF8;"
+              "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer;"
+              "if ($env:BRAIN_TTS_VOICE) { $s.SelectVoice($env:BRAIN_TTS_VOICE) };"
+              "$s.SetOutputToWaveFile($env:BRAIN_TTS_OUT);"
+              "$s.Speak([Console]::In.ReadToEnd()); $s.Dispose()")
+
+    def _ps(self) -> list[str]:
+        ps = _platform.powershell()
+        return [ps, "-NoProfile", "-NonInteractive", "-Command"] if ps else []
+
+    def problem(self) -> str:
+        if not _platform.WINDOWS:
+            return "SAPI voices exist only on Windows"
+        if not self._ps():
+            return "PowerShell is needed to reach the Windows voices"
+        return ""
+
+    def voices(self) -> list[dict[str, str]]:
+        if self.problem():
+            return []
+        try:
+            out = _textio.run_text([*self._ps(), self._LIST], stdin=subprocess.DEVNULL,
+                                   timeout=30).stdout
+        except (OSError, subprocess.SubprocessError):
+            return []
+        found = []
+        for line in out.splitlines():
+            name, _, culture = line.strip().partition("\t")
+            for lang, locs in self.LOCALES.items():
+                if culture in locs:
+                    found.append({"id": name, "name": name, "language": lang})
+        return found
+
+    def synth(self, text: str, language: str, voice: str) -> tuple[bytes, str]:
+        if not voice:
+            voice = next((v["id"] for v in self.voices() if v["language"] == language), "")
+        with tempfile.TemporaryDirectory(prefix="brain-tts-") as d:
+            wav = os.path.join(d, "s.wav")
+            r = _textio.run_text([*self._ps(), self._SPEAK], input=text[:4000], timeout=120,
+                                 env={**os.environ, "BRAIN_TTS_OUT": wav, "BRAIN_TTS_VOICE": voice})
+            if r.returncode != 0 or not Path(wav).exists():
+                raise RuntimeError(r.stderr.strip()[:300] or "the Windows voice failed")
+            return Path(wav).read_bytes(), "audio/wav"
+
+
+class EspeakEngine(TTSEngine):
+    """espeak-ng (or espeak), the Linux standard: offline, robotic, writes WAV itself."""
+    name = "espeak-ng"
+    LOCALES = {"pt": ("pt-br", "pt-BR", "pt"), "en": ("en-us", "en-US", "en"),
+               "es": ("es", "es-419"), "it": ("it",)}
+
+    def _bin(self) -> str:
+        return shutil.which("espeak-ng") or shutil.which("espeak") or ""
+
+    def problem(self) -> str:
+        return "" if self._bin() else "espeak-ng is not installed (apt install espeak-ng)"
+
+    def voices(self) -> list[dict[str, str]]:
+        if self.problem():
+            return []
+        try:
+            out = _textio.run_text([self._bin(), "--voices"], stdin=subprocess.DEVNULL,
+                                   timeout=30).stdout
+        except (OSError, subprocess.SubprocessError):
+            return []
+        have = {parts[1] for parts in (ln.split() for ln in out.splitlines()[1:]) if len(parts) > 1}
+        found = []
+        for lang, locs in self.LOCALES.items():
+            v = next((loc for loc in locs if loc in have), "")
+            if v:
+                found.append({"id": v, "name": v, "language": lang})
+        return found
+
+    def synth(self, text: str, language: str, voice: str) -> tuple[bytes, str]:
+        if not voice:
+            voice = next((v["id"] for v in self.voices() if v["language"] == language),
+                         self.LOCALES.get(language, ("en",))[0])
+        with tempfile.TemporaryDirectory(prefix="brain-tts-") as d:
+            wav = os.path.join(d, "s.wav")
+            r = subprocess.run([self._bin(), "-v", voice, "-b", "1", "-w", wav, "--stdin"],
+                               input=text[:4000].encode("utf-8"), capture_output=True, timeout=120)
+            if r.returncode != 0 or not Path(wav).exists():
+                raise RuntimeError(r.stderr.decode("utf-8", errors="replace").strip() or "espeak-ng failed")
+            return Path(wav).read_bytes(), "audio/wav"
+
+
+ENGINES: dict[str, type[TTSEngine]] = {"say": SayEngine, "piper": PiperEngine,
+                                       "sapi": SapiEngine, "espeak-ng": EspeakEngine}
+
+# The engines to try, in order, when $BRAIN_TTS_ENGINE does not name one: the
+# platform's own first, then Piper, which runs everywhere it is installed.
+CHAINS = {"darwin": ("say", "piper", "espeak-ng"), "win32": ("sapi", "piper"),
+          "linux": ("espeak-ng", "piper")}
+
+
+def engine_chain(platform: str | None = None) -> tuple[str, ...]:
+    platform = platform or sys.platform
+    return CHAINS.get(platform) or CHAINS["linux"]
 
 
 def engine() -> TTSEngine:
-    return ENGINES.get(os.environ.get("BRAIN_TTS_ENGINE", "say"), SayEngine)()
+    """$BRAIN_TTS_ENGINE when it names an engine; otherwise the first in this
+    platform's chain that can speak here, else the chain's first (whose
+    problem() then says what to install)."""
+    want = os.environ.get("BRAIN_TTS_ENGINE", "").strip()
+    if want in ENGINES:
+        return ENGINES[want]()
+    chain = [ENGINES[n]() for n in engine_chain()]
+    return next((e for e in chain if not e.problem()), chain[0])
 
 
 def speak_language(text: str, cfg: dict[str, Any]) -> str:
