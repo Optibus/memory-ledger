@@ -2765,3 +2765,8 @@ def test_a_good_wake_phrase_is_kept_its_spaces_tidied(home):
     assert res["ok"], str(res)[:300]
     assert res["config"]["meeting"]["phrases"][0]["phrase"] == "{brain} will handle"
     assert res["config"]["meeting"]["enabled"] is True
+
+
+def test_http_raw_invalid_url_is_a_trigger_error():
+    with pytest.raises(trigger.TriggerError):
+        trigger.http_raw("GET", "http://127.0.0.1/a\x00b", timeout=3)

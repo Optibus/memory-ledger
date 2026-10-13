@@ -12,6 +12,7 @@ drains, a restore rebuilds, a pull brings changes down.
 
 from __future__ import annotations
 
+import os
 import json
 import sqlite3
 from collections.abc import Iterator
@@ -160,13 +161,9 @@ class TestRestore:
         }
         target = home / "restored.db"
         live_path = graph.db_path()
-        # build_restore points $SECOND_BRAIN_DB / $MEMORY_LEDGER_DB at the new file for
-        # the rest of its process; undo that so it cannot leak into other suites
-        with pytest.MonkeyPatch.context() as mp:
-            for var in DB_VARS:
-                mp.setenv(var, "")
-                mp.delenv(var)
-            counts = brain_sync.build_restore(target, master)
+        before = {v: os.environ.get(v) for v in DB_VARS}
+        counts = brain_sync.build_restore(target, master)
+        assert {v: os.environ.get(v) for v in DB_VARS} == before
         live = sqlite3.connect(str(live_path))
         copy = sqlite3.connect(str(target))
         yield SimpleNamespace(paths={f["path"] for f in files}, master=master, counts=counts,

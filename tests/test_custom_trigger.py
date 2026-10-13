@@ -847,6 +847,11 @@ def test_http_raw_failures_are_block_errors_without_the_query(brain_home):
     assert SENTINEL not in str(e.value)
 
 
+def test_http_raw_invalid_url_is_a_block_error(brain_home):
+    with pytest.raises(blocks.BlockError):
+        blocks.http_raw("GET", "http://127.0.0.1/a\x00b", timeout=3)
+
+
 # ---- transform
 def run_transform(prev, **block):
     seen = {}
