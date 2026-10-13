@@ -3,8 +3,9 @@
 Everything that decides, logs and dispatches is in `scripts/trigger.py`, which
 is stdlib. This module only owns what the server has and the engine may not:
 the Slack Socket Mode websocket (`slack_sdk`), the Jira, GitHub and B2B poll loops
-(docs/b2b.md), and the pool the headless sessions run on — so several mentions run at once
-without a watcher waiting on any of them.
+(docs/b2b.md), the custom triggers' scheduler (`custom_trigger.py`), and the pool
+the headless sessions run on — so several mentions run at once without a watcher
+waiting on any of them.
 
 Started from the app's lifespan when `state.TRIGGERS` is set, which `serve.py`
 leaves off under `--no-trigger` and `--no-write`: a read-only server must not
@@ -19,6 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 import b2b
+import custom_trigger
 import trigger
 
 log = trigger.log
@@ -28,6 +30,9 @@ log = trigger.log
 # moment of a crash is still inside the next catch-up window.
 SLACK_HEARTBEAT_S = 30
 SLACK_TRAIL_S = 120
+# How often the scheduler looks for a custom trigger that is due. Each trigger
+# keeps its own interval; this is only how late a due one can start.
+CUSTOM_TICK_S = 15
 
 _lock = threading.Lock()
 # Serialises start / stop / restart: two saves from the page at once must not
@@ -40,7 +45,7 @@ _pool: ThreadPoolExecutor | None = None
 _slack_client = None
 STATE: dict = {"running": False, "reason": "not started", "started_at": "",
                "slack": {"state": "off"}, "jira": {"state": "off"}, "github": {"state": "off"},
-               "b2b": {"state": "off"}, "recovered": {}}
+               "b2b": {"state": "off"}, "custom": {"state": "off"}, "recovered": {}}
 
 
 def _now() -> str:
@@ -68,6 +73,8 @@ def _summary(cfg: dict, workers: int) -> str:
             continue
         every = (cfg.get(src) or {}).get("poll_seconds")
         on.append(f"{src} (poll {every}s)" if src != "slack" and every else src)
+    if trigger.source_enabled(cfg, "custom"):
+        on.append("custom triggers")
     return (f"sources: {', '.join(on) or 'none'}; up to {workers} sessions at once; "
             f"log: {trigger.log_path()}")
 
@@ -127,7 +134,7 @@ def _start(recovering: bool) -> None:
     trigger.setup_logging()
     cfg = trigger.load_config()
     STATE.update(slack={"state": "off"}, jira={"state": "off"}, github={"state": "off"},
-                 b2b={"state": "off"})
+                 b2b={"state": "off"}, custom={"state": "off"})
     if not cfg.get("enabled") or cfg.get("_problem"):
         STATE.update(running=False, reason=cfg.get("_problem") or "triggers are switched off")
         log.info("triggers not running: %s", STATE["reason"])
@@ -147,6 +154,9 @@ def _start(recovering: bool) -> None:
     if trigger.source_enabled(cfg, "github"):
         threading.Thread(target=_github_loop, args=(cfg, _stop), daemon=True,
                          name="trigger-github").start()
+    if trigger.source_enabled(cfg, "custom"):
+        threading.Thread(target=_custom_loop, args=(cfg, _stop), daemon=True,
+                         name="trigger-custom").start()
     b2b_cfg = b2b.load_config()
     if b2b.active(b2b_cfg):
         # Its own file and switch, under the same master switch: a message
@@ -229,6 +239,25 @@ def _github_loop(cfg: dict, stop_event: threading.Event) -> None:
         except Exception as e:
             _note("github", state="erroring", last_error=str(e)[:300])
         stop_event.wait(every)
+
+
+# ---------------------------------------------------------------- custom
+def _custom_loop(cfg: dict, stop_event: threading.Event, tick: float = CUSTOM_TICK_S) -> None:
+    """Every `tick`, run each enabled custom trigger that is due, one after
+    the other. The files are read on every pass, so an edit or an enable
+    counts without a restart; a broken one is noted in its own state and
+    skipped, and the loop goes on."""
+    _note("custom", state="scheduling", every_s=tick)
+    while not stop_event.is_set():
+        try:
+            ran = custom_trigger.run_due(cfg, _dispatch)
+            errors = [f"{r['id']}: {r.get('error')}" for r in ran if r.get("status") == "error"]
+            _note("custom", state="scheduling", last_ok=_now(),
+                  last_error="; ".join(errors)[:300],
+                  last={"ran": len(ran), "tasks": sum(len(r.get("created") or []) for r in ran)})
+        except Exception as e:
+            _note("custom", state="erroring", last_error=str(e)[:300])
+        stop_event.wait(tick)
 
 
 # ---------------------------------------------------------------- b2b

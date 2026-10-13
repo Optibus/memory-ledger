@@ -174,6 +174,7 @@ off switch, since the bootstrap hook recreates it on the next session; see
 | `delegate` | Hand a task to a person/agent and track the follow-up. |
 | `writing-style` | Learn your voice and write as you, in your language, at the register the reader can act on. |
 | `export-memory` | Dump the whole graph to Markdown / JSON. |
+| `custom-trigger-builder` | Build a custom trigger with you: a poll written as blocks that starts a task when it finds something ([custom triggers](docs/trigger.md#custom-triggers)). |
 | `respond` | Answer a Slack, Jira or GitHub mention as you (or act on a GitHub PR change you subscribed to, or a [B2B](docs/b2b.md) message from a peer brain), from a headless session the trigger engine starts ([triggers](docs/trigger.md)). |
 
 **Every skill is a contract, not a script** (CONVENTIONS §5). Each one declares

@@ -27,7 +27,7 @@ CAPTURE        RECALL          STATE            OUTWARD            META
   │              │               │                │                  │
 remember       recall         add-task         send-slack        learn-skill
 ingest-context visualize      complete-task     calendar          writing-style
-read-email     export-memory  follow-up         delegate
+read-email     export-memory  follow-up         delegate          custom-trigger-builder
                                                 respond
 read-jira                     remind
 slack-inbox
@@ -45,6 +45,7 @@ share is the graph, so the real coupling is in the read and write surfaces below
 | `add-task` | `task`, `subtask`, `has-subtask`, `assigned-to`, `part-of`, `blocked-by` | `search`, `list`, `areas` |
 | `calendar` | `meeting` (optional), `relates-to` | Google Calendar, `task` props, `person.tz` |
 | `complete-task` | status `done` via `complete` | `search`, `list --type task` |
+| `custom-trigger-builder` | none in the graph: one file, `<home>/triggers/<id>.yaml`, saved off | `trigger.py custom`, `<home>/scripts`, the names in `custom.secrets` |
 | `delegate` | `assigned-to`, `props.state`, `waiting_on` | `person`, `task` |
 | `document-html`, `document-md`, `document-pdf`, `document-txt` | one file under `<home>/exports/documents/`; optionally a `note` (`Document style - <format>`) | the `Document style` note, `recall` |
 | `export-memory` | none (files only) | the whole graph |
@@ -70,6 +71,7 @@ skill offers, not a precondition it waits on.
 
 - `add-task` offers `remind` when the task is time-bound.
 - `complete-task` offers `learn-skill` when finishing revealed a repeatable procedure.
+- `custom-trigger-builder` enriches the trigger through `recall`; the tasks the trigger starts later are run by the trigger engine, through `respond`.
 - `delegate` reaches the owner through `send-slack` and sets the check-back through `remind`.
 - `follow-up` reaches a stalled owner through `send-slack`.
 - `read-email`, `slack-inbox` and `read-jira` hand ingestible content to `ingest-context`.
