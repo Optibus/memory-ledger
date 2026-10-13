@@ -76,6 +76,46 @@ class TestTrack:
         assert _graph(env, "track", "--id", tid, "--system", " ", "--ref", "c")["ok"] is False
 
 
+    def test_untracking_a_never_tracked_node_changes_nothing(self, env):
+        tid = _add_task(env, "Never claimed")
+        before = _graph(env, "list", "--type", "task")["results"][0]["updated"]
+        res = _graph(env, "untrack", "--id", tid)
+        assert res["ok"] is True and "tracked_by" not in res["node"]["props"]
+        assert res["node"]["updated"] == before
+
+    def test_a_different_board_taking_over_resets_since(self, env):
+        tid = _add_task(env, "Send the recap document")
+        first = _graph(env, "track", "--id", tid, "--system", BOARD, "--ref", "c")
+        since = first["node"]["props"]["tracked_by"]["since"]
+        with_other = _graph(env, "track", "--id", tid, "--system", "another-board", "--ref", "x")
+        claim = with_other["node"]["props"]["tracked_by"]
+        assert claim["system"] == "another-board"
+        assert claim["since"] >= since and claim["ref"] == "x"
+        # same-second runs can tie, so also prove the claim was rebuilt, not copied
+        assert set(claim) == {"system", "ref", "url", "since"}
+
+
+MALFORMED = ['"just-a-string"', "{}", "null"]
+
+
+class TestMalformedClaims:
+    """Only a dict with a non-empty `system` is a claim; python and SQL agree."""
+
+    @pytest.mark.parametrize("raw", MALFORMED)
+    def test_a_malformed_claim_counts_as_untracked_everywhere(self, env, raw):
+        tid = _add_task(env, "Odd claim")
+        _graph(env, "update-node", "--id", tid, "--props", '{"tracked_by": %s}' % raw)
+        free = _graph(env, "list", "--type", "task", "--status", "open", "--untracked")
+        assert [r["id"] for r in free["results"]] == [tid]
+        held = _graph(env, "list", "--type", "task", "--tracked-by", "just-a-string")
+        assert held["results"] == []
+        held = _graph(env, "list", "--type", "task", "--tracked-by", BOARD)
+        assert held["results"] == []
+        loops = _graph(env, "open-loops")
+        assert [r["id"] for r in loops["results"]] == [tid]
+        assert loops["tracked"] == {}
+
+
 class TestListFilters:
     def test_untracked_and_tracked_by(self, env):
         a = _add_task(env, "Claimed task")
@@ -136,3 +176,4 @@ class TestBrief:
         _graph(env, "track", "--id", a, "--system", BOARD, "--ref", "card-a")
         text = self._brief(env)
         assert "no open loops" in text and f"1 in {BOARD}" in text
+        assert "Tracked elsewhere" in text

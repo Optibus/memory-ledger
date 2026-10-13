@@ -144,6 +144,9 @@ python3 scripts/graph.py untrack --id <id>
 the open-loops brief, is counted in one line instead, and the board reports
 back with `complete`, `update-node --status cancelled` or `update-node --due`.
 
+`open-loops` `count`, `by_kind` and `by_priority` exclude tracked loops unless you
+pass `--include-tracked`; the `tracked` map counts them per board.
+
 `--props` merges rather than replaces. `--area` adds the `part-of` edge to a
 domain hub and errors if the hub does not exist, so a typo cannot silently
 orphan a node.

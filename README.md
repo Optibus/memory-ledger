@@ -447,7 +447,7 @@ of asking the model to remember.
 tracker). The brain keeps remembering it but stops nagging: the session brief
 counts it in one line ("Tracked elsewhere: 3 in kanban") instead of listing it,
 and the board closes it back with `complete`. `list --untracked` is what a board
-pulls; `untrack` releases a task. CONVENTIONS §2c has the five-command contract.
+pulls; `untrack` releases a task. CONVENTIONS §2c has the contract: `track`, `untrack`, `complete`, `update-node`, `list`.
 
 ## What it costs
 

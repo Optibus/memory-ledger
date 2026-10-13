@@ -316,8 +316,10 @@ still awaiting action, and it stays open until closed.
   shows on the agenda. The board pulls what is still unclaimed with
   `list --type task --status open --untracked` and lists what it holds with
   `--tracked-by <name>`; `untrack --id` releases a task. This is the whole
-  contract: no board is named here, and any app that speaks these five
-  commands is a board.
+  contract: no board is named here, and any app that speaks these commands
+  (`track`, `untrack`, `complete`, `update-node`, `list`) is a board. `open-loops`
+  `count`, `by_kind` and `by_priority` leave tracked loops out unless
+  `--include-tracked`; the `tracked` map counts them per board.
 
 ## 2d. Storage: one local file, an optional mirror, and sections
 

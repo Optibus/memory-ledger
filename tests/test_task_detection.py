@@ -45,8 +45,12 @@ def test_a_personal_to_do_cue_makes_a_task(prompt):
     "What do I need to check with him so I have the full picture?",
     "Give me ideas of how my day to day work can be registered.",
     "Fix the export timeout in the integrations repo.",
+    'Do I need to check this?"',
+    "Do I need to check this?)",
+    "I have to say this is slow.",
 ], ids=["want-to-know", "want-to-split", "make-sure-that", "pasted", "question",
-        "give-me", "imperative"])
+        "give-me", "imperative", "quoted-question", "bracketed-question",
+        "have-to-say"])
 def test_an_instruction_to_the_assistant_does_not(prompt):
     assert C.detect_tasks(prompt) == [], prompt
 

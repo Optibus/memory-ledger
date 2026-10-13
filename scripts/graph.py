@@ -1334,7 +1334,7 @@ def cmd_list(args):
     # `--tracked-by NAME` is what it already holds. Both are JSON reads on
     # props, so they filter in SQL and the LIMIT still means what it says.
     if getattr(args, "untracked", False):
-        where.append("json_extract(props, '$.tracked_by') IS NULL")
+        where.append("COALESCE(json_extract(props, '$.tracked_by.system'), '') = ''")
     if getattr(args, "tracked_by", None):
         where.append("json_extract(props, '$.tracked_by.system') = ?")
         params.append(args.tracked_by)
@@ -5526,9 +5526,11 @@ def tracked_by(d: dict) -> str:
     """The name of the board that claimed this node, or ""."""
     props = d.get("props") if isinstance(d, dict) else None
     val = (props or {}).get(TRACKED_PROP)
+    # Tracked only when the claim is a dict with a non-empty system; strings,
+    # {} and null count as untracked, the same as the SQL filters in cmd_list.
     if isinstance(val, dict):
         return str(val.get("system") or "").strip()
-    return str(val or "").strip()
+    return ""
 
 
 def api_track(con, node_id, system, ref, url=""):
@@ -5554,6 +5556,8 @@ def api_untrack(con, node_id):
     if not row:
         return {"ok": False, "error": f"no node {node_id}"}
     cur = _node_dict(row)
+    if TRACKED_PROP not in cur["props"]:
+        return {"ok": True, "node": cur, "sync": None}   # never claimed: nothing to release
     props = {k: v for k, v in cur["props"].items() if k != TRACKED_PROP}
     con.execute("UPDATE nodes SET props=?, updated=? WHERE id=?",
                 (json.dumps(props), now(), node_id))
