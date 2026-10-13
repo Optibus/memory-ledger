@@ -20,6 +20,7 @@ import { UpkeepCard } from "./UpkeepCard";
 import { DoctorCard } from "./DoctorCard";
 import { BrowserCard } from "./BrowserCard";
 import { TriggerCard } from "./TriggerCard";
+import { CustomTriggersCard } from "./CustomTriggersCard";
 import { B2BCard } from "./B2BCard";
 import { AgentsCard } from "./AgentsCard";
 import { VoiceCard } from "./VoiceCard";
@@ -116,6 +117,7 @@ export function SettingsSection() {
       <DoctorCard />
 
       {settings.data ? <TriggerCard writable={settings.data.writable} /> : null}
+      {settings.data ? <CustomTriggersCard writable={settings.data.writable} /> : null}
 
       {settings.data ? <B2BCard writable={settings.data.writable} /> : null}
       {settings.data ? <AgentsCard writable={settings.data.writable} /> : null}

@@ -44,6 +44,7 @@ GET_ROUTES = [
     "/api/person-duplicates", "/api/kinds", "/api/skills", "/api/bundle",
     "/api/rule", "/api/rule-proposals", "/api/settings", "/api/timezones", "/api/status", "/api/meta",
     "/api/suggest-links", "/api/search", "/api/trigger", "/api/trigger-request", "/api/trigger-people", "/api/b2b",
+    "/api/custom-triggers", "/api/custom-trigger",
     "/api/b2b-conversations", "/api/b2b-thread",
     "/api/agents", "/api/voice", "/api/agent-commands", "/api/agent-conversations", "/api/agent-thread", "/api/document", "/api/document-file",
     "/api/scripts", "/api/script", "/api/tasks", "/api/task", "/api/usage-report", "/api/usage-summary",
@@ -65,6 +66,7 @@ POST_ROUTES = [
     "/api/trigger-gate", "/api/trigger-action", "/api/trigger-config", "/api/trigger-check",
     "/api/trigger-channel", "/api/trigger-person", "/api/trigger-decline", "/api/trigger-reprocess",
     "/api/trigger-cancel", "/api/trigger-scan",
+    "/api/custom-trigger", "/api/custom-trigger-dry-run", "/api/custom-trigger-enable",
     "/api/b2b-config", "/api/b2b-identity", "/api/b2b-broker", "/api/b2b-broker-check",
     "/api/b2b-peer", "/api/b2b-allowed", "/api/b2b-send",
     "/api/export-scripts", "/api/upload-scripts", "/api/import-scripts", "/api/create-script",
@@ -1074,6 +1076,47 @@ def test_trigger_routes(s: Server):
 
 
 # ===================================================================== b2b
+def test_custom_trigger_routes(s: Server):
+    print("\n== custom triggers: list, save, validate, dry-run, enable ==")
+    lst = s.get("/api/custom-triggers").json()
+    ck("the list answers with none yet, a template, and says they do not run",
+       lst.get("ok") and lst["triggers"] == [] and "type: emit" in lst["template"]
+       and lst["active"] is False, str(lst)[:200])
+    # A closed port on this machine: nothing leaves it, and on_error turns the
+    # refusal into an event.
+    text = (lst["template"].replace("my-trigger", "site")
+            .replace("https://example.com/health", "http://127.0.0.1:9/health"))
+    bad = s.post("/api/custom-trigger", {"id": "site", "text": text.replace("5m", "5s")})
+    ck("a trigger that does not validate is not saved", refused(bad, 400, "at least 30s")
+       and s.get("/api/custom-trigger", id="site").json().get("ok") is False)
+    chk = s.post("/api/custom-trigger", {"id": "site", "text": text, "check_only": True})
+    ck("check_only validates and writes nothing", chk.status == 200 and chk.json()["valid"]
+       and not s.post("/api/custom-trigger", {"id": "site", "text": "id: site\n",
+                                              "check_only": True}).json()["valid"]
+       and s.get("/api/custom-triggers").json()["triggers"] == [])
+    r = s.post("/api/custom-trigger", {"id": "site", "text": text})
+    ck("a valid one is saved as written", r.status == 200 and r.json()["created"] is True)
+    d = s.get("/api/custom-trigger", id="site").json()
+    ck("its detail has the file, the verdict, no runs yet",
+       d.get("ok") and d["text"].strip() == text.strip() and d["errors"] == []
+       and d["runs"] == [] and d["checkpoint"] == "", str(d)[:200])
+    ck("an id that is no file name is refused",
+       refused(s.post("/api/custom-trigger", {"id": "../x", "text": text}), 400, "not a trigger id"))
+    dry = s.post("/api/custom-trigger-dry-run", {"id": "site"}).json()
+    ck("a dry run answers, and leaves no run behind", dry.get("dry_run") is True
+       and s.get("/api/custom-trigger", id="site").json()["runs"] == [], str(dry)[:200])
+    on = s.post("/api/custom-trigger-enable", {"id": "site", "enabled": True})
+    ck("enable rewrites the file", on.status == 200
+       and "enabled: true" in s.get("/api/custom-trigger", id="site").json()["text"])
+    ck("enabled must be a boolean",
+       refused(s.post("/api/custom-trigger-enable", {"id": "site", "enabled": "yes"}), 400))
+    (Path(s.home) / "triggers" / "broken.yaml").write_text("id: broken\ninterval: 1s\n",
+                                                           encoding="utf-8")
+    ck("a broken trigger cannot be switched on",
+       refused(s.post("/api/custom-trigger-enable", {"id": "broken", "enabled": True}), 400,
+               "fix it before"))
+
+
 def test_b2b_routes(s: Server):
     print("\n== b2b: identity, brokers, peers, send (docs/b2b.md) ==")
     t = s.get("/api/b2b").json()
@@ -1220,6 +1263,7 @@ def main():
         test_prompt_recall_setting(s)
         test_scripts(s)
         test_trigger_routes(s)
+        test_custom_trigger_routes(s)
         test_b2b_routes(s)
         test_usage_report(s)
     finally:

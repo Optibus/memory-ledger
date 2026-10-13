@@ -169,6 +169,10 @@ export const api = {
   document: (path: string, area: "exports" | "attachments" = "exports", signal?: AbortSignal) =>
     get<import("./types").AgentDocument>("/api/document", area === "exports" ? { path } : { path, area }, signal),
   voice: (signal?: AbortSignal) => get<import("./types").VoiceStatus>("/api/voice", undefined, signal),
+  customTriggers: (signal?: AbortSignal) =>
+    get<import("./types").CustomTriggerList>("/api/custom-triggers", undefined, signal),
+  customTrigger: (id: string, signal?: AbortSignal) =>
+    get<import("./types").CustomTriggerDetail>("/api/custom-trigger", { id }, signal),
   agentThread: (id: string, signal?: AbortSignal) =>
     get<import("./types").AgentThread>("/api/agent-thread", { id }, signal),
   b2b: (signal?: AbortSignal) =>
@@ -317,6 +321,14 @@ export const api = {
       "/api/agent-conversation",
       body,
     ),
+  /** Validate (check_only) or save a custom trigger's YAML; never written when it does not validate. */
+  saveCustomTrigger: (id: string, text: string, checkOnly = false) =>
+    post<import("./types").CustomTriggerVerdict>("/api/custom-trigger", { id, text, check_only: checkOnly }),
+  /** Run a saved trigger's blocks and say what it would create. Creates nothing. */
+  dryRunCustomTrigger: (id: string) =>
+    post<import("./types").CustomTriggerDryRun>("/api/custom-trigger-dry-run", { id }),
+  enableCustomTrigger: (id: string, enabled: boolean) =>
+    post("/api/custom-trigger-enable", { id, enabled }),
   saveVoice: (body: Partial<import("./types").VoiceConfig>) =>
     post<import("./types").VoiceStatus>("/api/voice-config", body),
   /** Translate one block; skipped by the server when it is already in the target. Starts a model call. */

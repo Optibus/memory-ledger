@@ -1451,3 +1451,81 @@ export interface VoiceTranslation extends Envelope {
   translated: boolean;
   language: VoiceLang;
 }
+
+/** Custom triggers (docs/trigger.md#custom-triggers): one YAML file each in `<home>/triggers`. */
+export interface CustomTriggerState {
+  trigger_id?: string;
+  last_run_at?: string;
+  last_status?: string;
+  last_error?: string;
+  last_run_id?: string;
+  updated?: string;
+}
+
+export interface CustomTriggerSummary {
+  id: string;
+  file: string;
+  ok: boolean;
+  error?: string;
+  name?: string;
+  enabled?: boolean;
+  interval?: string | number;
+  blocks?: number;
+  state: CustomTriggerState;
+}
+
+export interface CustomTriggerList {
+  ok: boolean;
+  dir: string;
+  /** The master switch and `custom.enabled`: whether the scheduler runs them here. */
+  active: boolean;
+  /** The secret names in trigger.json; never a value. */
+  secrets: string[];
+  triggers: CustomTriggerSummary[];
+  template: string;
+}
+
+export interface CustomTriggerRun {
+  run_id: string;
+  started_at: string;
+  finished_at: string;
+  status: string;
+  attempts: number;
+  events: number;
+  created: number;
+  error: string;
+}
+
+export interface CustomTriggerDetail {
+  ok: boolean;
+  id: string;
+  text: string;
+  errors: string[];
+  warnings: string[];
+  state: CustomTriggerState;
+  checkpoint: string;
+  runs: CustomTriggerRun[];
+}
+
+export interface CustomTriggerVerdict {
+  ok: boolean;
+  /** check_only: the verdict (`ok` only says the check ran). */
+  valid?: boolean;
+  id?: string;
+  errors: string[];
+  warnings: string[];
+  saved?: boolean;
+  created?: boolean;
+  error?: string;
+}
+
+export interface CustomTriggerDryRun {
+  ok: boolean;
+  id: string;
+  dry_run: true;
+  status: string;
+  events: { event_id: string; text: string; meta: { payload: unknown } }[];
+  checkpoint: { now: string; would_be: string | null };
+  error: string;
+  warnings?: string[];
+}

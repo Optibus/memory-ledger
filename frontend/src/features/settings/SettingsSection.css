@@ -119,3 +119,11 @@
 .ml-agents-card__top > :last-child { margin-left: auto; }
 .ml-agents-card__fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--space-3); }
 .ml-agents-card__add { display: flex; gap: var(--space-2); align-items: center; margin: var(--space-3) 0; flex-wrap: wrap; }
+
+/* Custom triggers: the list, and the file itself as the editor. */
+.ml-custom__table td { vertical-align: top; }
+.ml-custom__editor {
+  font-family: var(--font-mono);
+  font-size: 12px; line-height: 1.5; white-space: pre; tab-size: 2;
+}
+.ml-custom__dry { margin-top: var(--space-3); }
