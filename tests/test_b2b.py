@@ -36,6 +36,8 @@ for k in list(os.environ):
     if k.startswith(("SECOND_BRAIN_NEO4J", "MEMORY_LEDGER_NEO4J", "MEMORY_LEDGER_B2B_")):
         del os.environ[k]
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
+from _fakes import make_exe  # noqa: E402
 
 try:
     import cryptography  # noqa: F401
@@ -60,8 +62,7 @@ def ck(label: str, cond: bool, extra: str = "") -> None:
         FAILS.append(label)
 
 
-FAKE_CLAUDE = Path(HOME) / "fake-claude"
-FAKE_CLAUDE.write_text("""#!/usr/bin/env python3
+FAKE_CLAUDE = make_exe(Path(HOME) / "fake-claude", """#!/usr/bin/env python3
 import json, os, sys
 args = sys.argv[1:]
 with open(os.path.join(os.environ["SECOND_BRAIN_HOME"], "claude-calls.jsonl"), "a") as f:
@@ -69,8 +70,7 @@ with open(os.path.join(os.environ["SECOND_BRAIN_HOME"], "claude-calls.jsonl"), "
                         "src": os.environ.get("MEMORY_LEDGER_TRIGGER_SOURCE")})
             + "\\n")
 print(json.dumps({"result": "noted it", "total_cost_usd": 0.01}))
-""", encoding="utf-8")
-FAKE_CLAUDE.chmod(FAKE_CLAUDE.stat().st_mode | stat.S_IEXEC)
+""")
 Path(HOME, "trigger.json").write_text(json.dumps({
     "enabled": True, "claude": {"bin": str(FAKE_CLAUDE), "timeout_s": 60}}), encoding="utf-8")
 

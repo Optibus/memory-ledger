@@ -7,7 +7,19 @@ on:
 
 jobs:
   ci:
-    runs-on: ubuntu-latest
+    # The brain runs on macOS, Linux and Windows, and what breaks on one
+    # (encodings, the command line, process groups, paths) passes on the others.
+    # fail-fast off: a red Windows leg must not hide what the other two say.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    # bash everywhere (Git Bash on Windows), so every step reads the same on
+    # all three; `python` is what setup-python puts on PATH on each.
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -72,7 +84,7 @@ jobs:
       - name: Cache the server venv
         uses: actions/cache@v4
         with:
-          path: ~/.cache/memory-ledger
+          path: ${{ runner.temp }}/cache/memory-ledger
           key: server-venv-${{ runner.os }}-py3.12-${{ hashFiles('scripts/requirements-server.txt', 'services/b2b/requirements.txt') }}
 
       # The suites are stdlib-only and self-contained, so there is no install
@@ -85,8 +97,15 @@ jobs:
       # (every tests/test_*.py, so test_usage_report.py and test_usage_ingest.py
       # run here too -- the ingest suite writes its own synthetic session logs.)
       - name: Run the test suites
+        # XDG_CACHE_HOME is the cached directory above, on every OS (on
+        # Windows it would otherwise be %LOCALAPPDATA%). PYTHONIOENCODING is
+        # for the suites' own progress lines only, which name things in
+        # Portuguese: the code under test gets no help, so a missing
+        # encoding= still fails on Windows (tests/test_encoding.py).
         env:
           SECOND_BRAIN_HOME: ${{ runner.temp }}/brain
+          XDG_CACHE_HOME: ${{ runner.temp }}/cache
+          PYTHONIOENCODING: utf-8
         run: |
           for t in tests/test_*.py; do
             echo "== $t"
@@ -238,4 +257,4 @@ jobs:
           BASE_REF: ${{ github.event.pull_request.base.sha }}
         run: |
           git reset --soft "$BASE_REF"
-          python3 .githooks/pre-commit
+          python .githooks/pre-commit

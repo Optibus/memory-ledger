@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import os
-import stat
 import subprocess
 import sys
 import tempfile
@@ -32,6 +31,8 @@ for k in list(os.environ):
     if k.startswith(("SECOND_BRAIN_NEO4J", "MEMORY_LEDGER_NEO4J")):
         del os.environ[k]
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
+from _fakes import make_exe  # noqa: E402
 
 import agents  # noqa: E402
 import graph  # noqa: E402
@@ -123,9 +124,7 @@ def reply_of(con, rid):
 
 
 def main() -> int:
-    bin_path = Path(HOME) / "fake-claude"
-    bin_path.write_text(FAKE_CLAUDE, encoding="utf-8")
-    bin_path.chmod(bin_path.stat().st_mode | stat.S_IEXEC)
+    bin_path = make_exe(Path(HOME) / "fake-claude", FAKE_CLAUDE)
     srv = ThreadingHTTPServer(("127.0.0.1", 0), FakeOllama)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{srv.server_port}"

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import os
-import stat
 import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -29,6 +28,8 @@ for k in list(os.environ):
                      "MEMORY_LEDGER_JIRA_", "MEMORY_LEDGER_GITHUB_")):
         del os.environ[k]
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
+from _fakes import make_exe  # noqa: E402
 
 import trigger  # noqa: E402
 
@@ -43,8 +44,7 @@ def ck(label, cond, extra=""):
         FAILS.append(label)
 
 
-FAKE_CLAUDE = Path(HOME) / "fake-claude"
-FAKE_CLAUDE.write_text("""#!/usr/bin/env python3
+FAKE_CLAUDE = make_exe(Path(HOME) / "fake-claude", """#!/usr/bin/env python3
 import json, os, sys
 args = sys.argv[1:]
 log = os.path.join(os.environ["SECOND_BRAIN_HOME"], "claude-calls.jsonl")
@@ -64,8 +64,7 @@ if prompt.startswith("Post one Slack message"):
 if "FAIL-ME" in prompt:
     print(json.dumps({"is_error": True, "result": "it broke"})); sys.exit(1)
 print(json.dumps({"result": "replied in thread", "total_cost_usd": 0.0123}))
-""", encoding="utf-8")
-FAKE_CLAUDE.chmod(FAKE_CLAUDE.stat().st_mode | stat.S_IEXEC)
+""")
 
 CFG = {
     "enabled": True,
