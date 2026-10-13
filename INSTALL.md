@@ -440,6 +440,15 @@ restored brain without a restart. With a neo4j master configured, the next sync
 brings down what was written there after the backup — right for a lost machine,
 worth knowing before a rollback.
 
+**Exporting a node file to hand over: `scripts/export_handoff_nodes.py [OUT.json]`.**
+Writes a `second-brain-nodes/1` file with the non-personal work nodes (projects,
+artifacts, resources, references, decisions, Jira issues, PRs, and the open tasks of
+`--assignee`) and the edges among them, for `import_nodes.py` on the other side. It
+skips the personal and rules-backup realms, captures, conversations, messages, done
+tasks, other people's tasks and anything matching the personal keywords. It only reads
+`graph.db`. `--owner` and `--for` record sender and recipient; the default path is
+`exports/handoff/nodes-YYYYMMDD.json`.
+
 **Importing a node file into a ledger: `scripts/import_nodes.py FILE`.** Brings the
 nodes and edges of a handoff export into another brain. It is a dry-run unless
 `--apply`, which first backs up `graph.db` (restorable with `restore.py`). Nodes
