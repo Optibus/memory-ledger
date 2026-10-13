@@ -205,9 +205,17 @@ except Exception:
     sys.exit(0)
 
 n = d.get("count", 0)
+# Loops an external task board holds (CONVENTIONS §2c) are that board's to
+# nag about. One line says they exist; the list below is only what is nobody
+# else's.
+tracked = d.get("tracked") or {}
+tracked_line = ""
+if tracked:
+    parts = ", ".join(f"{v} in {k}" for k, v in sorted(tracked.items()))
+    tracked_line = f"\nTracked elsewhere (not listed here): {parts}."
 if not n:
     rev = revived_lines()
-    note = "[memory-ledger] State: no open loops — all clear."
+    note = "[memory-ledger] State: no open loops — all clear." + tracked_line
     if rev:
         note += ("\nBecame possible again (the condition that blocked these no "
                  "longer holds — offer them, don't resume them):\n" + "\n".join(rev))
@@ -251,6 +259,7 @@ msg = (
     f"until closed; surface these and nudge the user to close the top ones ASAP "
     f"(open tasks, PRs to move, emails/messages to answer):\n"
     + "\n".join(lines)
+    + tracked_line
     + focus_block
     + revived_block
     + "\n(full list: open-loops · thread + parked: resume · park to offload context)"

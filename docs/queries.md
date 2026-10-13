@@ -96,8 +96,11 @@ python3 scripts/graph.py search "confluence"          # lexical FTS5, budgeted
 python3 scripts/graph.py get-node --id <id>           # one node in full + its edges
 python3 scripts/graph.py neighbors --id <id> --depth 2
 python3 scripts/graph.py list --type task --status open
+python3 scripts/graph.py list --type task --status open --untracked   # no board has claimed
+python3 scripts/graph.py list --type task --tracked-by kanban         # what that board holds
 python3 scripts/graph.py due
 python3 scripts/graph.py open-loops --stale-days 7
+python3 scripts/graph.py open-loops --include-tracked  # also what external boards hold
 python3 scripts/graph.py stats
 python3 scripts/graph.py export
 ```
@@ -133,7 +136,13 @@ python3 scripts/graph.py add-edge --src <a> --dst <b> --rel blocked-by
 python3 scripts/graph.py complete --id <id>          # -> archive, never deleted
 python3 scripts/graph.py set-state --id <id> --status blocked
 python3 scripts/graph.py del-node --id <id>          # real delete; prefer complete
+python3 scripts/graph.py track --id <id> --system kanban --ref card-12 --url https://…
+python3 scripts/graph.py untrack --id <id>
 ```
+
+`track` hands a task to an external task board (CONVENTIONS §2c): it leaves
+the open-loops brief, is counted in one line instead, and the board reports
+back with `complete`, `update-node --status cancelled` or `update-node --due`.
 
 `--props` merges rather than replaces. `--area` adds the `part-of` edge to a
 domain hub and errors if the hub does not exist, so a typo cannot silently

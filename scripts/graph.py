@@ -1330,6 +1330,14 @@ def cmd_list(args):
         params.extend(DONE_STATUSES)
     if args.due_before:
         where.append("due!='' AND due<=?"); params.append(args.due_before)
+    # External task boards (§2c): `--untracked` is what a board pulls, and
+    # `--tracked-by NAME` is what it already holds. Both are JSON reads on
+    # props, so they filter in SQL and the LIMIT still means what it says.
+    if getattr(args, "untracked", False):
+        where.append("json_extract(props, '$.tracked_by') IS NULL")
+    if getattr(args, "tracked_by", None):
+        where.append("json_extract(props, '$.tracked_by.system') = ?")
+        params.append(args.tracked_by)
     sql = "SELECT * FROM nodes"
     if where:
         sql += " WHERE " + " AND ".join(where)
@@ -5505,6 +5513,66 @@ CLOSED_STATES = {"done", "cancelled", "dropped", "closed", "answered", "resolved
 LOOP_TYPES = {"task", "subtask", "reminder", "pr", "email", "message"}
 
 
+# --- external task boards (CONVENTIONS §2c) ---------------------------------
+# A task another app has claimed carries `props.tracked_by`. The brain keeps
+# capturing and remembering it, but stops nagging about it: that board owns the
+# open/closed decision now, and reports it back with `complete` or
+# `update-node --status cancelled`. Date views keep tracked tasks, so a due date
+# the board writes back still shows on the agenda.
+TRACKED_PROP = "tracked_by"
+
+
+def tracked_by(d: dict) -> str:
+    """The name of the board that claimed this node, or ""."""
+    props = d.get("props") if isinstance(d, dict) else None
+    val = (props or {}).get(TRACKED_PROP)
+    if isinstance(val, dict):
+        return str(val.get("system") or "").strip()
+    return str(val or "").strip()
+
+
+def api_track(con, node_id, system, ref, url=""):
+    """Claim a task for an external board. Idempotent: the same claim again
+    changes nothing but `updated`; a different board replaces the claim."""
+    system = (system or "").strip()
+    if not system:
+        return {"ok": False, "error": "system is required"}
+    row = con.execute("SELECT * FROM nodes WHERE id=?", (node_id,)).fetchone()
+    if not row:
+        return {"ok": False, "error": f"no node {node_id}"}
+    cur = _node_dict(row)
+    prev = cur["props"].get(TRACKED_PROP)
+    prev = prev if isinstance(prev, dict) else {}
+    since = prev.get("since") if prev.get("system") == system and prev.get("since") else now()
+    claim = {"system": system, "ref": str(ref or ""), "url": str(url or ""), "since": since}
+    return api_update_node(con, node_id, props_patch={TRACKED_PROP: claim})
+
+
+def api_untrack(con, node_id):
+    """Release a task from its board. The task is an ordinary open loop again."""
+    row = con.execute("SELECT * FROM nodes WHERE id=?", (node_id,)).fetchone()
+    if not row:
+        return {"ok": False, "error": f"no node {node_id}"}
+    cur = _node_dict(row)
+    props = {k: v for k, v in cur["props"].items() if k != TRACKED_PROP}
+    con.execute("UPDATE nodes SET props=?, updated=? WHERE id=?",
+                (json.dumps(props), now(), node_id))
+    con.commit()
+    sync = _after_write(con, nodes=[node_id])
+    row = con.execute("SELECT * FROM nodes WHERE id=?", (node_id,)).fetchone()
+    return {"ok": True, "node": _node_dict(row), "sync": sync}
+
+
+def cmd_track(args):
+    con = connect()
+    out(api_track(con, args.id, args.system, args.ref, args.url or ""))
+
+
+def cmd_untrack(args):
+    con = connect()
+    out(api_untrack(con, args.id))
+
+
 def _is_open_loop(d):
     """True if node d is still an open loop. Tasks/trackables are open unless
     their status/state is a closed one; other nodes are open only if they carry
@@ -5551,9 +5619,16 @@ def cmd_open_loops(args):
     now_dt = datetime.now(timezone.utc)
     rows = con.execute("SELECT * FROM nodes").fetchall()
     loops = []
+    tracked = {}
     for r in rows:
         d = _node_dict(r)
         if not _is_open_loop(d):
+            continue
+        # A loop an external board holds is that board's to nag about (§2c).
+        # Counted here so the brief can say "7 tracked in <board>" in one line.
+        board = tracked_by(d)
+        if board and not getattr(args, "include_tracked", False):
+            tracked[board] = tracked.get(board, 0) + 1
             continue
         since = d["props"].get("state_since") or d["updated"]
         since_dt = _parse_dt(since) or now_dt
@@ -5575,6 +5650,7 @@ def cmd_open_loops(args):
          "stale": sum(1 for x in loops if x["stale"]),
          "overdue": sum(1 for x in loops if x["overdue"]),
          "by_kind": by_kind, "by_priority": by_prio,
+         "tracked": tracked,
          "results": loops[: args.limit]})
 
 
@@ -7113,7 +7189,23 @@ def build_parser():
     a.add_argument("--due-before", dest="due_before")
     a.add_argument("--all", action="store_true",
                    help="include archived (done/cancelled) items")
+    a.add_argument("--untracked", action="store_true",
+                   help="only nodes no external task board has claimed (§2c)")
+    a.add_argument("--tracked-by", dest="tracked_by", metavar="SYSTEM",
+                   help="only nodes this external task board has claimed")
     a.add_argument("--limit", type=int, default=50)
+
+    a = sub.add_parser("track", help="claim a task for an external task board "
+                                     "(it leaves the open-loops brief; §2c)")
+    a.set_defaults(func=cmd_track)
+    a.add_argument("--id", required=True)
+    a.add_argument("--system", required=True, help="the board's name, e.g. kanban")
+    a.add_argument("--ref", required=True, help="the task's id on that board")
+    a.add_argument("--url", help="a link to it there")
+
+    a = sub.add_parser("untrack", help="release a task from its external board")
+    a.set_defaults(func=cmd_untrack)
+    a.add_argument("--id", required=True)
 
     a = sub.add_parser("complete"); a.set_defaults(func=cmd_complete)
     a.add_argument("--id", required=True)
@@ -7320,6 +7412,8 @@ def build_parser():
     a = sub.add_parser("open-loops"); a.set_defaults(func=cmd_open_loops)
     a.add_argument("--stale-days", dest="stale_days", type=int, default=2)
     a.add_argument("--limit", type=int, default=50)
+    a.add_argument("--include-tracked", dest="include_tracked", action="store_true",
+                   help="also list loops an external task board holds (§2c)")
 
     a = sub.add_parser("set-state"); a.set_defaults(func=cmd_set_state)
     a.add_argument("--id", required=True)

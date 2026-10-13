@@ -442,6 +442,13 @@ once in Settings › Database connection or by `neo4j_local.py up`.
 Recall stays free — reach for this (or `graph.py search` / `open-loops`) instead
 of asking the model to remember.
 
+**Another app can be the task board.** `graph.py track --id <task> --system
+<name> --ref <id>` hands a task to an external board (a kanban, a desk, a team
+tracker). The brain keeps remembering it but stops nagging: the session brief
+counts it in one line ("Tracked elsewhere: 3 in kanban") instead of listing it,
+and the board closes it back with `complete`. `list --untracked` is what a board
+pulls; `untrack` releases a task. CONVENTIONS §2c has the five-command contract.
+
 ## What it costs
 
 The honest split: **the always-on part never calls the model.** Only the skills that
