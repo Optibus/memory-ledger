@@ -24,6 +24,7 @@ work and keeps what is still open: what you owe, to whom, by when.
 > [the frontend](docs/frontend.md),
 > [measured performance](docs/performance.md), [running neo4j](docs/neo4j.md),
 > [how it compares to MemPalace](docs/comparison.md),
+> [the roadmap](docs/roadmap.md),
 > and [how to contribute](CONTRIBUTING.md).
 
 ## The idea
@@ -559,7 +560,8 @@ hamburger menu on the left (`m` toggles it):
   script sent it. Messages show their formatting: **bold**, *italic*,
   __underline__, ~~strike~~, `code` and links (Markdown, Slack's `<url|text>`,
   or a bare URL), all rendered as text and links only, never as HTML. The
-  composer has buttons for each, and ⌘B / ⌘I / ⌘U / ⌘K.
+  composer has buttons for each, and ⌘B / ⌘I / ⌘U / ⌘K. A thread opens at its
+  latest message; older ones load as you scroll up.
 - **Agents** — [chat with Claude or a local Ollama model](docs/agents.md). Each
   turn is one stateless call given your message, the last few exchanges and what
   the brain recalls for it; every exchange is written back to the graph. The list

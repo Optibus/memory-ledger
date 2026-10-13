@@ -87,6 +87,22 @@ Try it in one session without installing:
 claude --plugin-dir ~/dev/memory-ledger
 ```
 
+Or set the whole machine up (venv, UI build, brain, doctor) with one command on
+any OS, then start the app:
+
+```bash
+python3 scripts/setup.py          # --voice for dictation, --piper for TTS
+python3 scripts/serve.py
+```
+
+Enable the pre-commit hook once per clone. It blocks a commit that stages
+behavior (`scripts/`, `hooks/`, `frontend/src/`, the plugin manifests) with no
+`*.md` change beside it, and runs `scripts/check-contracts.sh`:
+
+```bash
+git config core.hooksPath .githooks
+```
+
 ## Layout
 
 | Path | What lives there |
@@ -103,16 +119,26 @@ claude --plugin-dir ~/dev/memory-ledger
 | `scripts/usage_report.py` | "Where the Quota Went" — renders those nodes as a deterministic HTML report |
 | `scripts/restore.py` | restore a `--with-brain` zip or a `.db` snapshot, checked first, never over a brain without `--replace` |
 | `scripts/brain_sync.py` | full push into neo4j, `--verify` against it, `--pull` restore from it |
+| `scripts/neo4j_local.py` | `up` starts a local neo4j in Docker, one command ([neo4j](docs/neo4j.md)) |
+| `scripts/custom_trigger.py` | custom triggers: the YAML definition, validation, the block engine and the scheduler; `_trigger_block_runner.py` runs a block in an isolated child ([custom triggers](docs/trigger.md#custom-triggers)) |
+| `scripts/agents.py`, `agent_commands.py` | the Agents tab's engine: conversations, one stateless call per turn, and the slash commands ([agents](docs/agents.md)) |
+| `scripts/documents.py`, `make_document.py` | the documents an agent hands over as cards (md, html, pdf, txt), confined to `<home>/exports` |
+| `scripts/voice.py`, `stt_worker.py` | dictation, reading aloud and conversation mode; the speech-to-text worker runs in its own venv |
+| `scripts/export_handoff_nodes.py`, `import_nodes.py` | hand the non-personal work nodes to another ledger as a file; the import is idempotent and a dry run unless told otherwise |
+| `scripts/bundle.py` | a self-contained zip of the plugin, installable with no repo access |
+| `scripts/decay.py`, `noise.py` | per-type decay tiers and the capture noise filter |
+| `scripts/doctor.py` | the sanity check, also behind Settings > Doctor |
+| `scripts/check-contracts.sh` | the skill-contract check CI and the pre-commit hook run |
 | `hooks/` | the always-on hooks + `_capture.py` shared helpers; `usage_ingest.py` only forks a throttled, detached `scripts/usage_ingest.py run` |
 | `hooks/hooks.json` | which hook binds to which Claude Code event |
 | `scripts/setup.py` | one-command machine setup on any OS (venv, UI build, voice, brain, doctor); `setup.sh` and `setup.ps1` wrap it |
 | `scripts/serve.py` | the one command: builds the server's venv, the UI, and runs the app |
 | `scripts/brain_api/` | the FastAPI app — reads, writes, request models, the SPA fallback, and the trigger watchers (`trigger_runtime.py`, the one user of `slack_sdk`) |
 | `scripts/requirements-server.txt` | the server's pinned dependencies, and only the server's |
-| `frontend/src/` | the React SPA — map, dashboard, skills, settings |
+| `frontend/src/` | the React SPA — map, dashboard, tasks, people, skills, messages, agents, usage, settings |
 | `frontend/dist/` | its build output. Not in git; `serve.py` produces it |
 | `skills/<name>/SKILL.md` | model-driven skills (these may spend tokens) |
-| `commands/` | `/ledger`, `/plan-today` |
+| `commands/` | `/ledger`, `/plan-today`, `/neo4j-up` |
 | `CONVENTIONS.md` | the operating rules every skill reads first |
 | `docs/` | developer documentation |
 
@@ -145,6 +171,15 @@ See [the API guide](docs/api.md#extending-it). A request model in
 `scripts/brain_api/models.py`, a route in `reads.py` or `writes.py`, text
 length-capped with `clip(value, max_len)`, and the route pinned in
 `tests/test_api.py`.
+
+### A custom-trigger block
+
+A block is one step of a custom trigger's poll (fetch, filter, emit). Add it to
+`scripts/custom_trigger.py` with its validation, run it only through
+`_trigger_block_runner.py` so it stays in the isolated child, and cover it in
+`tests/test_custom_trigger.py`. Document its fields in
+[the custom triggers section](docs/trigger.md#custom-triggers). Secrets are named
+in the definition and held in `trigger.json`, never written in the YAML.
 
 ### A skill
 
@@ -253,6 +288,13 @@ If you touch a read path, re-measure. Recipes and current numbers are in
 - One logical change per commit.
 - Update `CONVENTIONS.md` in the same commit when you change behaviour skills
   depend on. Skills read it at runtime; a stale convention is a live bug.
+- Docs ship with behavior (CONVENTIONS §4): the pre-commit hook blocks a commit
+  that stages behavior without a `*.md` change, and CI repeats the check on pull
+  requests. Use `--no-verify` only for a change no doc describes, and say so in
+  the PR. Push to a branch and open a PR; `main` moves fast, so rebase
+  (`git pull --rebase`) before you push.
+- If your change closes an item in [the roadmap](docs/roadmap.md), move it from
+  there to the page that now describes it.
 - `presentation/` is generated and gitignored — rebuild it with
   `presentation/build/*.js`, do not commit 6 MB of HTML.
 
@@ -267,3 +309,5 @@ Before proposing these, know they were considered:
 - **Deleting old data** — decay handles relevance; deletion loses history.
 - **Cloud sync** — the local file is a feature. [neo4j](docs/neo4j.md) is the
   supported way to centralise if you need it.
+
+What *is* planned is in [the roadmap](docs/roadmap.md).
