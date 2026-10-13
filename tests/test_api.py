@@ -145,7 +145,7 @@ class Server:
             time.sleep(0.25)
         self.stop()
         raise SystemExit("the server never came up:\n" +
-                         self.log.read_text(errors="replace")[-2000:])
+                         self.log.read_text(errors="replace", encoding="utf-8")[-2000:])
 
     def request(self, method, path, body=None, raw_body=None, timeout=60):
         c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=timeout)
@@ -172,7 +172,7 @@ class Server:
 
     def cli(self, *args):
         p = subprocess.run([sys.executable, str(GRAPH), *args], capture_output=True,
-                           text=True, env=env_for(self.home))
+                           text=True, encoding="utf-8", errors="replace", env=env_for(self.home))
         try:
             return json.loads(p.stdout)
         except ValueError:
@@ -817,10 +817,10 @@ def test_scripts(s: Server):
                                                "there are no scripts"))
     d = Path(s.home) / "scripts"
     d.mkdir()
-    (d / "hello.py").write_text('#!/usr/bin/env python3\n"""Say hello."""\nprint(1)\n')
+    (d / "hello.py").write_text('#!/usr/bin/env python3\n"""Say hello."""\nprint(1)\n', encoding="utf-8")
     (d / "hello.py").chmod(0o755)
-    (d / "notes.sh").write_text("# Jot a note.\necho hi\n")
-    (d / ".hidden").write_text("x")
+    (d / "notes.sh").write_text("# Jot a note.\necho hi\n", encoding="utf-8")
+    (d / ".hidden").write_text("x", encoding="utf-8")
     (d / "__pycache__").mkdir()
 
     ls = s.get("/api/scripts").json()
@@ -845,12 +845,12 @@ def test_scripts(s: Server):
 
     ck("an upload with no file", refused(s.post("/api/upload-scripts", {}), 400,
                                          "no file was sent"))
-    (d / "hello.py").write_text("changed\n")
+    (d / "hello.py").write_text("changed\n", encoding="utf-8")
     up = s.post("/api/upload-scripts", {"filename": "s.zip",
                                         "data": base64.b64encode(r.raw).decode()}).json()
     ck("upload inspects before writing", up.get("ok") and up.get("token")
        and up["items"][0]["exists"] and up["items"][0]["identical"] is False
-       and (d / "hello.py").read_text() == "changed\n", str(up)[:200])
+       and (d / "hello.py").read_text(encoding="utf-8") == "changed\n", str(up)[:200])
     ck("import needs a selection", refused(
         s.post("/api/import-scripts", {"token": up["token"], "select": {"x": "explode"}}),
         400, "nothing was selected"))
@@ -858,8 +858,8 @@ def test_scripts(s: Server):
                                          "select": {"hello.py": "replace"}}).json()
     ck("import-scripts replaces, keeping a backup",
        imp.get("ok") and imp["applied"][0]["action"] == "replaced"
-       and "print(1)" in (d / "hello.py").read_text()
-       and (Path(imp["backup"]) / "hello.py").read_text() == "changed\n", str(imp)[:200])
+       and "print(1)" in (d / "hello.py").read_text(encoding="utf-8")
+       and (Path(imp["backup"]) / "hello.py").read_text(encoding="utf-8") == "changed\n", str(imp)[:200])
     ck("and the executable bit came back", os.stat(d / "hello.py").st_mode & 0o111)
     ck("the token is spent", refused(
         s.post("/api/import-scripts", {"token": up["token"], "select": {"hello.py": "keep"}}),
@@ -889,7 +889,7 @@ def test_scripts(s: Server):
     again = s.post("/api/create-script", {"name": "made.sh", "text": "#!/bin/sh\n",
                                           "replace": True, "executable": False}).json()
     ck("replacing keeps a backup", again.get("ok") and again["action"] == "replaced"
-       and (Path(again["backup"]) / "made.sh").read_text().startswith("#!/bin/sh\n# Made")
+       and (Path(again["backup"]) / "made.sh").read_text(encoding="utf-8").startswith("#!/bin/sh\n# Made")
        and not os.stat(d / "made.sh").st_mode & 0o111, str(again)[:200])
 
 
@@ -910,7 +910,7 @@ def test_trigger_routes(s: Server):
         "'requester_id': 'U1', 'is_owner': True, 'text': 'hello', 'meta': {}}; "
         "print(json.dumps(trigger.intake(ev, trigger.load_config())))"
         % str(ROOT / "scripts"))
-    p = subprocess.run([sys.executable, "-c", snippet], capture_output=True, text=True,
+    p = subprocess.run([sys.executable, "-c", snippet], capture_output=True, text=True, encoding="utf-8", errors="replace",
                        env=env_for(s.home))
     rid = json.loads(p.stdout or "{}").get("request_id", "")
     ck("a request can be logged into the served brain", bool(rid), p.stderr[-200:])
@@ -1083,7 +1083,7 @@ def test_b2b_routes(s: Server):
     me = i.json().get("user_id", "")
     ck("b2b-identity makes a key pair; the id is the public key",
        i.status == 200 and len(me) == 43, str(i.raw[:200]))
-    key = json.loads((Path(s.home) / "b2b.json").read_text())[
+    key = json.loads((Path(s.home) / "b2b.json").read_text(encoding="utf-8"))[
         "private_key"]
     t = s.get("/api/b2b")
     ck("and the private key never comes back", key.encode() not in t.raw

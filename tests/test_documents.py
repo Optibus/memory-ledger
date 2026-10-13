@@ -52,6 +52,7 @@ ck("empty path is refused", not documents.read("")["ok"])
 (docs / "p.png").write_bytes(b"\x89PNG")
 r = documents.read("documents/p.png")
 ck("an image is an img with no text", r["ok"] and r["kind"] == "img" and r["text"] is None)
+ck("text documents are served as UTF-8", all(documents.media_type(docs / n).endswith("; charset=utf-8") for n in ("a.md", "b.html")))
 ck("an image is served with its own media type", documents.media_type(docs / "p.png") == "image/png")
 
 import base64  # noqa: E402

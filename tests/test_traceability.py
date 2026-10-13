@@ -30,7 +30,7 @@ FAILS = []
 def g(*a):
     """Run a graph.py subcommand; return its parsed JSON envelope."""
     p = subprocess.run([sys.executable, str(ROOT / "scripts" / "graph.py"), *a],
-                       capture_output=True, text=True, env=ENV)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", env=ENV)
     try:
         return json.loads(p.stdout)
     except Exception:
@@ -42,7 +42,7 @@ def hook(script, payload, *args, env=None):
     return subprocess.run(
         [sys.executable, str(ROOT / "hooks" / script), *args],
         input=payload if isinstance(payload, str) else json.dumps(payload),
-        capture_output=True, text=True, env=env or ENV)
+        capture_output=True, text=True, encoding="utf-8", errors="replace", env=env or ENV)
 
 
 def ck(label, cond, extra=""):
@@ -279,7 +279,7 @@ def test_tokens():
     sid = "tok-session"
     tdir = tempfile.mkdtemp(prefix="second-brain-test-transcript-")
     tp = Path(tdir) / "t.jsonl"
-    with open(tp, "w") as f:
+    with open(tp, "w", encoding="utf-8") as f:
         for _ in range(4000):                      # a long, realistic transcript
             f.write(json.dumps({"message": {"role": "user", "content": "pad " * 40}}) + "\n")
         f.write(json.dumps({"message": {"role": "assistant",
@@ -357,7 +357,7 @@ def test_hooks_never_block_on_network():
     threading.Thread(target=srv.serve_forever, daemon=True).start()
 
     brain = tempfile.mkdtemp(prefix="second-brain-test-slow-")
-    with open(os.path.join(brain, "neo4j.json"), "w") as f:
+    with open(os.path.join(brain, "neo4j.json"), "w", encoding="utf-8") as f:
         json.dump({"url": f"http://127.0.0.1:{port}", "db": "neo4j",
                    "user": "neo4j", "password": "x"}, f)
     # deliberately WITHOUT the no-autosync flag — that is the hook's own job

@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _textio  # noqa: E402
 import documents  # noqa: E402
 import graph  # noqa: E402
 import voice  # noqa: E402
@@ -930,11 +931,11 @@ def run_claude(con: sqlite3.Connection, reply: dict[str, Any], c: dict[str, Any]
     log.model = reply["model"]
     cmd = claude_command(c, turn, reply["model"], bool(reply["full_tools"]), session_id)
     _update(con, reply["id"], session_id=session_id)
-    env = {**os.environ, "MEMORY_LEDGER_AGENT_REPLY": reply["id"],
-           "MEMORY_LEDGER_AGENT_CONV": reply["conv_id"]}
+    env = _textio.child_env({**os.environ, "MEMORY_LEDGER_AGENT_REPLY": reply["id"],
+                             "MEMORY_LEDGER_AGENT_CONV": reply["conv_id"]})
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                stdin=subprocess.DEVNULL, text=True, env=env,
+                                stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace", env=env,
                                 cwd=str(graph.home_dir()) if graph.home_dir().is_dir()
                                 else str(Path.home()), bufsize=1)
     except OSError as e:

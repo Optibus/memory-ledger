@@ -66,7 +66,7 @@ def version() -> str:
 
 
 def git(*args) -> str:
-    return subprocess.check_output(["git", "-C", str(REPO), *args], text=True).strip()
+    return subprocess.check_output(["git", "-C", str(REPO), *args], text=True, encoding="utf-8", errors="replace").strip()
 
 
 def tracked_files() -> list[str]:

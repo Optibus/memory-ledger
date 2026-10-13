@@ -84,7 +84,7 @@ def _run(bin_, args, env=None, stream=False, timeout=None):
         if rc != 0:
             raise DockerError(f"`docker {' '.join(args)}` exited {rc}")
         return ""
-    p = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout)
+    p = subprocess.run(cmd, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
     if p.returncode != 0:
         raise DockerError((p.stderr or p.stdout or "").strip()
                           or f"`docker {' '.join(args)}` exited {p.returncode}")
@@ -391,7 +391,7 @@ def cmd_up(args) -> int:
     else:
         print("backfill     pushing the existing brain into neo4j…")
         sync = subprocess.run([sys.executable, str(Path(__file__).parent / "brain_sync.py")],
-                              capture_output=True, text=True)
+                              capture_output=True, text=True, encoding="utf-8", errors="replace")
         tail = (sync.stdout or sync.stderr or "").strip().splitlines()
         for line in tail[-6:]:
             print("             " + line)

@@ -119,7 +119,7 @@ def reply_of(con, rid):
 
 def main() -> int:
     bin_path = Path(HOME) / "fake-claude"
-    bin_path.write_text(FAKE_CLAUDE)
+    bin_path.write_text(FAKE_CLAUDE, encoding="utf-8")
     bin_path.chmod(bin_path.stat().st_mode | stat.S_IEXEC)
     srv = ThreadingHTTPServer(("127.0.0.1", 0), FakeOllama)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -174,7 +174,7 @@ def main() -> int:
     ck("tokens come from the final usage", (m["tokens_in"], m["tokens_out"]) == (1500, 80))
     ck("the recalled task was in the turn's context",
        any(c.startswith("task_renew-the-parking-permit") for c in m["context"]), str(m["context"]))
-    argv = json.loads((Path(HOME) / "claude-argv.jsonl").read_text().splitlines()[-1])
+    argv = json.loads((Path(HOME) / "claude-argv.jsonl").read_text(encoding="utf-8").splitlines()[-1])
     ck("read-only cuts the tool set and denies the rest",
        "--tools=Read,Grep,Glob,WebSearch,WebFetch,Skill,Bash" in argv and "dontAsk" in argv
        and "--dangerously-skip-permissions" not in argv)
@@ -205,14 +205,14 @@ def main() -> int:
     cid = conv["id"]
     r2 = agents.send(con, "yes", cid, full_tools=True, start=False)
     agents.run_reply(r2["reply_id"])
-    argv = json.loads((Path(HOME) / "claude-argv.jsonl").read_text().splitlines()[-1])
+    argv = json.loads((Path(HOME) / "claude-argv.jsonl").read_text(encoding="utf-8").splitlines()[-1])
     ck("one earlier exchange is carried by default", "Earlier in this conversation" in argv[1]
        and "What must I renew?" in argv[1])
     ck("tools on runs without prompts", "--dangerously-skip-permissions" in argv and "--tools=" not in " ".join(argv))
     agents.save_conversation(con, cid, context_turns=0)
     r3 = agents.send(con, "and?", cid, start=False)
     agents.run_reply(r3["reply_id"])
-    argv = json.loads((Path(HOME) / "claude-argv.jsonl").read_text().splitlines()[-1])
+    argv = json.loads((Path(HOME) / "claude-argv.jsonl").read_text(encoding="utf-8").splitlines()[-1])
     ck("zero carries none", "Earlier in this conversation" not in argv[1])
     ck("the window is clamped", agents.save_conversation(con, cid, context_turns=99)["conversation"]["context_turns"] == 10)
 
@@ -271,7 +271,7 @@ def main() -> int:
     ck("messages alternate, the reply after its question",
        [x["role"] for x in t["messages"][:2]] == ["user", "agent"])
 
-    out = subprocess.run([sys.executable, str(agents.SCRIPT), "thread", cid], capture_output=True, text=True,
+    out = subprocess.run([sys.executable, str(agents.SCRIPT), "thread", cid], capture_output=True, text=True, encoding="utf-8", errors="replace",
                          env=os.environ)
     ck("the thread command prints the thread", out.returncode == 0 and "Owner:" in out.stdout
        and "Oct 5" in out.stdout and agents.QUESTION_MARK not in out.stdout, out.stdout + out.stderr)

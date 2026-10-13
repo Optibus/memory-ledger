@@ -34,7 +34,7 @@ def ck(label, cond, extra=""):
 
 def g(*a):
     p = subprocess.run([sys.executable, str(ROOT / "scripts" / "graph.py"), *a],
-                       capture_output=True, text=True, env=ENV)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", env=ENV)
     try:
         return json.loads(p.stdout)
     except Exception:
@@ -45,7 +45,7 @@ def say(session, prompt):
     """A prompt, captured by the real hook."""
     subprocess.run([sys.executable, str(ROOT / "hooks" / "capture_prompt.py")],
                    input=json.dumps({"session_id": session, "cwd": "/tmp", "prompt": prompt}),
-                   capture_output=True, text=True, env=ENV, check=True)
+                   capture_output=True, text=True, encoding="utf-8", errors="replace", env=ENV, check=True)
 
 
 def count(sql):
@@ -92,7 +92,7 @@ ck("propose-rules says it is off and how to turn it on",
    str(off)[:200])
 ck("nothing was proposed while off", count("SELECT COUNT(*) FROM nodes WHERE type='rule-proposal'") == 0)
 ck("the settings file holds no switch", "learned_rules" not in
-   json.loads(Path(BRAIN, "settings.json").read_text()) if Path(BRAIN, "settings.json").exists() else True)
+   json.loads(Path(BRAIN, "settings.json").read_text(encoding="utf-8")) if Path(BRAIN, "settings.json").exists() else True)
 
 print("on: repeated corrections across sessions are proposed")
 on = g("learned-rules", "on")
@@ -190,7 +190,7 @@ ck("off: the proposals are still listed", g("rule-proposals", "--status", "all")
 ENV2 = {**ENV, "MEMORY_LEDGER_NO_LEARNED_RULES": "1"}
 g("learned-rules", "on")
 p = subprocess.run([sys.executable, str(ROOT / "scripts" / "graph.py"), "learned-rules", "status"],
-                   capture_output=True, text=True, env=ENV2)
+                   capture_output=True, text=True, encoding="utf-8", errors="replace", env=ENV2)
 ck("the NO_ env var outranks the file", json.loads(p.stdout).get("enabled") is False
    and json.loads(p.stdout).get("source") == "env")
 
@@ -198,7 +198,7 @@ print("the SessionStart hook")
 g("learned-rules", "off")
 stamp = Path(BRAIN, ".last_learned_rules")
 hp = subprocess.run([sys.executable, str(ROOT / "hooks" / "open_loops_brief.py")],
-                    input=json.dumps({"session_id": "h"}), capture_output=True, text=True, env=ENV)
+                    input=json.dumps({"session_id": "h"}), capture_output=True, text=True, encoding="utf-8", errors="replace", env=ENV)
 ck("off: the hook stamps nothing and runs nothing", not stamp.exists())
 try:
     json.loads(hp.stdout or "{}")
@@ -207,7 +207,7 @@ except ValueError:
     ck("off: the hook still emits valid JSON", False, hp.stdout[:120])
 g("learned-rules", "on")
 hp = subprocess.run([sys.executable, str(ROOT / "hooks" / "open_loops_brief.py")],
-                    input=json.dumps({"session_id": "h"}), capture_output=True, text=True, env=ENV)
+                    input=json.dumps({"session_id": "h"}), capture_output=True, text=True, encoding="utf-8", errors="replace", env=ENV)
 ck("on: the hook stamps the day", stamp.exists())
 try:
     json.loads(hp.stdout or "{}")

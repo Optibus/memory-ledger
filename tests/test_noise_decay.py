@@ -37,7 +37,7 @@ def ck(label, cond, extra=""):
 
 def g(*a, env=None):
     p = subprocess.run([sys.executable, str(ROOT / "scripts" / "graph.py"), *a],
-                       capture_output=True, text=True, env=env or ENV)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", env=env or ENV)
     try:
         return json.loads(p.stdout)
     except Exception:
@@ -48,7 +48,7 @@ def prompt_hook(sid, text, env=None):
     return subprocess.run(
         [sys.executable, str(ROOT / "hooks" / "capture_prompt.py")],
         input=json.dumps({"session_id": sid, "cwd": "/tmp", "prompt": text}),
-        capture_output=True, text=True, env=env or ENV)
+        capture_output=True, text=True, encoding="utf-8", errors="replace", env=env or ENV)
 
 
 def db():

@@ -51,6 +51,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import _textio  # noqa: E402
 import graph  # noqa: E402
 from _switch import _env  # noqa: E402
 
@@ -2004,8 +2005,8 @@ def run_watched(con, request_id: str, argv: list, timeout: int, **kw) -> subproc
     """`subprocess.run` with the output captured, killed when `timeout` runs
     out (TimeoutExpired) or when the request turns `cancelled` (Cancelled). The
     row is the signal, so a cancel reaches a run in another process too."""
-    p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                         stdin=subprocess.DEVNULL, **kw)
+    p = _textio.popen_text(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           stdin=subprocess.DEVNULL, **kw)
     deadline = time.monotonic() + timeout
     while True:
         try:
@@ -2211,9 +2212,9 @@ NO_ACCESS_ERRORS = ("channel_not_found", "not_in_channel", "is_archived",
 def _notice_env(req: dict) -> dict:
     # Capture off: a notice or a translation is plumbing, not a conversation,
     # and the brain's own hooks would otherwise store each one as a turn.
-    return {**os.environ, "MEMORY_LEDGER_REQUEST_ID": req["id"],
-            "MEMORY_LEDGER_TRIGGER_SOURCE": req["source"], "MEMORY_LEDGER_TRIGGER_NOTICE": "1",
-            "MEMORY_LEDGER_OFF": "1"}
+    return _textio.child_env({**os.environ, "MEMORY_LEDGER_REQUEST_ID": req["id"],
+                              "MEMORY_LEDGER_TRIGGER_SOURCE": req["source"],
+                              "MEMORY_LEDGER_TRIGGER_NOTICE": "1", "MEMORY_LEDGER_OFF": "1"})
 
 
 def _claude_json(cmd: list, req: dict, cfg: dict, timeout: int) -> tuple:
@@ -2221,7 +2222,7 @@ def _claude_json(cmd: list, req: dict, cfg: dict, timeout: int) -> tuple:
     c = cfg.get("claude") or {}
     cwd = session_cwd(cfg)
     try:
-        pr = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+        pr = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
                             env=_notice_env(req), cwd=cwd, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired) as e:
         return False, "", str(e)[:300]
@@ -3835,7 +3836,7 @@ def _check_claude(cfg: dict, problems: list, notes: list) -> None:
     c = cfg.get("claude") or {}
     bin_ = str(c.get("bin") or "claude")
     try:
-        v = subprocess.run([bin_, "--version"], capture_output=True, text=True, timeout=30,
+        v = subprocess.run([bin_, "--version"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
                            stdin=subprocess.DEVNULL)
         (notes if v.returncode == 0 else problems).append(
             f"claude: {(v.stdout or v.stderr).strip()[:80] or 'runs'}")

@@ -37,7 +37,10 @@ KINDS = {
 TEXT_KINDS = {"md", "txt", "html"}
 MAX_BYTES = 5 * 1024 * 1024
 ATTACH_MAX_BYTES = 25 * 1024 * 1024
-MEDIA = {"md": "text/markdown", "txt": "text/plain", "html": "text/html", "pdf": "application/pdf"}
+# Text is always UTF-8 (make_document.py writes it so); naming the charset keeps a
+# browser from guessing the locale's code page and rendering mojibake.
+MEDIA = {"md": "text/markdown; charset=utf-8", "txt": "text/plain; charset=utf-8",
+         "html": "text/html; charset=utf-8", "pdf": "application/pdf"}
 IMAGE_MEDIA = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml"}
 AREAS = ("exports", "attachments")

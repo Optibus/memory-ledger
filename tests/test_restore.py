@@ -38,7 +38,7 @@ def env_for(home: Path) -> dict:
 
 def run(home: Path, script: str, *args) -> subprocess.CompletedProcess:
     return subprocess.run([sys.executable, str(SCRIPTS / script), *args],
-                          env=env_for(home), capture_output=True, text=True, timeout=300)
+                          env=env_for(home), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
 
 
 def nodes(home: Path) -> set:
@@ -52,11 +52,11 @@ def nodes(home: Path) -> set:
 def make_brain(home: Path) -> None:
     home.mkdir(parents=True)
     run(home, "graph.py", "add-node", "--type", "note", "--title", "Kept", "--id", "note_kept")
-    (home / "settings.json").write_text('{"owner": "Original"}')
-    (home / "neo4j.json").write_text('{"password": "secret"}')
+    (home / "settings.json").write_text('{"owner": "Original"}', encoding="utf-8")
+    (home / "neo4j.json").write_text('{"password": "secret"}', encoding="utf-8")
     s = home / "scripts" / "mine.py"
     s.parent.mkdir()
-    s.write_text("print('mine')\n")
+    s.write_text("print('mine')\n", encoding="utf-8")
     s.chmod(0o755)
 
 
@@ -88,7 +88,7 @@ def main() -> int:
         r = run(b, "restore.py", str(zp))
         ck("the restore succeeds", r.returncode == 0, (r.stdout + r.stderr)[-400:])
         ck("the same nodes come back", nodes(b) == nodes(a))
-        ck("home files come back", json.loads((b / "settings.json").read_text())
+        ck("home files come back", json.loads((b / "settings.json").read_text(encoding="utf-8"))
            == {"owner": "Original"})
         ck("a script stays executable", os.access(b / "scripts" / "mine.py", os.X_OK))
         ck("no secret is written", not (b / "neo4j.json").exists())
@@ -100,7 +100,7 @@ def main() -> int:
         r = run(b, "restore.py", str(zp))
         ck("without --replace it refuses", r.returncode == 1 and "note_only_b" in nodes(b),
            r.stderr[-200:])
-        (b / "settings.json").write_text('{"owner": "Edited on b"}')
+        (b / "settings.json").write_text('{"owner": "Edited on b"}', encoding="utf-8")
         r = run(b, "restore.py", str(zp), "--replace")
         kept = list((b / "backups").glob("graph.db.pre-restore-*"))
         ck("with --replace it restores", r.returncode == 0 and "note_only_b" not in nodes(b),
@@ -108,13 +108,13 @@ def main() -> int:
         ck("after snapshotting what it replaced", kept and "note_only_b" in {
             x[0] for x in sqlite3.connect(str(kept[0])).execute("SELECT id FROM nodes")})
         ck("an edited home file is kept by default",
-           json.loads((b / "settings.json").read_text())["owner"] == "Edited on b")
+           json.loads((b / "settings.json").read_text(encoding="utf-8"))["owner"] == "Edited on b")
         r = run(b, "restore.py", str(zp), "--replace", "--overwrite-files")
         saved = list((b / "backups").glob("pre-restore-*/files/settings.json"))
         ck("--overwrite-files replaces it", json.loads(
-            (b / "settings.json").read_text())["owner"] == "Original")
+            (b / "settings.json").read_text(encoding="utf-8"))["owner"] == "Original")
         ck("and saves the one it replaced", saved and json.loads(
-            saved[0].read_text())["owner"] == "Edited on b")
+            saved[0].read_text(encoding="utf-8"))["owner"] == "Edited on b")
 
         print("== a bad backup restores nothing ==")
         bad = WORK / "bad.zip"

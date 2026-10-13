@@ -181,7 +181,7 @@ def test_cli():
 
         def run(*args):
             return subprocess.run([sys.executable, str(SCRIPT), "--db", str(db), *args],
-                                  capture_output=True, text=True)
+                                  capture_output=True, text=True, encoding="utf-8", errors="replace")
 
         p = run("render", "--out", str(out))
         res = json.loads(p.stdout or "{}")
@@ -206,7 +206,7 @@ def test_cli():
         env = {**os.environ, "SECOND_BRAIN_HOME": d, "MEMORY_LEDGER_HOME": d}
         env.pop("SECOND_BRAIN_DB", None)
         env.pop("MEMORY_LEDGER_DB", None)
-        p7 = subprocess.run([sys.executable, str(SCRIPT), "render"], capture_output=True, text=True, env=env)
+        p7 = subprocess.run([sys.executable, str(SCRIPT), "render"], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
         ck("with no --db it reads the brain home's graph.db", "$600.00" in p7.stdout, p7.stderr[:200])
 
 

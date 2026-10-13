@@ -66,7 +66,7 @@ def revived_lines():
         # bargain the capture hooks make.
         env = {**os.environ, "SECOND_BRAIN_NO_AUTOSYNC": "1"}
         raw = subprocess.run([sys.executable, graph, "recheck", "--apply"],
-                             capture_output=True, text=True, timeout=8,
+                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=8,
                              env=env).stdout
         items = json.loads(raw).get("items") or []
     except Exception:
@@ -102,13 +102,13 @@ def consolidate_daily():
     stamp = os.path.join(home, ".last_consolidate")
     today = datetime.date.today().isoformat()
     try:
-        with open(stamp) as f:
+        with open(stamp, encoding="utf-8") as f:
             if f.read().strip() == today:
                 return                      # already done today
     except OSError:
         pass
     try:
-        with open(stamp, "w") as f:
+        with open(stamp, "w", encoding="utf-8") as f:
             f.write(today)                  # write first: never loop on failure
         subprocess.Popen(
             # --no-backup: this fires unattended every morning, and a snapshot
@@ -139,13 +139,13 @@ def learned_rules_daily():
     stamp = os.path.join(home, ".last_learned_rules")
     today = datetime.date.today().isoformat()
     try:
-        with open(stamp) as f:
+        with open(stamp, encoding="utf-8") as f:
             if f.read().strip() == today:
                 return
     except OSError:
         pass
     try:
-        with open(stamp, "w") as f:
+        with open(stamp, "w", encoding="utf-8") as f:
             f.write(today)                  # write first: never loop on failure
         subprocess.Popen(
             [sys.executable, graph, "propose-rules"],
@@ -179,12 +179,12 @@ def mirror_sync():
         stamp = os.path.join(home, ".last_mirror")
         today = datetime.date.today().isoformat()
         try:
-            with open(stamp) as f:
+            with open(stamp, encoding="utf-8") as f:
                 full = f.read().strip() != today
         except OSError:
             full = True
         if full:
-            with open(stamp, "w") as f:
+            with open(stamp, "w", encoding="utf-8") as f:
                 f.write(today)
         # the full push after the pull, never beside it: one process, in order
         _detached("-c", "import subprocess,sys;"
@@ -198,7 +198,7 @@ mirror_sync()
 
 try:
     raw = subprocess.run([sys.executable, graph, "open-loops", "--limit", "6"],
-                         capture_output=True, text=True, timeout=8).stdout
+                         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=8).stdout
     d = json.loads(raw)
 except Exception:
     print(_switch.hook_context("SessionStart", CAPTURE_ON))
@@ -231,7 +231,7 @@ focus_lines = []
 try:
     rr = subprocess.run([sys.executable, graph, "resume", "--budget", "1400",
                          "--limit", "3"],
-                        capture_output=True, text=True, timeout=8).stdout
+                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=8).stdout
     for f in (json.loads(rr).get("focus") or [])[:3]:
         focus_lines.append(f"- {f.get('title', '')[:70]}")
 except Exception:

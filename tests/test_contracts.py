@@ -43,7 +43,7 @@ def env_for(home):
 
 def g(*a, home=BRAIN):
     p = subprocess.run([sys.executable, str(ROOT / "scripts" / "graph.py"), *a],
-                       capture_output=True, text=True, env=env_for(home))
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", env=env_for(home))
     try:
         return json.loads(p.stdout)
     except Exception:
@@ -195,7 +195,7 @@ def test_round_trip(sid, rid):
     import graph
     far = json.loads(subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "graph.py"), "get-node", "--id", sid],
-        capture_output=True, text=True, env=env_for(other)).stdout)
+        capture_output=True, text=True, encoding="utf-8", errors="replace", env=env_for(other)).stdout)
     ck("the title survives, not flattened to the slug",
        far["ok"] and far["node"]["title"] == "Sync the brain by file",
        far.get("node", {}).get("title", ""))
@@ -207,7 +207,7 @@ def test_round_trip(sid, rid):
          "import sys;sys.path.insert(0,%r);import graph;import json;"
          "print(json.dumps([r['id'] for r in graph.honored_rules(graph.connect(),%r)]))"
          % (str(ROOT / "scripts"), sid)],
-        capture_output=True, text=True, env=env_for(other)).stdout)
+        capture_output=True, text=True, encoding="utf-8", errors="replace", env=env_for(other)).stdout)
     ck("the honors edge was rebuilt from the file", edges == [rid], str(edges))
 
     audit = g("audit-contracts", "--kind", "learned", home=other)
@@ -682,12 +682,12 @@ def test_home_adoption_keeps_the_data():
         env.pop("MEMORY_LEDGER_HOME", None)
         env.pop("SECOND_BRAIN_HOME", None)
         subprocess.run([sys.executable, str(ROOT / "hooks" / "bootstrap.py")],
-                       input="{}", capture_output=True, text=True, env=env)
+                       input="{}", capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
         dbs = [str(p) for p in Path(fake).rglob("graph.db")]
         ck("bootstrap created exactly one database, the one already there",
            len(dbs) == 1 and ".second_brain" in dbs[0], str(dbs))
         p = subprocess.run([sys.executable, str(ROOT / "scripts" / "graph.py"), "stats"],
-                           capture_output=True, text=True, env=env)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
         n = json.loads(p.stdout).get("nodes") if p.returncode == 0 else None
         ck("and the pre-rename node is still there, read through the new name",
            n == 1, f"nodes={n}")
@@ -746,7 +746,7 @@ def test_built_ui_is_coherent():
         # .mjs so `node --check` parses it as the ES module the build emits.
         src = Path(tempfile.mkdtemp(prefix="second-brain-js-")) / "bundle.mjs"
         src.write_text((dist / rel).read_text(encoding="utf-8"), encoding="utf-8")
-        pr = subprocess.run([node, "--check", str(src)], capture_output=True, text=True)
+        pr = subprocess.run([node, "--check", str(src)], capture_output=True, text=True, encoding="utf-8", errors="replace")
         why = next((l for l in (pr.stderr or "").splitlines() if "Error" in l), "")
         ck(f"{rel} parses — a dead bundle takes the whole page with it",
            pr.returncode == 0, why.strip())

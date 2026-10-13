@@ -37,7 +37,7 @@ def ck(label, cond, extra=""):
 
 def g(*a):
     p = subprocess.run([sys.executable, str(ROOT / "scripts" / "graph.py"), *a],
-                       capture_output=True, text=True, env=ENV)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", env=ENV)
     try:
         return json.loads(p.stdout)
     except Exception:
@@ -48,7 +48,7 @@ def say(session, prompt, **env):
     """A prompt through the real hook; returns the parsed stdout, or None."""
     p = subprocess.run([sys.executable, str(ROOT / "hooks" / "capture_prompt.py")],
                        input=json.dumps({"session_id": session, "cwd": "/tmp", "prompt": prompt}),
-                       capture_output=True, text=True, env={**ENV, **env}, check=True)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", env={**ENV, **env}, check=True)
     return json.loads(p.stdout) if p.stdout.strip() else None
 
 
@@ -71,7 +71,7 @@ g("add-node", "--type", "note", "--title", "Banana bread recipe",
 
 # --- the SessionStart brief ------------------------------------------------
 p = subprocess.run([sys.executable, str(ROOT / "hooks" / "open_loops_brief.py")],
-                   capture_output=True, text=True, env=ENV)
+                   capture_output=True, text=True, encoding="utf-8", errors="replace", env=ENV)
 try:
     brief = json.loads(p.stdout)
 except Exception:

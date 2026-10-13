@@ -118,8 +118,8 @@ def test_payload(con):
 def test_restore(con):
     print("== a restore rebuilds the same brain ==")
     Path(HOME, "scripts").mkdir(exist_ok=True)
-    Path(HOME, "scripts", "mine.py").write_text("print('mine')\n")
-    Path(HOME, "neo4j.json").write_text('{"password": "secret"}')
+    Path(HOME, "scripts", "mine.py").write_text("print('mine')\n", encoding="utf-8")
+    Path(HOME, "neo4j.json").write_text('{"password": "secret"}', encoding="utf-8")
     files = brain_sync.local_files(Path(HOME))
     paths = {f["path"] for f in files}
     ck("user scripts are mirrored", "scripts/mine.py" in paths, paths)
@@ -151,7 +151,7 @@ def test_restore(con):
         os.environ.pop(prefix + "DB", None)
     fresh = Path(tempfile.mkdtemp(prefix="second-brain-mirror-home-"))
     written = brain_sync.restore_files(fresh, master["files"], overwrite=False)
-    ck("home files are written back", (fresh / "scripts" / "mine.py").read_text()
+    ck("home files are written back", (fresh / "scripts" / "mine.py").read_text(encoding="utf-8")
        == "print('mine')\n", written)
 
 
@@ -210,26 +210,26 @@ def test_pull(con):
 
     print("== a file changed on both sides keeps both ==")
     f = Path(HOME, "scripts", "both.py")
-    f.write_text("base\n")
+    f.write_text("base\n", encoding="utf-8")
     graph._sync_set(con, "file:scripts/both.py", brain_sync._sha("base\n"))
-    f.write_text("local edit\n")
+    f.write_text("local edit\n", encoding="utf-8")
     fake_master({"clock": 13, "files": [["scripts/both.py", "their edit\n",
                                          brain_sync._sha("their edit\n"), "machine-b"]]})
     res = brain_sync.pull_changes(con, Path(HOME))
     side = Path(HOME, "scripts", "both.py.conflict-machine-b")
-    ck("the local file stays", f.read_text() == "local edit\n")
+    ck("the local file stays", f.read_text(encoding="utf-8") == "local edit\n")
     ck("the other copy is written beside it", side.exists()
-       and side.read_text() == "their edit\n", res.get("conflicts"))
+       and side.read_text(encoding="utf-8") == "their edit\n", res.get("conflicts"))
     ck("and a conflict copy is never mirrored itself",
        "scripts/both.py.conflict-machine-b" not in
        {x["path"] for x in brain_sync.local_files(Path(HOME))})
     g = Path(HOME, "scripts", "untouched.py")
-    g.write_text("v1\n")
+    g.write_text("v1\n", encoding="utf-8")
     graph._sync_set(con, "file:scripts/untouched.py", brain_sync._sha("v1\n"))
     fake_master({"clock": 14, "files": [["scripts/untouched.py", "v2\n",
                                          brain_sync._sha("v2\n"), "machine-b"]]})
     brain_sync.pull_changes(con, Path(HOME))
-    ck("a file changed only elsewhere is updated here", g.read_text() == "v2\n")
+    ck("a file changed only elsewhere is updated here", g.read_text(encoding="utf-8") == "v2\n")
 
 
 def main():

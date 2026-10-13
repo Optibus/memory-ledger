@@ -68,10 +68,10 @@ with open(os.path.join(os.environ["SECOND_BRAIN_HOME"], "claude-calls.jsonl"), "
     f.write(json.dumps({"args": args, "src": os.environ.get("MEMORY_LEDGER_TRIGGER_SOURCE")})
             + "\\n")
 print(json.dumps({"result": "noted it", "total_cost_usd": 0.01}))
-""")
+""", encoding="utf-8")
 FAKE_CLAUDE.chmod(FAKE_CLAUDE.stat().st_mode | stat.S_IEXEC)
 Path(HOME, "trigger.json").write_text(json.dumps({
-    "enabled": True, "claude": {"bin": str(FAKE_CLAUDE), "timeout_s": 60}}))
+    "enabled": True, "claude": {"bin": str(FAKE_CLAUDE), "timeout_s": 60}}), encoding="utf-8")
 
 
 def free_port() -> int:
@@ -409,7 +409,7 @@ def test_brain(base: str, base2: str) -> None:
     print("\n== brain: the session ==")
     run = trigger.run_request(req["id"])
     ck("the session runs", run.get("ok") and run["status"] == "done", str(run))
-    calls = [json.loads(x) for x in (Path(HOME) / "claude-calls.jsonl").read_text().splitlines()]
+    calls = [json.loads(x) for x in (Path(HOME) / "claude-calls.jsonl").read_text(encoding="utf-8").splitlines()]
     prompt = calls[-1]["args"][calls[-1]["args"].index("-p") + 1]
     ck("it is told the source and that it is not a conversation to post in",
        "source: b2b" in prompt and "b2b_event: message" in prompt
@@ -422,7 +422,7 @@ def test_brain(base: str, base2: str) -> None:
     sdir.mkdir(parents=True, exist_ok=True)
     (sdir / "b2b-note.sh").write_text(
         '#!/bin/sh\nprintf "%s|%s|%s\\n" "$1" "$BRAIN_TRIGGER_CONTENT" "$BRAIN_B2B_BROKER"'
-        ' >> "$SECOND_BRAIN_HOME/b2b-script.log"\n')
+        ' >> "$SECOND_BRAIN_HOME/b2b-script.log"\n', encoding="utf-8")
     (sdir / "b2b-note.sh").chmod(0o755)
     ck("a script with no name is refused", b2b.save_config(
         {"action": "script", "script": {"name": ""}}).get("ok") is False)
@@ -434,7 +434,7 @@ def test_brain(base: str, base2: str) -> None:
     ck("a received message can run a script", res.get("ok")
        and res["config"]["action"] == "script"
        and res["config"]["script"]["name"] == "b2b-note.sh", str(res))
-    n_calls = len((Path(HOME) / "claude-calls.jsonl").read_text().splitlines())
+    n_calls = len((Path(HOME) / "claude-calls.jsonl").read_text(encoding="utf-8").splitlines())
     peer.send(me, "ship it")
     res = b2b.poll(dispatch=dispatched.append)
     sreq = trigger.get_request(con, res["queued"][0]) if res.get("queued") else {}
@@ -442,9 +442,9 @@ def test_brain(base: str, base2: str) -> None:
        (sreq.get("meta") or {}).get("action", {}).get("type") == "script", str(sreq))
     run = trigger.run_request(sreq.get("id", ""))
     ck("it runs the script", run.get("ok") and run["status"] == "done", str(run))
-    log = (Path(HOME) / "b2b-script.log").read_text() if (Path(HOME) / "b2b-script.log").exists() else ""
+    log = (Path(HOME) / "b2b-script.log").read_text(encoding="utf-8") if (Path(HOME) / "b2b-script.log").exists() else ""
     ck("with the variables filled in", log.strip() == "Ana Souza|ship it|team-a-relay", log)
-    ck("and no Claude session", len((Path(HOME) / "claude-calls.jsonl").read_text()
+    ck("and no Claude session", len((Path(HOME) / "claude-calls.jsonl").read_text(encoding="utf-8")
                                     .splitlines()) == n_calls)
     ck("back to Claude", b2b.save_config({"action": "claude"}).get("ok")
        and b2b.load_config()["action"] == "claude")

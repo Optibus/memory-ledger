@@ -49,6 +49,15 @@ that needs `cryptography` (from `requirements-server.txt`). Its launcher,
 5. **The brain home is private.** `~/.second_brain/` is outside the repo and
    `.gitignore`d. No test, fixture or doc may write real personal data into the
    repo.
+6. **Name the encoding, always.** Everything the brain reads and writes is
+   UTF-8, and Python's default is the locale's (cp1252 on most Windows
+   machines), so every `open()`, `read_text()` and `write_text()` in text mode
+   passes `encoding="utf-8"`, and every subprocess in text mode goes through
+   `scripts/_textio.py` (`run_text()`, `popen_text()`) or passes
+   `encoding="utf-8", errors="replace"` itself. A child process gets
+   `_textio.child_env()`, which sets `PYTHONUTF8=1` and
+   `PYTHONIOENCODING=utf-8`. `tests/test_encoding.py` fails on any text-mode
+   call without an encoding.
 
 ## Getting set up
 
@@ -84,6 +93,7 @@ claude --plugin-dir ~/dev/memory-ledger
 |---|---|
 | `scripts/graph.py` | the engine — schema, commands, recall, consolidation (~2.6k lines) |
 | `scripts/brain_query.py` | read-only date views, no writes |
+| `scripts/_textio.py` | UTF-8 text I/O for subprocesses: `run_text()`, `popen_text()`, `child_env()` |
 | `scripts/trigger.py` | the Slack/Jira trigger engine — gate, audit log, checkpoints, Jira poll, `claude -p` dispatch ([triggers](docs/trigger.md)) |
 | `scripts/b2b.py` | B2B, this brain's side: its key pair, the brokers, peers (`b2b_peer`, linked to people), send, and the poll that turns each message into a trigger request ([B2B](docs/b2b.md)) |
 | `scripts/b2b_crypto.py` | B2B's sealing and opening (X25519, HKDF, AES-GCM); the one engine module that needs `cryptography`, from the server's venv |

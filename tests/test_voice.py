@@ -203,7 +203,7 @@ while True:
 def test_socket():
     print("\n== the dictation socket, with a fake transcriber ==")
     worker = Path(HOME) / "fake_worker.py"
-    worker.write_text(FAKE_WORKER)
+    worker.write_text(FAKE_WORKER, encoding="utf-8")
     with socket.socket() as t:
         t.bind(("127.0.0.1", 0))
         port = t.getsockname()[1]

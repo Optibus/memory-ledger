@@ -30,7 +30,7 @@ def graph_cmd(argv, timeout=300) -> dict:
     wedge the server's own connection."""
     cmd = [sys.executable, str(GRAPH_PY), *argv]
     try:
-        pr = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        pr = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": f"{argv[0]} timed out"}
     if pr.returncode != 0:

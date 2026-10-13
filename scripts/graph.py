@@ -582,7 +582,7 @@ def _neo4j_cfg() -> dict:
     f = home_dir() / "neo4j.json"
     if f.exists():
         try:
-            cfg = json.loads(f.read_text())
+            cfg = json.loads(f.read_text(encoding="utf-8"))
         except Exception:
             cfg = {}
     return {
@@ -1425,9 +1425,9 @@ def cmd_export(args):
 
     if args.format in ("json", "both"):
         (base / "nodes.json").write_text(
-            json.dumps(nodes, indent=2, ensure_ascii=False))
+            json.dumps(nodes, indent=2, ensure_ascii=False), encoding="utf-8")
         (base / "edges.json").write_text(
-            json.dumps(edges, indent=2, ensure_ascii=False))
+            json.dumps(edges, indent=2, ensure_ascii=False), encoding="utf-8")
     if args.format in ("md", "both"):
         adj = {}
         for e in edges:
@@ -1451,7 +1451,7 @@ def cmd_export(args):
                 lines.append("Links: " + ", ".join(
                     f"{rel} [[{dst}]]" for rel, dst in links))
             lines.append("")
-        (base / "memory.md").write_text("\n".join(lines))
+        (base / "memory.md").write_text("\n".join(lines), encoding="utf-8")
     out({"ok": True, "exported_to": str(base), "nodes": len(nodes),
          "edges": len(edges), "format": args.format})
 
@@ -1534,7 +1534,7 @@ def cmd_add_skill(args):
         skill_path.parent.mkdir(parents=True, exist_ok=True)
         skill_path.write_text(_SKILL_TEMPLATE.format(
             name=name, title=args.title, when=when or "(describe when to use)",
-            body=body or "(steps)", date=ts, node_id=node_id))
+            body=body or "(steps)", date=ts, node_id=node_id), encoding="utf-8")
         wrote_file = True
 
     row = con.execute("SELECT * FROM nodes WHERE id=?", (node_id,)).fetchone()
@@ -6395,7 +6395,7 @@ def api_gauge_probe(con, key="") -> dict:
             skipped.append({"key": k, "why": "no probe"})
             continue
         try:
-            p = subprocess.run(probe, shell=True, capture_output=True, text=True,
+            p = subprocess.run(probe, shell=True, capture_output=True, text=True, encoding="utf-8", errors="replace",
                                timeout=PROBE_TIMEOUT)
         except Exception as e:
             skipped.append({"key": k, "why": f"probe failed: {e}"}); continue

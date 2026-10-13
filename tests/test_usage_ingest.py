@@ -84,7 +84,7 @@ def make_world(base: Path) -> Path:
     (alpha / "src").mkdir()
     wt = base / "work" / "alpha-wt-ABC-123"
     (wt / "src").mkdir(parents=True)
-    (wt / ".git").write_text(f"gitdir: {alpha}/.git/worktrees/alpha-wt-ABC-123\n")
+    (wt / ".git").write_text(f"gitdir: {alpha}/.git/worktrees/alpha-wt-ABC-123\n", encoding="utf-8")
     beta = base / "work" / "beta"
     (beta / ".git").mkdir(parents=True)
     loose = base / "work" / "loose"
@@ -150,7 +150,7 @@ def nodes():
 def cli(*args, env=None):
     e = {**os.environ, **(env or {})}
     return subprocess.run([sys.executable, str(SCRIPTS / "usage_ingest.py"), *args],
-                          capture_output=True, text=True, env=e)
+                          capture_output=True, text=True, encoding="utf-8", errors="replace", env=e)
 
 
 # ------------------------------------------------------------------- tests
@@ -176,11 +176,11 @@ def test_cost_math():
     ck("an unknown model is flagged, not hidden", known is False)
     with tempfile.TemporaryDirectory() as d:
         f = Path(d) / "p.json"
-        f.write_text(json.dumps({"some-future": [1, 2, 3, 4]}))
+        f.write_text(json.dumps({"some-future": [1, 2, 3, 4]}), encoding="utf-8")
         t2 = ui.load_prices(str(f))
         (p, known), _ = ui.turn_cost("claude-some-future-model", {"input_tokens": 1_000_000}, t2)
         ck("an override file wins", known and round(p["input"], 4) == 1.0)
-        f.write_text(json.dumps({"x": [1, 2]}))
+        f.write_text(json.dumps({"x": [1, 2]}), encoding="utf-8")
         try:
             ui.load_prices(str(f))
             ck("a malformed override is refused", False)
@@ -278,7 +278,7 @@ def test_write_and_idempotency(projects: Path):
     ck("and adds no node", nodes() == n1)
     # the week's logs grow: the node updates in place
     p = projects / "proj-a" / "s4.jsonl"
-    with open(p, "a") as fh:
+    with open(p, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(asst("2026-01-20T09:30:00Z", "m7", sid="s4")) + "\n")
     os.utime(p, (time.time() + 5, time.time() + 5))
     r3 = ui.ingest(projects)
@@ -288,7 +288,7 @@ def test_write_and_idempotency(projects: Path):
        and len(n3) == 2 and n3["usage-week_2026-W04"]["metrics"]["turns"] == 2)
     # the dry run writes nothing, the checkpoint included
     cp_before = (Path(HOME) / ui.CHECKPOINT).read_bytes()
-    with open(p, "a") as fh:
+    with open(p, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(asst("2026-01-20T09:40:00Z", "m8", sid="s4")) + "\n")
     os.utime(p, (time.time() + 10, time.time() + 10))
     r4 = ui.ingest(projects, dry_run=True)
@@ -298,7 +298,7 @@ def test_write_and_idempotency(projects: Path):
     # never replaced by less data
     shutil_dir = projects / "proj-a"
     hidden = shutil_dir / "s3.jsonl"
-    saved = hidden.read_text()
+    saved = hidden.read_text(encoding="utf-8")
     hidden.unlink()
     (Path(HOME) / ui.CHECKPOINT).unlink()   # logs pruned AND checkpoint lost
     r5 = ui.ingest(projects)
@@ -308,7 +308,7 @@ def test_write_and_idempotency(projects: Path):
     forced = ui.ingest(projects, force=True)
     ck("--force replaces it", [w for w in forced["weeks"] if w["week"] == "2026-W03"][0]["action"] == "updated"
        and nodes()["usage-week_2026-W03"]["metrics"]["sessions"] == 2)
-    hidden.write_text(saved)
+    hidden.write_text(saved, encoding="utf-8")
     ui.ingest(projects)
     # another tool's node is left alone (a separate throwaway brain)
     with tempfile.TemporaryDirectory() as home:
@@ -317,7 +317,7 @@ def test_write_and_idempotency(projects: Path):
                   "metrics": {"costUSD": 1.0, "sessions": 1}}
         subprocess.run([sys.executable, str(SCRIPTS / "graph.py"), "add-node", "--type", "usage-week",
                         "--id", "usage-week_2026-W03", "--title", "theirs", "--props", json.dumps(theirs)],
-                       capture_output=True, text=True, env=env, check=True)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, check=True)
         res = json.loads(cli("run", "--projects-dir", str(projects), "--json", env=env).stdout)
         w03 = [w for w in res["weeks"] if w["week"] == "2026-W03"][0]
         ck("a node written by another tool is kept, with the reason",
@@ -329,11 +329,11 @@ def test_write_and_idempotency(projects: Path):
 def test_checkpoint(projects: Path):
     print("\n== the checkpoint ==")
     cp_path = Path(HOME) / ui.CHECKPOINT
-    cp = json.loads(cp_path.read_text())
+    cp = json.loads(cp_path.read_text(encoding="utf-8"))
     ck("it records each log's mtime+size and summary", len(cp["files"]) >= 6
        and all("sig" in f for f in cp["files"].values()))
-    ck("it holds no prompt or answer text", "please add a flag" not in cp_path.read_text()
-       and "hit your 5-hour limit" not in cp_path.read_text())
+    ck("it holds no prompt or answer text", "please add a flag" not in cp_path.read_text(encoding="utf-8")
+       and "hit your 5-hour limit" not in cp_path.read_text(encoding="utf-8"))
     table, tz = ui.load_prices(None), ui.get_tz("UTC")
     ck("a changed price table invalidates it (so every session is re-priced)",
        ui.load_checkpoint(cp_path, "other-fingerprint")["files"] == {})
@@ -358,7 +358,7 @@ def test_cli_and_hook(projects: Path):
         ck("a missing prices file exits non-zero with the reason", p.returncode == 2 and "error" in p.stderr)
         p = cli("run", "--projects-dir", "/does/not/exist", "--json", env=env)
         ck("no logs directory is a note, not a failure", p.returncode == 0 and "no session logs" in p.stdout)
-        (Path(home) / ui.LOCK).write_text("999")
+        (Path(home) / ui.LOCK).write_text("999", encoding="utf-8")
         p = cli("run", "--projects-dir", str(projects), "--quiet", "--locked", env=env)
         ck("a held lock makes a background run stand down", p.returncode == 0 and (Path(home) / ui.LOCK).exists())
         (Path(home) / ui.LOCK).unlink()
@@ -367,7 +367,7 @@ def test_cli_and_hook(projects: Path):
         env = {**os.environ, "SECOND_BRAIN_HOME": home, "HOME": home, "MEMORY_LEDGER_NO_AUTOSYNC": "1",
                **(extra or {})}
         return subprocess.run([sys.executable, str(ROOT / "hooks" / "usage_ingest.py")], input=stdin,
-                              capture_output=True, text=True, env=env)
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
 
     with tempfile.TemporaryDirectory() as home:
         (Path(home) / ".claude" / "projects").mkdir(parents=True)
@@ -391,14 +391,14 @@ def test_cli_and_hook(projects: Path):
         ck("the opt-out env var stops it: no stamp, no output", p.returncode == 0 and p.stdout == ""
            and not (Path(home) / ui.STAMP).exists())
     with tempfile.TemporaryDirectory() as home:
-        (Path(home) / "settings.json").write_text('{"usage_ingest": false}')
+        (Path(home) / "settings.json").write_text('{"usage_ingest": false}', encoding="utf-8")
         hook(home, {"MEMORY_LEDGER_USAGE_PROJECTS_DIR": str(projects)})
         ck("so does settings.json", not (Path(home) / ui.STAMP).exists())
     with tempfile.TemporaryDirectory() as home:
         p = hook(home + "/not-created", {"MEMORY_LEDGER_USAGE_PROJECTS_DIR": str(projects)}, stdin="garbage")
         ck("a brain that does not exist is not created by the hook, and garbage on stdin is fine",
            p.returncode == 0 and not Path(home + "/not-created").exists())
-    hooks = json.loads((ROOT / "hooks" / "hooks.json").read_text())
+    hooks = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
     ck("it is bound to SessionStart startup", any(
         "usage_ingest.py" in h["command"] for blk in hooks["hooks"]["SessionStart"]
         if blk["matcher"] == "startup" for h in blk["hooks"]))
@@ -419,15 +419,15 @@ def test_end_to_end(projects: Path):
     ck("deterministic", page == ur.render([w for w in ur.load_weeks() if w["week"] in ("2026-W03", "2026-W04")]))
     env = {**os.environ, "SECOND_BRAIN_HOME": HOME, "MEMORY_LEDGER_USAGE_PROJECTS_DIR": str(projects)}
     p = subprocess.run([sys.executable, str(SCRIPTS / "usage_report.py"), "render", "--ingest"],
-                       capture_output=True, text=True, env=env)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
     ck("render --ingest ingests first, then renders", p.returncode == 0 and "Where the Quota Went" in p.stdout, p.stderr[:200])
     with tempfile.TemporaryDirectory() as home:
         env2 = {**env, "SECOND_BRAIN_HOME": home}
         p = subprocess.run([sys.executable, str(SCRIPTS / "usage_report.py"), "render", "--ingest"],
-                           capture_output=True, text=True, env=env2)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", env=env2)
         ck("on a fresh brain render --ingest fills it from the logs", p.returncode == 0 and "alpha" in p.stdout, p.stderr[:200])
         p = subprocess.run([sys.executable, str(SCRIPTS / "usage_report.py"), "--db", "x.db", "render", "--ingest"],
-                           capture_output=True, text=True, env=env2)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", env=env2)
         ck("--ingest with --db is refused", p.returncode == 2)
     ck("an older node without the hour series still renders (no rhythm section)",
        'id="rhythm"' not in ur.render([{"id": "x", "week": "2026-W01", "from": "2025-12-29", "to": "2026-01-04",

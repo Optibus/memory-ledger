@@ -19,7 +19,7 @@ import sys
 try:
     staged = subprocess.check_output(
         ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
-        text=True).split()
+        text=True, encoding="utf-8", errors="replace").split()
 except Exception:
     sys.exit(0)  # nothing to check / not a git context
 
@@ -64,7 +64,7 @@ if behavior and not docs:
 # rule classes it honors; the tree agrees; the corpus follows its own house style.
 checker = "scripts/check-contracts.sh"
 if os.path.exists(checker):
-    r = subprocess.run(["bash", checker], text=True, capture_output=True)
+    r = subprocess.run(["bash", checker], text=True, encoding="utf-8", errors="replace", capture_output=True)
     sys.stdout.write(r.stdout)
     if r.returncode != 0:
         sys.stderr.write(r.stderr)

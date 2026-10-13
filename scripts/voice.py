@@ -388,7 +388,7 @@ class SayEngine(TTSEngine):
         if self.problem():
             return []
         try:
-            out = subprocess.run(["say", "-v", "?"], capture_output=True, text=True, timeout=10).stdout
+            out = subprocess.run(["say", "-v", "?"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10).stdout
         except (OSError, subprocess.SubprocessError):
             return []
         found = []
@@ -537,7 +537,7 @@ def translate(text: str, target: str, claude_bin: str = "claude") -> tuple[str, 
     r = subprocess.run([claude_bin, "-p", f"<text>\n{text}\n</text>", "--model", TRANSLATE_MODEL,
                         "--tools", "", "--append-system-prompt",
                         TRANSLATE_PROMPT.format(lang=LANG_NAME.get(target, target))],
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
     out = r.stdout.strip()
     if r.returncode != 0 or not out:
         raise RuntimeError(r.stderr.strip()[:300] or "the translator returned nothing")

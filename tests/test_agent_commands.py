@@ -69,17 +69,17 @@ ck("writes is guessed from the name", {c["name"]: c["writes"] for c in p["comman
    == {"alpha:recall": False, "alpha:send-note": True, "mine": False})
 
 res = ac.set_plugin("beta@m", True)
-saved = json.loads((HOME / "settings.json").read_text())
+saved = json.loads((HOME / "settings.json").read_text(encoding="utf-8"))
 ck("toggle on enables the plugin", res["ok"] and saved["enabledPlugins"]["beta@m"] is True)
 ck("toggle leaves other keys alone", saved["theme"] == "dark" and saved["enabledPlugins"]["alpha@m"] is True)
 ck("toggled plugin's commands now appear", any(c["name"].startswith("beta:") for c in res["commands"]))
 ck("toggle off disables it", ac.set_plugin("beta@m", False)["ok"]
-   and json.loads((HOME / "settings.json").read_text())["enabledPlugins"]["beta@m"] is False)
+   and json.loads((HOME / "settings.json").read_text(encoding="utf-8"))["enabledPlugins"]["beta@m"] is False)
 ck("unknown plugin is refused", ac.set_plugin("nope@m", True)["ok"] is False)
 
 put(HOME / "settings.json", "{not json")
 ck("unreadable settings are left untouched", ac.set_plugin("alpha@m", False)["ok"] is False
-   and (HOME / "settings.json").read_text() == "{not json")
+   and (HOME / "settings.json").read_text(encoding="utf-8") == "{not json")
 
 print(f"\n{len(FAILS)} failed" if FAILS else "\nall passed")
 raise SystemExit(1 if FAILS else 0)

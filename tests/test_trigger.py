@@ -64,7 +64,7 @@ if prompt.startswith("Post one Slack message"):
 if "FAIL-ME" in prompt:
     print(json.dumps({"is_error": True, "result": "it broke"})); sys.exit(1)
 print(json.dumps({"result": "replied in thread", "total_cost_usd": 0.0123}))
-""")
+""", encoding="utf-8")
 FAKE_CLAUDE.chmod(FAKE_CLAUDE.stat().st_mode | stat.S_IEXEC)
 
 CFG = {
@@ -87,7 +87,7 @@ CFG = {
 
 def write_cfg(cfg=CFG):
     trigger.config_path().parent.mkdir(parents=True, exist_ok=True)
-    trigger.config_path().write_text(json.dumps(cfg))
+    trigger.config_path().write_text(json.dumps(cfg), encoding="utf-8")
     return trigger.load_config()
 
 
@@ -144,7 +144,7 @@ def test_config():
     cfg = trigger.load_config()
     ck("no file means disabled, and says why",
        not trigger.source_enabled(cfg, "slack") and "does not exist" in cfg["_problem"])
-    trigger.config_path().write_text("{not json")
+    trigger.config_path().write_text("{not json", encoding="utf-8")
     cfg = trigger.load_config()
     ck("a file that does not parse turns nothing on",
        "not valid JSON" in cfg["_problem"] and not trigger.source_enabled(cfg, "jira"))
@@ -276,7 +276,7 @@ def _cli_action(rid):
     env = {**os.environ, "MEMORY_LEDGER_REQUEST_ID": rid}
     p = subprocess.run([sys.executable, str(ROOT / "scripts" / "trigger.py"), "action",
                         "--kind", "slack-message", "--detail", "cli"],
-                       capture_output=True, text=True, env=env)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
     try:
         return p.returncode == 0 and json.loads(p.stdout)["ok"]
     except ValueError:
@@ -298,7 +298,7 @@ def test_dispatch(cfg):
     ck("its result and cost are recorded",
        req["result"] == "replied in thread" and abs(req["cost_usd"] - 0.0123) < 1e-9)
     calls = [json.loads(line) for line in
-             (Path(HOME) / "claude-calls.jsonl").read_text().splitlines()]
+             (Path(HOME) / "claude-calls.jsonl").read_text(encoding="utf-8").splitlines()]
     last = calls[-1]
     args = last["args"]
     ck("headless, JSON out, permissions skipped",
@@ -392,7 +392,7 @@ def test_logging(cfg):
             h.close()
         trigger.log._brain_path = None
     ck("and it all lands in <home>/logs/trigger.log",
-       "new request" in path.read_text() and path.parent == Path(HOME) / "logs")
+       "new request" in path.read_text(encoding="utf-8") and path.parent == Path(HOME) / "logs")
     sys.path.insert(0, str(ROOT / "scripts"))
     from brain_api import trigger_runtime
     summary = trigger_runtime._summary(cfg, 3)
@@ -599,9 +599,9 @@ def test_notices(cfg):
     no_user["slack"].pop("user_token")
     fake = install_http()
     rid = _req(no_user, "700.4")
-    before = len((Path(HOME) / "claude-calls.jsonl").read_text().splitlines())
+    before = len((Path(HOME) / "claude-calls.jsonl").read_text(encoding="utf-8").splitlines())
     res = trigger.deliver_notice(rid, "Not here.", no_user)
-    calls = [json.loads(x) for x in (Path(HOME) / "claude-calls.jsonl").read_text().splitlines()]
+    calls = [json.loads(x) for x in (Path(HOME) / "claude-calls.jsonl").read_text(encoding="utf-8").splitlines()]
     prompt = calls[-1]["args"][1]
     ck("without a user token: one session through the Slack MCP, no direct post",
        res["ok"] and len(calls) == before + 1 and not calls_to(fake, "chat.postMessage"))
@@ -619,11 +619,11 @@ def test_notices(cfg):
     plain["translate_notices"] = False
     fake = install_http()
     rid = _req(plain, "700.6")
-    before = len((Path(HOME) / "claude-calls.jsonl").read_text().splitlines())
+    before = len((Path(HOME) / "claude-calls.jsonl").read_text(encoding="utf-8").splitlines())
     trigger.deliver_notice(rid, "Not here.", plain)
     ck("translation off: the template as written, and no model call at all",
        calls_to(fake, "chat.postMessage")[-1]["form"]["text"].startswith("Not here.")
-       and len((Path(HOME) / "claude-calls.jsonl").read_text().splitlines()) == before)
+       and len((Path(HOME) / "claude-calls.jsonl").read_text(encoding="utf-8").splitlines()) == before)
 
     ck("the old single `refusal` key still counts as the not-enabled one",
        trigger.refusal_text({"refusal": "Nope, {owner}."}, "not_enabled") == "Nope, Owner.")
@@ -1081,12 +1081,12 @@ def test_save():
        summary["secrets"]["jira.token"]["set"] and "sekrit-9f2" not in json.dumps(summary))
     ck("a trailing slash on the base url is dropped", summary["jira"]["base_url"] == "https://j.example")
     res = trigger.save_config({"jira": {"token": "", "marker": "@brain"}})
-    raw = json.loads(trigger.config_path().read_text())
+    raw = json.loads(trigger.config_path().read_text(encoding="utf-8"))
     ck("an empty secret keeps the stored one", raw["jira"]["token"] == "sekrit-9f2")
     ck("and the other keys survive a partial save",
        raw["jira"]["poll_seconds"] == 30 and raw["enabled"] is True and raw["jira"]["marker"] == "@brain")
     trigger.save_config({"clear": ["jira.token"]})
-    ck("clear removes a secret", "token" not in json.loads(trigger.config_path().read_text())["jira"])
+    ck("clear removes a secret", "token" not in json.loads(trigger.config_path().read_text(encoding="utf-8"))["jira"])
     os.environ["MEMORY_LEDGER_JIRA_TOKEN"] = "from-env"
     ck("a secret from the environment is reported as such",
        trigger.config_summary(trigger.load_config())["secrets"]["jira.token"]["source"] == "env")
@@ -1107,14 +1107,14 @@ def test_save():
         r = trigger.save_config(patch)
         ck(f"refused: {needle}", r["ok"] is False and needle in r["error"], str(r))
     trigger.save_config({"refusals": {"policy": "Não posso: {reason}"}, "translate_notices": False})
-    raw = json.loads(trigger.config_path().read_text())
+    raw = json.loads(trigger.config_path().read_text(encoding="utf-8"))
     ck("both notices and the translation switch are saved",
        raw["refusals"]["policy"] == "Não posso: {reason}" and raw["translate_notices"] is False)
     trigger.save_config({"github": {"token": "github_pat_abc", "repos": "o/r, acme",
                                     "events": {"review": {"on": False},
                                                "ci_failed": {"on": True, "do": "  fix it  "}}}})
     trigger.save_config({"github": {"events": {"review": {"do": "tell me"}}}})
-    raw = json.loads(trigger.config_path().read_text())
+    raw = json.loads(trigger.config_path().read_text(encoding="utf-8"))
     ev = trigger.config_summary(trigger.load_config())["github"]["events"]
     ck("github events merge per kind and per field",
        raw["github"]["events"]["review"] == {"on": False, "do": "tell me"}
@@ -1124,14 +1124,14 @@ def test_save():
     ck("a fine-grained token is accepted and never shown",
        "github_pat_abc" not in json.dumps(trigger.config_summary(trigger.load_config())))
     trigger.save_config({"bogus": 1, "slack": {"bogus": 2}})
-    raw = json.loads(trigger.config_path().read_text())
+    raw = json.loads(trigger.config_path().read_text(encoding="utf-8"))
     ck("an unknown key is not written", "bogus" not in raw and "bogus" not in raw.get("slack", {}))
 
 
 # ============================================ access + refusals with no model
 def _calls():
     f = Path(HOME) / "claude-calls.jsonl"
-    return len(f.read_text().splitlines()) if f.exists() else 0
+    return len(f.read_text(encoding="utf-8").splitlines()) if f.exists() else 0
 
 
 def test_access(cfg):
@@ -1197,7 +1197,7 @@ def test_access(cfg):
 def _script(name, text, mode=0o755):
     d = trigger.graph.scripts_dir()
     d.mkdir(parents=True, exist_ok=True)
-    (d / name).write_text(text)
+    (d / name).write_text(text, encoding="utf-8")
     (d / name).chmod(mode)
 
 
@@ -1563,7 +1563,7 @@ def test_tasks(cfg):
         trigger.run_request(rid, cfg)
         con = trigger.db()
         req = trigger.get_request(con, rid)
-        args = json.loads((Path(HOME) / "claude-calls.jsonl").read_text().splitlines()[-1])["args"]
+        args = json.loads((Path(HOME) / "claude-calls.jsonl").read_text(encoding="utf-8").splitlines()[-1])["args"]
         ck("the session id is chosen up front and passed to claude",
            req["session_id"] and args[args.index("--session-id") + 1] == req["session_id"])
         ck("the command and working directory are recorded",
@@ -1585,7 +1585,7 @@ def test_tasks(cfg):
                 {"type": "tool_use", "id": "tu2", "name": "Read", "input": {"file": "x"}}]}},
         ]
         (folder / f"{req['session_id']}.jsonl").write_text(
-            "\n".join(json.dumps(x) for x in lines) + "\nnot json\n")
+            "\n".join(json.dumps(x) for x in lines) + "\nnot json\n", encoding="utf-8")
 
         d = trigger.task_detail(rid)
         t = d["transcript"]
@@ -1644,7 +1644,7 @@ def test_tasks(cfg):
         legacy.mkdir(parents=True, exist_ok=True)
         (legacy / "legacy-session.jsonl").write_text(json.dumps(
             {"type": "user", "timestamp": "t0",
-             "message": {"content": f"request_id: {old}\nsource: slack"}}) + "\n")
+             "message": {"content": f"request_id: {old}\nsource: slack"}}) + "\n", encoding="utf-8")
         ck("an older task's transcript is found by its request id, and remembered",
            trigger.task_detail(old)["transcript"]["found"]
            and trigger.get_request(con, old)["session_id"] == "legacy-session")
@@ -1656,11 +1656,11 @@ def test_tasks(cfg):
              "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 1000}}
         m = {"type": "assistant", "message": {"id": "msg1", "model": "claude-opus-5", "usage": u}}
         tp = folder / "priced.jsonl"
-        tp.write_text("\n".join(json.dumps(x) for x in (m, m)) + "\n")   # one message, two blocks
+        tp.write_text("\n".join(json.dumps(x) for x in (m, m)) + "\n", encoding="utf-8")   # one message, two blocks
         (folder / "priced" / "subagents").mkdir(parents=True, exist_ok=True)
         (folder / "priced" / "subagents" / "agent-1.jsonl").write_text(json.dumps(
             {"type": "assistant", "message": {"id": "msg2", "model": "claude-haiku-4-5",
-                                              "usage": {"input_tokens": 1_000_000}}}) + "\n")
+                                              "usage": {"input_tokens": 1_000_000}}}) + "\n", encoding="utf-8")
         # opus 5: 1k in $0.005 + 1k out $0.025 + 1M read $0.50 + 1k 1h-write $0.01; haiku 1M in $1
         ck("a session's cost is estimated from its token usage and its subagents', each message once",
            abs(trigger.estimate_cost(tp) - 1.54) < 1e-9, str(trigger.estimate_cost(tp)))
