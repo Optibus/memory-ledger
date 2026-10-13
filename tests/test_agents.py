@@ -1,50 +1,46 @@
-#!/usr/bin/env python3
 """Agents (docs/agents.md): conversations, their stateless turns, and the two
 connectors, against a THROWAWAY brain.
 
-    python3 tests/test_agents.py
+    python -m pytest tests/test_agents.py
 
 `claude` is replaced by a script that records its argv and prints a canned
 stream-json run (a Grep, a Skill, a reply ending in the question marker), and
 Ollama by a local HTTP server that answers with one tool call and then text.
-Nothing leaves the machine and no model is called. Stdlib only.
+Nothing leaves the machine and no model is called.
+
+One brain and one conversation for the module: the classes follow the life of
+that conversation and run in file order.
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import os
-import subprocess
-import sys
-import tempfile
-import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from collections.abc import Iterator
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
+from types import SimpleNamespace
 
-ROOT = Path(__file__).resolve().parent.parent
-HOME = tempfile.mkdtemp(prefix="second-brain-agents-")
-os.environ["SECOND_BRAIN_HOME"] = HOME
-os.environ["SECOND_BRAIN_NO_AUTOSYNC"] = "1"
-os.environ["MEMORY_LEDGER_OWNER"] = "Owner"
-for k in list(os.environ):
-    if k.startswith(("SECOND_BRAIN_NEO4J", "MEMORY_LEDGER_NEO4J")):
-        del os.environ[k]
-sys.path.insert(0, str(ROOT / "scripts"))
-sys.path.insert(0, str(ROOT / "tests"))
-from _fakes import make_exe  # noqa: E402
+import pytest
 
-import agents  # noqa: E402
-import graph  # noqa: E402
+import agents
+import documents
+import graph
+from _fakes import make_exe
+from conftest import LocalServer
 
-FAILS: list[str] = []
-
-
-def ck(label: str, cond: bool, extra: str = "") -> None:
-    print(("  PASS  " if cond else "  FAIL  ") + label + (f"  {extra}" if extra else ""))
-    if not cond:
-        FAILS.append(label)
-
+UTF8 = "utf-8"
+MODE_VAR = "FAKE_CLAUDE_MODE"
+CLAUDE_MODEL = "claude-sonnet-5-5"
+ARGV_LOG = "claude-argv.jsonl"
+FIRST_QUESTION = "What must I renew?"
+REPLY_TEXT = "The permit is due Oct 5.\nShall I add a task?"
+CLAIMED_COST = 0.0421
+WAIT_S = 20
+RECOVER_STATUS_WAIT_S = 10
 
 FAKE_CLAUDE = r'''#!/usr/bin/env python3
 import json, os, sys
@@ -109,7 +105,8 @@ class FakeOllama(BaseHTTPRequestHandler):
                            "prompt_eval_count": 70, "eval_count": 9})
 
 
-def wait_status(con, rid, timeout=20):
+# ------------------------------------------------------------------- helpers
+def wait_status(con, rid, timeout=WAIT_S):
     end = time.time() + timeout
     while time.time() < end:
         r = con.execute("SELECT status FROM agent_msg WHERE id=?", (rid,)).fetchone()
@@ -119,237 +116,413 @@ def wait_status(con, rid, timeout=20):
     return "timeout"
 
 
+def wait_until(predicate, timeout=RECOVER_STATUS_WAIT_S, step=0.05) -> bool:
+    end = time.time() + timeout
+    while time.time() < end:
+        if predicate():
+            return True
+        time.sleep(step)
+    return predicate()
+
+
 def reply_of(con, rid):
     return agents._msg_row(con.execute("SELECT * FROM agent_msg WHERE id=?", (rid,)).fetchone())
 
 
-def main() -> int:
-    bin_path = make_exe(Path(HOME) / "fake-claude", FAKE_CLAUDE)
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), FakeOllama)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    url = f"http://127.0.0.1:{srv.server_port}"
+def last_call(home: Path) -> dict:
+    return json.loads((home / ARGV_LOG).read_text(encoding=UTF8).splitlines()[-1])
 
-    print("config")
-    res = agents.save_config({"connectors": [
-        {"kind": "claude", "name": "Claude", "bin": str(bin_path), "default_model": "claude-sonnet-5-5"},
-        {"kind": "ollama", "name": "Local", "url": url},
-        {"kind": "ollama", "name": "Local"},
-    ]})
-    ids = [c["id"] for c in res["config"]["connectors"]]
-    ck("connector ids are unique", ids == ["claude", "local", "local-2"], str(ids))
-    ck("an unknown kind is refused",
-       not agents.save_config({"connectors": [{"kind": "chatgpt"}]})["ok"])
-    ck("an Ollama url must be http", not agents.save_config(
-        {"connectors": [{"kind": "ollama", "url": "file:///etc"}]})["ok"])
-    agents.save_config({"connectors": [res["config"]["connectors"][0], res["config"]["connectors"][1]]})
-    payload = {c["id"]: c for c in agents.connectors_payload()}
-    ck("an Ollama connector lists its host's models", payload["local"]["models"] == ["notools:1b", "tiny:1b"])
-    ck("and defaults to one of them", payload["local"]["default_model"] == "notools:1b")
 
-    con = agents.db()
-    graph.api_create_node(graph.connect(), "task", "Renew the parking permit", "", {}, "open", "2026-10-05")
+@contextmanager
+def claude_mode(mode: str) -> Iterator[None]:
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv(MODE_VAR, mode)
+        yield
 
-    print("attachments")
-    import base64
-    import documents
-    saved = documents.save_attachment("shot.png", base64.b64encode(b"\x89PNG").decode())
-    bad = agents.send(con, "see", attachments=["../etc/passwd"], start=False)
-    ck("an attachment outside the attachments folder is refused", not bad["ok"])
-    r0 = agents.send(con, "", attachments=[saved["path"]], start=False)
-    ck("attachments alone make a message, titled by the file", r0["ok"] and r0["conversation"]["title"] == "shot.png")
-    turn = agents.build_turn(con, dict(con.execute("SELECT * FROM agent_msg WHERE id=?", (r0["reply_id"],)).fetchone()))
-    ck("the agent is told where the file is on disk", str(documents.root("attachments") / saved["path"]) in turn["prompt"])
 
-    print("claude, read-only")
-    r = agents.send(con, "What must I renew?", start=False)
-    ck("a first message makes the conversation, titled from it",
-       r["ok"] and r["conversation"]["title"] == "What must I renew?")
-    ck("it starts read-only", r["conversation"]["full_tools"] is False)
+# ------------------------------------------------------------------ fixtures
+@pytest.fixture(scope="module")
+def ctx(module_brain_home: Path) -> Iterator[SimpleNamespace]:
+    """The brain, its fake claude and fake Ollama, and the connectors configured."""
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("MEMORY_LEDGER_OWNER", "Owner")
+        mp.delenv(MODE_VAR, raising=False)
+        bin_path = make_exe(module_brain_home / "fake-claude", FAKE_CLAUDE)
+        srv = LocalServer(FakeOllama)
+        FakeOllama.calls.clear()
+        try:
+            graph.api_create_node(graph.connect(), "task", "Renew the parking permit", "", {}, "open", "2026-10-05")
+            yield SimpleNamespace(home=module_brain_home, bin=bin_path, url=srv.url, con=agents.db())
+        finally:
+            srv.stop()
+
+
+# ------------------------------------------------------------------- config
+class TestConfig:
+    @pytest.fixture(scope="class")
+    def saved(self, ctx) -> SimpleNamespace:
+        res = agents.save_config({"connectors": [
+            {"kind": "claude", "name": "Claude", "bin": str(ctx.bin), "default_model": CLAUDE_MODEL},
+            {"kind": "ollama", "name": "Local", "url": ctx.url},
+            {"kind": "ollama", "name": "Local"},
+        ]})
+        ids = [c["id"] for c in res["config"]["connectors"]]
+        refused_kind = agents.save_config({"connectors": [{"kind": "chatgpt"}]})
+        refused_url = agents.save_config({"connectors": [{"kind": "ollama", "url": "file:///etc"}]})
+        # the config the rest of the suite runs on: the claude and the first ollama
+        agents.save_config({"connectors": res["config"]["connectors"][:2]})
+        payload = {c["id"]: c for c in agents.connectors_payload()}
+        return SimpleNamespace(ids=ids, refused_kind=refused_kind, refused_url=refused_url, payload=payload)
+
+    def test_connector_ids_are_unique(self, saved):
+        assert saved.ids == ["claude", "local", "local-2"]
+
+    def test_an_unknown_kind_is_refused(self, saved):
+        assert not saved.refused_kind["ok"]
+
+    def test_an_ollama_url_must_be_http(self, saved):
+        assert not saved.refused_url["ok"]
+
+    def test_an_ollama_connector_lists_its_hosts_models(self, saved):
+        assert saved.payload["local"]["models"] == ["notools:1b", "tiny:1b"]
+
+    def test_and_defaults_to_one_of_them(self, saved):
+        assert saved.payload["local"]["default_model"] == "notools:1b"
+
+
+# -------------------------------------------------------------- attachments
+class TestAttachments:
+    @pytest.fixture(scope="class")
+    def sent(self, ctx) -> SimpleNamespace:
+        con = ctx.con
+        saved = documents.save_attachment("shot.png", base64.b64encode(b"\x89PNG").decode())
+        bad = agents.send(con, "see", attachments=["../etc/passwd"], start=False)
+        r0 = agents.send(con, "", attachments=[saved["path"]], start=False)
+        turn = agents.build_turn(con, dict(con.execute("SELECT * FROM agent_msg WHERE id=?",
+                                                       (r0["reply_id"],)).fetchone()))
+        return SimpleNamespace(saved=saved, bad=bad, r0=r0, turn=turn)
+
+    def test_an_attachment_outside_the_attachments_folder_is_refused(self, sent):
+        assert not sent.bad["ok"]
+
+    def test_attachments_alone_make_a_message_titled_by_the_file(self, sent):
+        assert sent.r0["ok"] and sent.r0["conversation"]["title"] == "shot.png"
+
+    def test_the_agent_is_told_where_the_file_is_on_disk(self, sent):
+        assert str(documents.root("attachments") / sent.saved["path"]) in sent.turn["prompt"]
+
+
+# ---------------------------------------------------------- claude, read-only
+@pytest.fixture(scope="module")
+def first(ctx) -> SimpleNamespace:
+    """The read-only exchange every later stage builds on: the first message, its
+    reply, and what `claude` was called with."""
+    con = ctx.con
+    r = agents.send(con, FIRST_QUESTION, start=False)
     out = agents.run_reply(r["reply_id"])
-    ck("the reply runs", out == {"ok": True, "status": "question"}, str(out))
-    m = reply_of(con, r["reply_id"])
-    ck("the question marker is gone from the text", m["text"] == "The permit is due Oct 5.\nShall I add a task?",
-       repr(m["text"]))
-    kinds = [(e["kind"], e["name"]) for e in m["events"]]
-    ck("tools, skills and thinking are logged", kinds == [("thinking", "thinking"), ("tool", "Grep"), ("skill", "recall")],
-       str(kinds))
-    ck("a tool's result lands on its call", m["events"][1]["output"] == "1 match" and m["events"][2]["error"])
-    ck("claude's own cost wins over the estimate", m["cost_usd"] == 0.0421 and not m["cost_estimated"])
-    ck("tokens come from the final usage", (m["tokens_in"], m["tokens_out"]) == (1500, 80))
-    ck("the recalled task was in the turn's context",
-       any(c.startswith("task_renew-the-parking-permit") for c in m["context"]), str(m["context"]))
-    call = json.loads((Path(HOME) / "claude-argv.jsonl").read_text(encoding="utf-8").splitlines()[-1])
-    argv, prompt = call["argv"], call["stdin"]
-    ck("read-only cuts the tool set and denies the rest",
-       "--tools=Read,Grep,Glob,WebSearch,WebFetch,Skill,Bash" in argv and "dontAsk" in argv
-       and "--dangerously-skip-permissions" not in argv)
-    allowed = next(a for a in argv if a.startswith("--allowedTools=")).split("=", 1)[1].split(",")
-    ck("read-only Bash is the brain's own commands only",
-       [a for a in allowed if a.startswith("Bash")] == [f"Bash({c}:*)" for c in agents.BRAIN_CMDS], str(allowed))
-    ck("read-only connectors read and never write",
-       "mcp__atlassian__getJiraIssue" in allowed and "mcp__claude_ai_Slack__slack_read_thread" in allowed
-       and not any(w in a for a in allowed for w in ("send", "create", "edit", "update", "delete", "trash",
-                                                      "executeWrite", "executeDestructive", "comment")), str(allowed))
-    system = call["system"]
-    ck("neither prompt is on the command line: the prompt is on stdin, the system prompt in a file",
-       "--append-system-prompt-file" in argv and "-p" in argv and argv[argv.index("-p") + 1].startswith("--")
-       and not any("What must I renew?" in a for a in argv))
-    ck("the system prompt names the conversation and how to read it",
-       r["conversation"]["id"] in system and f"{agents.THREAD_CMD} {r['conversation']['id']}" in system, system)
-    ck("the system prompt gives the brain's commands, to read and write without asking",
-       f"{agents.GRAPH_CMD} match-rules" in system and f"{agents.GRAPH_CMD} add-node" in system
-       and "without asking" in system and "READ-ONLY" in system, system)
-    ck("the prompt carries the message and the recalled node",
-       "What must I renew?" in prompt and "Renew the parking permit" in prompt)
-    ck("the conversation badge is a question", agents.conv_state(con, r["conversation"]["id"]) == "question")
-    node = con.execute("SELECT * FROM nodes WHERE id=?", (m["node_id"],)).fetchone()
-    ck("the exchange is written to the graph", node is not None and "Oct 5" in node["body"])
-    conv = agents.get_conv(con, r["conversation"]["id"])
-    edge = con.execute("SELECT 1 FROM edges WHERE src=? AND dst=? AND rel='part-of'",
-                       (m["node_id"], conv["node_id"])).fetchone()
-    ck("under the conversation's node", edge is not None)
+    call = last_call(ctx.home)
+    allowed = next((a for a in call["argv"] if a.startswith("--allowedTools=")), "=").split("=", 1)[1].split(",")
+    ctx.cid = r["conversation"]["id"]
+    return SimpleNamespace(r=r, out=out, m=reply_of(con, r["reply_id"]), call=call,
+                           argv=call["argv"], prompt=call["stdin"], system=call["system"],
+                           allowed=allowed, cid=ctx.cid)
 
-    print("the context window")
-    cid = conv["id"]
-    r2 = agents.send(con, "yes", cid, full_tools=True, start=False)
-    agents.run_reply(r2["reply_id"])
-    call = json.loads((Path(HOME) / "claude-argv.jsonl").read_text(encoding="utf-8").splitlines()[-1])
-    argv, prompt = call["argv"], call["stdin"]
-    ck("one earlier exchange is carried by default", "Earlier in this conversation" in prompt
-       and "What must I renew?" in prompt)
-    ck("tools on runs without prompts", "--dangerously-skip-permissions" in argv and "--tools=" not in " ".join(argv))
-    agents.save_conversation(con, cid, context_turns=0)
-    r3 = agents.send(con, "and?", cid, start=False)
-    agents.run_reply(r3["reply_id"])
-    call = json.loads((Path(HOME) / "claude-argv.jsonl").read_text(encoding="utf-8").splitlines()[-1])
-    argv, prompt = call["argv"], call["stdin"]
-    ck("zero carries none", "Earlier in this conversation" not in prompt)
-    ck("the window is clamped", agents.save_conversation(con, cid, context_turns=99)["conversation"]["context_turns"] == 10)
 
-    print("failures")
-    os.environ["FAKE_CLAUDE_MODE"] = "crash"
-    r4 = agents.send(con, "again", cid, start=False)
-    out = agents.run_reply(r4["reply_id"])
-    del os.environ["FAKE_CLAUDE_MODE"]
-    m = reply_of(con, r4["reply_id"])
-    ck("a crash is an error with claude's reason", m["status"] == "error" and "no credentials" in m["error"], m["error"])
-    ck("the badge says so", agents.conv_state(con, cid) == "error")
-    ck("retry queues it again", agents.retry(con, r4["reply_id"], start=False)["ok"]
-       and reply_of(con, r4["reply_id"])["status"] == "queued")
-    ck("a done reply cannot be retried", not agents.retry(con, r["reply_id"], start=False)["ok"])
+class TestClaudeReadOnly:
+    def test_a_first_message_makes_the_conversation_titled_from_it(self, first):
+        assert first.r["ok"] and first.r["conversation"]["title"] == FIRST_QUESTION
 
-    print("switching mid-conversation, and ollama")
-    res = agents.save_conversation(con, cid, connector="local", model="tiny:1b")
-    ck("connector and model switch", res["ok"] and res["conversation"]["connector"] == "local")
-    ck("an unknown connector is refused", not agents.save_conversation(con, cid, connector="nope")["ok"])
-    r5 = agents.send(con, "what is due?", cid, full_tools=False, start=False)
-    out = agents.run_reply(r5["reply_id"])
-    m = reply_of(con, r5["reply_id"])
-    ck("ollama answers after its tool call", out["ok"] and m["text"] == "Done.", repr(m["text"]))
-    ck("the tool call is logged with its result", m["events"][0]["name"] == "recall"
-       and "parking permit" in m["events"][0]["output"].lower(), str(m["events"][:1]))
-    ck("read-only ollama still reads and writes the brain",
-       {t["function"]["name"] for t in FakeOllama.calls[0]["tools"]}
-       == {"recall", "search", "get_node", "read_thread", "add_note", "add_task"})
-    ck("ollama is told to read the thread with its tool",
-       "read_thread" in FakeOllama.calls[0]["messages"][0]["content"])
-    ck("read_thread reads this conversation back",
-       "What must I renew?" in agents.ollama_tool_call("read_thread", {}, cid))
-    last2 = agents.ollama_tool_call("read_thread", {"limit": 2}, cid)
-    ck("read_thread keeps the last N", "(2 messages)" in last2 and "Oct 5" not in last2, last2)
-    ck("a local model costs nothing, tokens are counted", m["cost_usd"] == 0 and m["tokens_in"] == 120)
-    ck("each reply records who wrote it", m["model"] == "tiny:1b" and reply_of(con, r["reply_id"])["model"] == "claude-sonnet-5-5")
-    ck("a brain write works while read-only", agents.ollama_tool_call("add_task", {"title": "x"})["ok"])
-    FakeOllama.calls.clear()
-    r6 = agents.send(con, "make a task", cid, full_tools=True, start=False)
-    agents.run_reply(r6["reply_id"])
-    ck("tools on, ollama writes too", graph.connect().execute(
-        "SELECT 1 FROM nodes WHERE title='Renew permit' AND type='task'").fetchone() is not None)
-    agents.save_conversation(con, cid, model="notools:1b")
-    r7 = agents.send(con, "plain?", cid, start=False)
-    out = agents.run_reply(r7["reply_id"])
-    m = reply_of(con, r7["reply_id"])
-    ck("a model without tools answers without them", out["ok"] and m["events"][0]["name"] == "no tools", str(out))
+    def test_it_starts_read_only(self, first):
+        assert first.r["conversation"]["full_tools"] is False
 
-    print("list, hide, threads")
-    agents.save_conversation(con, cid, hidden=True)
-    rows = agents.conversations(con)
-    ck("a hidden conversation is still listed, flagged", rows[0]["hidden"] is True)
-    t = agents.thread(con, cid)
-    ck("the thread sums its cost", round(t["conversation"]["cost_usd"], 4) == round(0.0421 * 3, 4),
-       str(t["conversation"]["cost_usd"]))
-    ck("messages alternate, the reply after its question",
-       [x["role"] for x in t["messages"][:2]] == ["user", "agent"])
+    def test_the_reply_runs(self, first):
+        assert first.out == {"ok": True, "status": "question"}
 
-    out = subprocess.run([sys.executable, str(agents.SCRIPT), "thread", cid], capture_output=True, text=True, encoding="utf-8", errors="replace",
-                         env=os.environ)
-    ck("the thread command prints the thread", out.returncode == 0 and "Owner:" in out.stdout
-       and "Oct 5" in out.stdout and agents.QUESTION_MARK not in out.stdout, out.stdout + out.stderr)
+    def test_the_question_marker_is_gone_from_the_text(self, first):
+        assert first.m["text"] == REPLY_TEXT
 
-    print("background dispatch and recovery")
-    agents.save_conversation(con, cid, connector="claude", model="claude-sonnet-5-5")
-    r8 = agents.send(con, "async", cid)
-    ck("a sent message runs in the background", wait_status(con, r8["reply_id"]) == "question")
-    con.execute("UPDATE agent_msg SET status='running', beat_at=0 WHERE id=?", (r8["reply_id"],))
-    con.commit()
-    ck("a reply left running fails on restart", agents.recover() == 1
-       and "interrupted" in reply_of(con, r8["reply_id"])["error"])
-    con.execute("UPDATE agent_msg SET status='running', owner_pid=?, beat_at=0 WHERE id=?",
-                (os.getppid(), r8["reply_id"]))
-    con.commit()
-    ck("a reply whose server is still alive survives another server's start",
-       agents.recover() == 0 and reply_of(con, r8["reply_id"])["status"] == "running")
-    con.execute("UPDATE agent_msg SET owner_pid=0, beat_at=? WHERE id=?",
-                (time.time(), r8["reply_id"]))
-    con.commit()
-    ck("a reply with a fresh heartbeat survives even if its pid is unseen",
-       agents.recover() == 0 and reply_of(con, r8["reply_id"])["status"] == "running")
-    con.execute("UPDATE agent_msg SET status='error' WHERE id=?", (r8["reply_id"],))
-    con.commit()
-    ck("the next-action line is split off the reply",
-       agents.strip_next("Done.\n[[next: Run the tests]]") == ("Done.", "Run the tests")
-       and agents.strip_next("Plain") == ("Plain", ""))
-    ck("an empty message is refused", not agents.send(con, "  ", cid, start=False)["ok"])
+    def test_tools_skills_and_thinking_are_logged(self, first):
+        kinds = [(e["kind"], e["name"]) for e in first.m["events"]]
+        assert kinds == [("thinking", "thinking"), ("tool", "Grep"), ("skill", "recall")]
 
-    print("cancel")
-    r9 = agents.send(con, "queued only", cid, start=False)
-    res = agents.cancel(con, r9["reply_id"])
-    m = reply_of(con, r9["reply_id"])
-    ck("a queued reply cancels at once, as a failure Retry can run",
-       res["ok"] and res["was"] == "queued" and m["status"] == "error"
-       and m["error"] == agents.CANCELLED, str(res))
-    ck("a reply that ended cannot be cancelled", not agents.cancel(con, r9["reply_id"])["ok"])
-    ck("and it never starts", not agents.run_reply(r9["reply_id"])["ok"]
-       and reply_of(con, r9["reply_id"])["error"] == agents.CANCELLED)
-    os.environ["FAKE_CLAUDE_MODE"] = "slow"
-    try:
-        r10 = agents.send(con, "take your time", cid)
-        end = time.time() + 10
-        while time.time() < end and r10["reply_id"] not in agents._procs:
-            time.sleep(0.05)
-        t0 = time.time()
-        res = agents.cancel(con, r10["reply_id"])
-        ck("a running reply cancels, its session killed",
-           res["ok"] and res["was"] == "running" and wait_status(con, r10["reply_id"]) == "error"
-           and time.time() - t0 < 5, str(res))
-        end = time.time() + 10
-        while time.time() < end and agents.running_count():
-            time.sleep(0.05)
+    def test_a_tools_result_lands_on_its_call(self, first):
+        assert first.m["events"][1]["output"] == "1 match"
+        assert first.m["events"][2]["error"]
+
+    def test_claudes_own_cost_wins_over_the_estimate(self, first):
+        assert first.m["cost_usd"] == CLAIMED_COST and not first.m["cost_estimated"]
+
+    def test_tokens_come_from_the_final_usage(self, first):
+        assert (first.m["tokens_in"], first.m["tokens_out"]) == (1500, 80)
+
+    def test_the_recalled_task_was_in_the_turns_context(self, first):
+        assert any(c.startswith("task_renew-the-parking-permit") for c in first.m["context"]), first.m["context"]
+
+    def test_read_only_cuts_the_tool_set_and_denies_the_rest(self, first):
+        assert "--tools=Read,Grep,Glob,WebSearch,WebFetch,Skill,Bash" in first.argv
+        assert "dontAsk" in first.argv
+        assert "--dangerously-skip-permissions" not in first.argv
+
+    def test_read_only_bash_is_the_brains_own_commands_only(self, first):
+        assert [a for a in first.allowed if a.startswith("Bash")] == [f"Bash({c}:*)" for c in agents.BRAIN_CMDS]
+
+    def test_read_only_connectors_read_and_never_write(self, first):
+        writes = ("send", "create", "edit", "update", "delete", "trash", "executeWrite",
+                  "executeDestructive", "comment")
+        assert "mcp__atlassian__getJiraIssue" in first.allowed
+        assert "mcp__claude_ai_Slack__slack_read_thread" in first.allowed
+        assert not [a for a in first.allowed if any(w in a for w in writes)]
+
+    def test_neither_prompt_is_on_the_command_line(self, first):
+        argv = first.argv
+        assert "--append-system-prompt-file" in argv and "-p" in argv
+        assert argv[argv.index("-p") + 1].startswith("--")
+        assert not any(FIRST_QUESTION in a for a in argv)
+
+    def test_the_system_prompt_names_the_conversation_and_how_to_read_it(self, first):
+        cid = first.r["conversation"]["id"]
+        assert cid in first.system and f"{agents.THREAD_CMD} {cid}" in first.system
+
+    def test_the_system_prompt_gives_the_brains_commands_to_read_and_write_without_asking(self, first):
+        s = first.system
+        assert f"{agents.GRAPH_CMD} match-rules" in s and f"{agents.GRAPH_CMD} add-node" in s
+        assert "without asking" in s and "READ-ONLY" in s
+
+    def test_the_prompt_carries_the_message_and_the_recalled_node(self, first):
+        assert FIRST_QUESTION in first.prompt and "Renew the parking permit" in first.prompt
+
+    def test_the_conversation_badge_is_a_question(self, ctx, first):
+        assert agents.conv_state(ctx.con, first.r["conversation"]["id"]) == "question"
+
+    def test_the_exchange_is_written_to_the_graph_under_the_conversations_node(self, ctx, first):
+        con = ctx.con
+        node = con.execute("SELECT * FROM nodes WHERE id=?", (first.m["node_id"],)).fetchone()
+        assert node is not None and "Oct 5" in node["body"]
+        conv = agents.get_conv(con, first.r["conversation"]["id"])
+        edge = con.execute("SELECT 1 FROM edges WHERE src=? AND dst=? AND rel='part-of'",
+                           (first.m["node_id"], conv["node_id"])).fetchone()
+        assert edge is not None
+
+
+# ------------------------------------------------------------- the context window
+class TestContextWindow:
+    @pytest.fixture(scope="class")
+    def turns(self, ctx, first) -> SimpleNamespace:
+        con, cid = ctx.con, ctx.cid
+        r2 = agents.send(con, "yes", cid, full_tools=True, start=False)
+        agents.run_reply(r2["reply_id"])
+        with_history = last_call(ctx.home)
+        agents.save_conversation(con, cid, context_turns=0)
+        r3 = agents.send(con, "and?", cid, start=False)
+        agents.run_reply(r3["reply_id"])
+        return SimpleNamespace(with_history=with_history, without=last_call(ctx.home))
+
+    def test_one_earlier_exchange_is_carried_by_default(self, turns):
+        prompt = turns.with_history["stdin"]
+        assert "Earlier in this conversation" in prompt and FIRST_QUESTION in prompt
+
+    def test_tools_on_runs_without_prompts(self, turns):
+        argv = turns.with_history["argv"]
+        assert "--dangerously-skip-permissions" in argv
+        assert "--tools=" not in " ".join(argv)
+
+    def test_zero_carries_none(self, turns):
+        assert "Earlier in this conversation" not in turns.without["stdin"]
+
+    def test_the_window_is_clamped(self, ctx, turns):
+        res = agents.save_conversation(ctx.con, ctx.cid, context_turns=99)
+        assert res["conversation"]["context_turns"] == 10
+
+
+# ------------------------------------------------------------------- failures
+class TestFailures:
+    @pytest.fixture(scope="class")
+    def crashed(self, ctx, first) -> SimpleNamespace:
+        con = ctx.con
+        r4 = agents.send(con, "again", ctx.cid, start=False)
+        with claude_mode("crash"):
+            agents.run_reply(r4["reply_id"])
+        return SimpleNamespace(r4=r4, m=reply_of(con, r4["reply_id"]))
+
+    def test_a_crash_is_an_error_with_claudes_reason(self, crashed):
+        assert crashed.m["status"] == "error" and "no credentials" in crashed.m["error"], crashed.m["error"]
+
+    def test_the_badge_says_so(self, ctx, crashed):
+        assert agents.conv_state(ctx.con, ctx.cid) == "error"
+
+    def test_retry_queues_it_again(self, ctx, crashed):
+        assert agents.retry(ctx.con, crashed.r4["reply_id"], start=False)["ok"]
+        assert reply_of(ctx.con, crashed.r4["reply_id"])["status"] == "queued"
+
+    def test_a_done_reply_cannot_be_retried(self, ctx, first):
+        assert not agents.retry(ctx.con, first.r["reply_id"], start=False)["ok"]
+
+
+# -------------------------------------------- switching mid-conversation, and ollama
+class TestOllama:
+    @pytest.fixture(scope="class")
+    def switched(self, ctx, first) -> SimpleNamespace:
+        con, cid = ctx.con, ctx.cid
+        FakeOllama.calls.clear()
+        res = agents.save_conversation(con, cid, connector="local", model="tiny:1b")
+        unknown = agents.save_conversation(con, cid, connector="nope")
+        r5 = agents.send(con, "what is due?", cid, full_tools=False, start=False)
+        out = agents.run_reply(r5["reply_id"])
+        first_call = FakeOllama.calls[0]
+        return SimpleNamespace(res=res, unknown=unknown, out=out, m=reply_of(con, r5["reply_id"]),
+                               first_call=first_call)
+
+    def test_connector_and_model_switch(self, switched):
+        assert switched.res["ok"] and switched.res["conversation"]["connector"] == "local"
+
+    def test_an_unknown_connector_is_refused(self, switched):
+        assert not switched.unknown["ok"]
+
+    def test_ollama_answers_after_its_tool_call(self, switched):
+        assert switched.out["ok"] and switched.m["text"] == "Done.", switched.m["text"]
+
+    def test_the_tool_call_is_logged_with_its_result(self, switched):
+        ev = switched.m["events"][0]
+        assert ev["name"] == "recall" and "parking permit" in ev["output"].lower()
+
+    def test_read_only_ollama_still_reads_and_writes_the_brain(self, switched):
+        names = {t["function"]["name"] for t in switched.first_call["tools"]}
+        assert names == {"recall", "search", "get_node", "read_thread", "add_note", "add_task"}
+
+    def test_ollama_is_told_to_read_the_thread_with_its_tool(self, switched):
+        assert "read_thread" in switched.first_call["messages"][0]["content"]
+
+    def test_read_thread_reads_this_conversation_back(self, ctx, switched):
+        assert FIRST_QUESTION in agents.ollama_tool_call("read_thread", {}, ctx.cid)
+
+    def test_read_thread_keeps_the_last_n(self, ctx, switched):
+        last2 = agents.ollama_tool_call("read_thread", {"limit": 2}, ctx.cid)
+        assert "(2 messages)" in last2 and "Oct 5" not in last2, last2
+
+    def test_a_local_model_costs_nothing_and_tokens_are_counted(self, switched):
+        assert switched.m["cost_usd"] == 0 and switched.m["tokens_in"] == 120
+
+    def test_each_reply_records_who_wrote_it(self, ctx, switched, first):
+        assert switched.m["model"] == "tiny:1b"
+        assert reply_of(ctx.con, first.r["reply_id"])["model"] == CLAUDE_MODEL
+
+    def test_a_brain_write_works_while_read_only(self, switched):
+        assert agents.ollama_tool_call("add_task", {"title": "x"})["ok"]
+
+    def test_tools_on_ollama_writes_too(self, ctx, switched):
+        FakeOllama.calls.clear()
+        r6 = agents.send(ctx.con, "make a task", ctx.cid, full_tools=True, start=False)
+        agents.run_reply(r6["reply_id"])
+        found = graph.connect().execute(
+            "SELECT 1 FROM nodes WHERE title='Renew permit' AND type='task'").fetchone()
+        assert found is not None
+
+    def test_a_model_without_tools_answers_without_them(self, ctx, switched):
+        agents.save_conversation(ctx.con, ctx.cid, model="notools:1b")
+        r7 = agents.send(ctx.con, "plain?", ctx.cid, start=False)
+        out = agents.run_reply(r7["reply_id"])
+        m = reply_of(ctx.con, r7["reply_id"])
+        assert out["ok"] and m["events"][0]["name"] == "no tools", out
+
+
+# --------------------------------------------------------------- list, hide, threads
+class TestListHideThreads:
+    @pytest.fixture(scope="class")
+    def hidden(self, ctx, first):
+        agents.save_conversation(ctx.con, ctx.cid, hidden=True)
+
+    def test_a_hidden_conversation_is_still_listed_flagged(self, ctx, hidden):
+        assert agents.conversations(ctx.con)[0]["hidden"] is True
+
+    def test_the_thread_sums_its_cost(self, ctx, hidden):
+        t = agents.thread(ctx.con, ctx.cid)
+        assert round(t["conversation"]["cost_usd"], 4) == round(CLAIMED_COST * 3, 4), t["conversation"]["cost_usd"]
+
+    def test_messages_alternate_the_reply_after_its_question(self, ctx, hidden):
+        t = agents.thread(ctx.con, ctx.cid)
+        assert [x["role"] for x in t["messages"][:2]] == ["user", "agent"]
+
+    def test_the_thread_command_prints_the_thread(self, ctx, hidden, run_script):
+        out = run_script(agents.SCRIPT, "thread", ctx.cid, home=ctx.home, env={"MEMORY_LEDGER_OWNER": "Owner"})
+        assert out.returncode == 0, out.stdout + out.stderr
+        assert "Owner:" in out.stdout and "Oct 5" in out.stdout
+        assert agents.QUESTION_MARK not in out.stdout
+
+
+# ------------------------------------------------ background dispatch and recovery
+class TestBackgroundAndRecovery:
+    @pytest.fixture(scope="class")
+    def r8(self, ctx, first) -> dict:
+        agents.save_conversation(ctx.con, ctx.cid, connector="claude", model=CLAUDE_MODEL)
+        return agents.send(ctx.con, "async", ctx.cid)
+
+    def _set(self, ctx, rid, **cols) -> None:
+        sets = ", ".join(f"{k}=?" for k in cols)
+        ctx.con.execute(f"UPDATE agent_msg SET {sets} WHERE id=?", (*cols.values(), rid))
+        ctx.con.commit()
+
+    def test_a_sent_message_runs_in_the_background(self, ctx, r8):
+        assert wait_status(ctx.con, r8["reply_id"]) == "question"
+
+    def test_a_reply_left_running_fails_on_restart(self, ctx, r8):
+        self._set(ctx, r8["reply_id"], status="running", beat_at=0)
+        assert agents.recover() == 1
+        assert "interrupted" in reply_of(ctx.con, r8["reply_id"])["error"]
+
+    def test_a_reply_whose_server_is_still_alive_survives_another_servers_start(self, ctx, r8):
+        self._set(ctx, r8["reply_id"], status="running", owner_pid=os.getppid(), beat_at=0)
+        assert agents.recover() == 0
+        assert reply_of(ctx.con, r8["reply_id"])["status"] == "running"
+
+    def test_a_reply_with_a_fresh_heartbeat_survives_even_if_its_pid_is_unseen(self, ctx, r8):
+        self._set(ctx, r8["reply_id"], owner_pid=0, beat_at=time.time())
+        assert agents.recover() == 0
+        assert reply_of(ctx.con, r8["reply_id"])["status"] == "running"
+        self._set(ctx, r8["reply_id"], status="error")
+
+    def test_the_next_action_line_is_split_off_the_reply(self):
+        assert agents.strip_next("Done.\n[[next: Run the tests]]") == ("Done.", "Run the tests")
+        assert agents.strip_next("Plain") == ("Plain", "")
+
+    def test_an_empty_message_is_refused(self, ctx, r8):
+        assert not agents.send(ctx.con, "  ", ctx.cid, start=False)["ok"]
+
+
+# ---------------------------------------------------------------------- cancel
+class TestCancel:
+    @pytest.fixture(scope="class")
+    def queued(self, ctx, first) -> SimpleNamespace:
+        r9 = agents.send(ctx.con, "queued only", ctx.cid, start=False)
+        res = agents.cancel(ctx.con, r9["reply_id"])
+        return SimpleNamespace(r9=r9, res=res, m=reply_of(ctx.con, r9["reply_id"]))
+
+    def test_a_queued_reply_cancels_at_once_as_a_failure_retry_can_run(self, queued):
+        assert queued.res["ok"] and queued.res["was"] == "queued", queued.res
+        assert queued.m["status"] == "error" and queued.m["error"] == agents.CANCELLED
+
+    def test_a_reply_that_ended_cannot_be_cancelled(self, ctx, queued):
+        assert not agents.cancel(ctx.con, queued.r9["reply_id"])["ok"]
+
+    def test_and_it_never_starts(self, ctx, queued):
+        assert not agents.run_reply(queued.r9["reply_id"])["ok"]
+        assert reply_of(ctx.con, queued.r9["reply_id"])["error"] == agents.CANCELLED
+
+    def test_a_running_reply_cancels_its_session_killed_and_retry_runs_it_again(self, ctx, queued):
+        con = ctx.con
+        with claude_mode("slow"):
+            r10 = agents.send(con, "take your time", ctx.cid)
+            assert wait_until(lambda: r10["reply_id"] in agents._procs)
+            t0 = time.time()
+            res = agents.cancel(con, r10["reply_id"])
+            assert res["ok"] and res["was"] == "running", res
+            assert wait_status(con, r10["reply_id"]) == "error"
+            assert time.time() - t0 < 5, res
+            wait_until(lambda: not agents.running_count())
+        # it stays cancelled after its thread ends
         m = reply_of(con, r10["reply_id"])
-        ck("it stays cancelled after its thread ends", m["error"] == agents.CANCELLED
-           and not agents._cancelled and not agents._procs, m["error"])
-        os.environ["FAKE_CLAUDE_MODE"] = "ok"
-        agents.retry(con, r10["reply_id"])
-        ck("and Retry runs it again", wait_status(con, r10["reply_id"]) == "question")
-    finally:
-        os.environ["FAKE_CLAUDE_MODE"] = "ok"
-
-    srv.shutdown()
-    print(f"\n{'FAILED: ' + str(len(FAILS)) if FAILS else 'ALL PASS'}")
-    for f in FAILS:
-        print("  - " + f)
-    return 1 if FAILS else 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+        assert m["error"] == agents.CANCELLED, m["error"]
+        assert not agents._cancelled and not agents._procs
+        # and Retry runs it again
+        with claude_mode("ok"):
+            agents.retry(con, r10["reply_id"])
+            assert wait_status(con, r10["reply_id"]) == "question"

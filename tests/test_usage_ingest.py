@@ -1,7 +1,6 @@
-#!/usr/bin/env python3
 """The usage ingest (scripts/usage_ingest.py): session logs -> usage-week nodes.
 
-    python3 tests/test_usage_ingest.py
+    python -m pytest tests/test_usage_ingest.py
 
 Pins what makes the ingest trustworthy: it parses Claude Code's JSONL logs
 deterministically (streamed duplicates counted once, subagents folded into their
@@ -9,39 +8,40 @@ session), cuts them into ISO weeks, prices tokens from the one price table,
 writes ONE node per week through graph.py's helpers (idempotent, never
 deleting, never replacing a fuller week), re-parses only files that changed, and
 feeds usage_report.py end to end. The logs are SYNTHETIC, written here into a
-throwaway directory — no real usage is read or kept (CONTRIBUTING ground rule 5).
-The brain is a throwaway temp home. Stdlib only.
+throwaway directory: no real usage is read or kept (CONTRIBUTING ground rule 5).
+The brain is a throwaway temp home.
+
+The tests of `TestIngestFlow` build on one brain and one set of logs, in the
+order they are written (a rerun changes nothing, a grown log updates in place,
+and so on); every other test is independent.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-SCRIPTS = ROOT / "scripts"
-HOME = tempfile.mkdtemp(prefix="ml-usage-ingest-")
-for k in list(os.environ):
-    if k.startswith(("SECOND_BRAIN_", "MEMORY_LEDGER_")):
-        del os.environ[k]
-os.environ["SECOND_BRAIN_HOME"] = HOME
-os.environ["MEMORY_LEDGER_NO_AUTOSYNC"] = "1"
-sys.path.insert(0, str(SCRIPTS))
-import usage_ingest as ui  # noqa: E402
-import usage_report as ur  # noqa: E402
+import pytest
 
-FAILS: list[str] = []
+import usage_ingest as ui
+import usage_report as ur
+from conftest import ROOT, SCRIPTS, UTF8
 
-
-def ck(label, cond, extra=""):
-    print(("  PASS  " if cond else "  FAIL  ") + label + (f"  {extra}" if extra else ""))
-    if not cond:
-        FAILS.append(label)
+NO_AUTOSYNC = "MEMORY_LEDGER_NO_AUTOSYNC"
+PROJECTS_ENV = "MEMORY_LEDGER_USAGE_PROJECTS_DIR"
+OPT_OUT_ENV = "MEMORY_LEDGER_NO_USAGE_INGEST"
+W03, W04 = "2026-W03", "2026-W04"
+NODE_W03, NODE_W04 = f"usage-week_{W03}", f"usage-week_{W04}"
+UNKNOWN_MODEL = "claude-some-future-model"
+HAIKU = "claude-haiku-4-5-20251001"
+MTOK = 1_000_000
+HOOK = ROOT / "hooks" / "usage_ingest.py"
+HOOK_WAIT_S = 10
 
 
 # ---------------------------------------------------------------- fixtures
@@ -74,7 +74,7 @@ def asst(ts, mid, model="claude-opus-5", inp=10, out=100, read=1000, write=0, to
 
 def write_log(path: Path, records) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
+    path.write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding=UTF8)
 
 
 def make_world(base: Path) -> Path:
@@ -84,7 +84,7 @@ def make_world(base: Path) -> Path:
     (alpha / "src").mkdir()
     wt = base / "work" / "alpha-wt-ABC-123"
     (wt / "src").mkdir(parents=True)
-    (wt / ".git").write_text(f"gitdir: {alpha}/.git/worktrees/alpha-wt-ABC-123\n", encoding="utf-8")
+    (wt / ".git").write_text(f"gitdir: {alpha}/.git/worktrees/alpha-wt-ABC-123\n", encoding=UTF8)
     beta = base / "work" / "beta"
     (beta / ".git").mkdir(parents=True)
     loose = base / "work" / "loose"
@@ -106,7 +106,7 @@ def make_world(base: Path) -> Path:
         user("2026-01-13T10:10:00Z", "<system-reminder>not typed</system-reminder>", sid="s1"),
         user("2026-01-13T10:20:00Z", "now the tests", sid="s1"),
         rec("system", "2026-01-13T10:30:00Z", subtype="compact_boundary", sid="s1"),
-        asst("2026-01-13T11:45:00Z", "m3", model="claude-haiku-4-5-20251001", out=10, read=0, sid="s1"),
+        asst("2026-01-13T11:45:00Z", "m3", model=HAIKU, out=10, read=0, sid="s1"),
         asst("2026-01-13T11:46:00Z", "synth", model="<synthetic>", out=0, read=0, sid="s1"),
     ]
     write_log(proj / "s1.jsonl", w03)
@@ -128,326 +128,539 @@ def make_world(base: Path) -> Path:
     # s3: no writes, nothing outward (investigation only); started Sunday night
     write_log(proj / "s3.jsonl", [
         user("2026-01-18T22:00:00Z", "where is the bug", sid="s3"),
-        asst("2026-01-18T22:01:00Z", "m5", sid="s3", model="claude-some-future-model"),
+        asst("2026-01-18T22:01:00Z", "m5", sid="s3", model=UNKNOWN_MODEL),
     ])
     # W04: one session editing beta
     write_log(proj / "s4.jsonl", [
         user("2026-01-20T09:00:00Z", "do it", sid="s4"),
         asst("2026-01-20T09:00:10Z", "m6", sid="s4", tools=[("Edit", {"file_path": f"{beta}/x.py"})]),
     ])
-    (proj / "junk.jsonl").write_text("not json\n{\n", encoding="utf-8")
+    (proj / "junk.jsonl").write_text("not json\n{\n", encoding=UTF8)
     return base / "claude" / "projects"
 
 
-def nodes():
-    import sqlite3
-    con = sqlite3.connect(Path(HOME) / "graph.db")
-    rows = con.execute("SELECT id, type, props FROM nodes WHERE type='usage-week' ORDER BY id").fetchall()
-    con.close()
+@pytest.fixture
+def projects(tmp_path) -> Path:
+    """Fresh synthetic logs for one test."""
+    return make_world(tmp_path / "world")
+
+
+@pytest.fixture(scope="class")
+def shared_projects(tmp_path_factory) -> Path:
+    """Synthetic logs for a class whose tests build on each other."""
+    return make_world(tmp_path_factory.mktemp("world"))
+
+
+@pytest.fixture(scope="module")
+def table():
+    return ui.load_prices(None)
+
+
+@pytest.fixture(scope="module")
+def tz():
+    return ui.get_tz("UTC")
+
+
+def child_env(home: Path | str, **extra: str) -> dict[str, str]:
+    """An environment for a child: this brain, no autosync, nothing of the owner's."""
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("SECOND_BRAIN_", "MEMORY_LEDGER_"))}
+    env.update({"SECOND_BRAIN_HOME": str(home), NO_AUTOSYNC: "1", **extra})
+    return env
+
+
+def run_py(script: Path, *args: str, env: dict[str, str], stdin: str | None = None):
+    return subprocess.run([sys.executable, str(script), *args], input=stdin,
+                          capture_output=True, text=True, encoding=UTF8, errors="replace",
+                          env=env)
+
+
+def cli(home: Path | str, *args: str, **extra: str):
+    return run_py(SCRIPTS / "usage_ingest.py", *args, env=child_env(home, **extra))
+
+
+def nodes(home: Path) -> dict:
+    con = sqlite3.connect(home / "graph.db")
+    try:
+        rows = con.execute("SELECT id, type, props FROM nodes WHERE type='usage-week' "
+                           "ORDER BY id").fetchall()
+    finally:
+        con.close()
     return {r[0]: json.loads(r[2]) for r in rows}
 
 
-def cli(*args, env=None):
-    e = {**os.environ, **(env or {})}
-    return subprocess.run([sys.executable, str(SCRIPTS / "usage_ingest.py"), *args],
-                          capture_output=True, text=True, encoding="utf-8", errors="replace", env=e)
+def action_of(result: dict, week: str) -> dict:
+    return next(w for w in result["weeks"] if w["week"] == week)
 
 
-# ------------------------------------------------------------------- tests
-def test_cost_math():
-    print("\n== cost math: one price table, per model family ==")
-    table = ui.load_prices(None)
-    (parts, known), read = ui.turn_cost("claude-opus-5", {
-        "input_tokens": 1_000_000, "output_tokens": 1_000_000, "cache_read_input_tokens": 1_000_000,
-        "cache_creation_input_tokens": 1_000_000}, table)
-    ck("opus: input 5, output 25, cache write 6.25, cache read 0.5 per MTok",
-       [round(parts[k], 4) for k in ("input", "output", "cacheWrite", "cacheRead")] == [5, 25, 6.25, 0.5]
-       and known and read == 1_000_000)
-    (p, _), _ = ui.turn_cost("claude-sonnet-5", {"input_tokens": 2_000_000}, table)
-    ck("sonnet input is 3 per MTok", round(p["input"], 4) == 6.0)
-    (p, _), _ = ui.turn_cost("claude-haiku-4-5-20251001", {"output_tokens": 1_000_000}, table)
-    ck("a dated haiku id matches its family: output 5", round(p["output"], 4) == 5.0)
-    (p, _), _ = ui.turn_cost("claude-opus-4-1-20250805", {"input_tokens": 1_000_000}, table)
-    ck("an older opus is priced at its own (higher) rate", round(p["input"], 4) == 15.0)
-    (p, _), _ = ui.turn_cost("claude-opus-5", {"cache_creation_input_tokens": 1_000_000,
-                                                "cache_creation": {"ephemeral_1h_input_tokens": 1_000_000}}, table)
-    ck("a one-hour cache write bills at 2x input", round(p["cacheWrite"], 4) == 10.0)
-    (_, known), _ = ui.turn_cost("claude-some-future-model", {"input_tokens": 1}, table)
-    ck("an unknown model is flagged, not hidden", known is False)
-    with tempfile.TemporaryDirectory() as d:
-        f = Path(d) / "p.json"
-        f.write_text(json.dumps({"some-future": [1, 2, 3, 4]}), encoding="utf-8")
-        t2 = ui.load_prices(str(f))
-        (p, known), _ = ui.turn_cost("claude-some-future-model", {"input_tokens": 1_000_000}, t2)
-        ck("an override file wins", known and round(p["input"], 4) == 1.0)
-        f.write_text(json.dumps({"x": [1, 2]}), encoding="utf-8")
-        try:
-            ui.load_prices(str(f))
-            ck("a malformed override is refused", False)
-        except ValueError:
-            ck("a malformed override is refused", True)
+# ------------------------------------------------------------------- cost math
+def cost_parts(model: str, usage: dict, table):
+    (parts, known), read = ui.turn_cost(model, usage, table)
+    return parts, known, read
 
 
-def test_parsing(projects: Path):
-    print("\n== parsing one log ==")
-    table, tz = ui.load_prices(None), ui.get_tz("UTC")
-    s1 = ui.parse_file(str(projects / "proj-a" / "s1.jsonl"), table, tz)
-    ck("a streamed message is one turn: m1, m2, m3 (synthetic skipped)", s1["turns"] == 3, str(s1["turns"]))
-    ck("typed prompts exclude system-reminders and tool results", s1["typed"] == 2, str(s1["typed"]))
-    ck("the last streamed usage wins (m1 output 200, not 50)",
-       abs(s1["comp"]["output"] - (200 + 300) * 25 / 1e6 - 10 * 5 / 1e6) < 1e-9, str(s1["comp"]))
-    ck("a compact_boundary marks the session compacted", s1["compacted"] is True)
-    ck("edits resolve to the repository; a linked worktree folds onto it",
-       s1["edits"] == {"alpha": 2}, str(s1["edits"]))
-    ck("the worktree directory is kept as the working directory",
-       "alpha-wt-ABC-123" in s1["dirs"] and "alpha" in s1["dirs"], str(s1["dirs"]))
-    ck("a file outside any repo is not a repo edit", "loose" not in s1["edits"])
-    ck("model split carries dated ids as they are", "claude-haiku-4-5-20251001" in s1["byModel"]
-       and "<synthetic>" not in s1["byModel"])
-    sub = ui.parse_file(str(projects / "proj-a" / "s1" / "subagents" / "agent-1.jsonl"), table, tz)
-    ck("a subagent log belongs to its parent session and types nothing",
-       sub["sid"] == "s1" and sub["sub"] and sub["typed"] == 0)
-    s2 = ui.parse_file(str(projects / "proj-a" / "s2.jsonl"), table, tz)
-    ck("outward actions: MCP writes and gh writes counted, MCP reads not",
-       s2["outward"] == {"Slack writes (MCP)": 1, "GitHub PR and issue writes": 1}, str(s2["outward"]))
-    ck("a limit message is a rate-limit hit with its window",
-       len(s2["limits"]) == 1 and s2["limits"][0]["window"] == "five_hour", str(s2["limits"]))
-    ck("an unreadable or empty log is None, never an error",
-       ui.parse_file(str(projects / "proj-a" / "junk.jsonl"), table, tz) is None
-       and ui.parse_file("/nope/x.jsonl", table, tz) is None)
-    ck("an unknown model is named as unpriced",
-       ui.parse_file(str(projects / "proj-a" / "s3.jsonl"), table, tz)["unpriced"]
-       == ["claude-some-future-model"])
+def test_opus_prices_every_token_kind(table):
+    parts, known, read = cost_parts("claude-opus-5", {
+        "input_tokens": MTOK, "output_tokens": MTOK, "cache_read_input_tokens": MTOK,
+        "cache_creation_input_tokens": MTOK}, table)
+    assert [round(parts[k], 4) for k in ("input", "output", "cacheWrite", "cacheRead")] == [
+        5, 25, 6.25, 0.5]
+    assert known
+    assert read == MTOK
 
 
-def test_weeks(projects: Path):
-    print("\n== week bucketing and the metrics shape ==")
-    table, tz = ui.load_prices(None), ui.get_tz("UTC")
+@pytest.mark.parametrize("model, usage, part, dollars", [
+    ("claude-sonnet-5", {"input_tokens": 2 * MTOK}, "input", 6.0),
+    (HAIKU, {"output_tokens": MTOK}, "output", 5.0),
+    ("claude-opus-4-1-20250805", {"input_tokens": MTOK}, "input", 15.0),
+    ("claude-opus-5", {"cache_creation_input_tokens": MTOK,
+                       "cache_creation": {"ephemeral_1h_input_tokens": MTOK}}, "cacheWrite", 10.0),
+], ids=["sonnet-input", "dated-haiku-matches-its-family", "older-opus-own-rate",
+        "one-hour-cache-write-2x"])
+def test_a_model_is_priced_at_its_family_rate(table, model, usage, part, dollars):
+    parts, _, _ = cost_parts(model, usage, table)
+    assert round(parts[part], 4) == dollars
+
+
+def test_an_unknown_model_is_flagged_not_hidden(table):
+    assert cost_parts(UNKNOWN_MODEL, {"input_tokens": 1}, table)[1] is False
+
+
+def test_a_price_override_file_wins(tmp_path):
+    f = tmp_path / "p.json"
+    f.write_text(json.dumps({"some-future": [1, 2, 3, 4]}), encoding=UTF8)
+    parts, known, _ = cost_parts(UNKNOWN_MODEL, {"input_tokens": MTOK}, ui.load_prices(str(f)))
+    assert known
+    assert round(parts["input"], 4) == 1.0
+
+
+def test_a_malformed_price_override_is_refused(tmp_path):
+    f = tmp_path / "p.json"
+    f.write_text(json.dumps({"x": [1, 2]}), encoding=UTF8)
+    with pytest.raises(ValueError):
+        ui.load_prices(str(f))
+
+
+# ------------------------------------------------------------------- parsing
+def parse(projects: Path, *rel: str, table, tz):
+    return ui.parse_file(str(projects.joinpath("proj-a", *rel)), table, tz)
+
+
+class TestParsing:
+    def test_a_streamed_message_is_one_turn_and_synthetic_is_skipped(self, projects, table, tz):
+        assert parse(projects, "s1.jsonl", table=table, tz=tz)["turns"] == 3
+
+    def test_typed_prompts_exclude_system_reminders_and_tool_results(self, projects, table, tz):
+        assert parse(projects, "s1.jsonl", table=table, tz=tz)["typed"] == 2
+
+    def test_the_last_streamed_usage_wins(self, projects, table, tz):
+        s1 = parse(projects, "s1.jsonl", table=table, tz=tz)
+        assert s1["comp"]["output"] == pytest.approx((200 + 300) * 25 / 1e6 + 10 * 5 / 1e6)
+
+    def test_a_compact_boundary_marks_the_session_compacted(self, projects, table, tz):
+        assert parse(projects, "s1.jsonl", table=table, tz=tz)["compacted"] is True
+
+    def test_edits_resolve_to_the_repository_and_a_worktree_folds_onto_it(self, projects, table, tz):
+        s1 = parse(projects, "s1.jsonl", table=table, tz=tz)
+        assert s1["edits"] == {"alpha": 2}
+        assert "loose" not in s1["edits"]
+
+    def test_the_worktree_directory_is_kept_as_a_working_directory(self, projects, table, tz):
+        dirs = parse(projects, "s1.jsonl", table=table, tz=tz)["dirs"]
+        assert "alpha-wt-ABC-123" in dirs
+        assert "alpha" in dirs
+
+    def test_the_model_split_carries_dated_ids_and_drops_synthetic(self, projects, table, tz):
+        by_model = parse(projects, "s1.jsonl", table=table, tz=tz)["byModel"]
+        assert HAIKU in by_model
+        assert "<synthetic>" not in by_model
+
+    def test_a_subagent_log_belongs_to_its_parent_and_types_nothing(self, projects, table, tz):
+        sub = parse(projects, "s1", "subagents", "agent-1.jsonl", table=table, tz=tz)
+        assert sub["sid"] == "s1"
+        assert sub["sub"]
+        assert sub["typed"] == 0
+
+    def test_outward_actions_count_mcp_writes_and_gh_writes_not_mcp_reads(self, projects, table, tz):
+        s2 = parse(projects, "s2.jsonl", table=table, tz=tz)
+        assert s2["outward"] == {"Slack writes (MCP)": 1, "GitHub PR and issue writes": 1}
+
+    def test_a_limit_message_is_a_rate_limit_hit_with_its_window(self, projects, table, tz):
+        s2 = parse(projects, "s2.jsonl", table=table, tz=tz)
+        assert len(s2["limits"]) == 1
+        assert s2["limits"][0]["window"] == "five_hour"
+
+    def test_an_unreadable_or_empty_log_is_none_never_an_error(self, projects, table, tz, tmp_path):
+        assert parse(projects, "junk.jsonl", table=table, tz=tz) is None
+        assert ui.parse_file(str(tmp_path / "missing.jsonl"), table, tz) is None
+
+    def test_an_unknown_model_is_named_as_unpriced(self, projects, table, tz):
+        assert parse(projects, "s3.jsonl", table=table, tz=tz)["unpriced"] == [UNKNOWN_MODEL]
+
+
+# ------------------------------------------------------------------- weeks
+@pytest.fixture
+def collected(projects, table, tz):
     cp, parsed, same = ui.collect(projects, {"fingerprint": "x", "files": {}}, table, tz, None)
-    ck("every log is parsed once (4 sessions' files + subagent + junk)", parsed == 6 and same == 0, str(parsed))
-    weeks = ui.weeks_from(cp, None)
-    ck("sessions fall in their ISO week by start: W03 has s1,s2,s3; W04 has s4",
-       list(weeks) == ["2026-W03", "2026-W04"]
-       and [len(v) for v in weeks.values()] == [3, 1], str({k: len(v) for k, v in weeks.items()}))
-    lo, hi = ui.week_bounds("2026-W03")
-    ck("week bounds are Monday..Sunday", (lo.isoformat(), hi.isoformat()) == ("2026-01-12", "2026-01-18"))
-    m = ui.week_metrics(weeks["2026-W03"])
-    needed = ["costUSD", "sessions", "turns", "typedPrompts", "activeDays", "byModel", "composition",
-              "cacheReadTokens", "durationBuckets", "noCompactionSessions", "byRepo", "editsByRepo",
-              "totalEdits", "workingDirs", "noWriteSessions", "noWriteCostUSD", "noWriteOutward",
-              "noWriteOutwardTotal", "noWriteProductiveSessions", "noWriteProductiveCostUSD",
-              "investigationOnlySessions", "investigationOnlyCostUSD", "tickets", "rateLimits"]
-    ck("every key usage_report.py reads is present", all(k in m for k in needed),
-       str([k for k in needed if k not in m]))
-    ck("sessions, typed prompts, active days", (m["sessions"], m["typedPrompts"], m["activeDays"]) == (3, 4, 3))
-    ck("composition sums to the cost (to a cent)",
-       abs(sum(m["composition"].values()) - m["costUSD"]) < 0.02)
-    ck("cost is credited to the repository actually edited", list(m["byRepo"]) == ["alpha"]
-       and m["totalEdits"] >= 2)
-    ck("two sessions wrote no repo file; one did something outward",
-       m["noWriteSessions"] == 2 and m["noWriteProductiveSessions"] == 1 and m["investigationOnlySessions"] == 1
-       and m["noWriteOutwardTotal"] == 2)
-    ck("a ticket key is read off the worktree directory name", m["tickets"] == ["ABC-123"], str(m["tickets"]))
-    ck("the compacted session is not counted as never-compacted", m["noCompactionSessions"] == 2)
-    names = [b["bucket"] for b in m["durationBuckets"]]
-    ck("session-length buckets: s1 is 105 min (30m-2h), s2 2 min, s3 1 min (<30m)",
-       names == ["<30m", "30m-2h"] and m["durationBuckets"][0]["sessions"] == 2, str(m["durationBuckets"]))
-    ck("the rate-limit hit is carried", len(m["rateLimits"]) == 1)
-    ck("the unpriced model is listed", m["unpricedModels"] == ["claude-some-future-model"])
-    ck("cost by hour and weekday each sum to the cost",
-       abs(sum(m["costByHour"]) - m["costUSD"]) < 0.05 and abs(sum(m["costByWeekday"]) - m["costUSD"]) < 0.05
-       and len(m["costByHour"]) == 24 and len(m["costByWeekday"]) == 7)
-    ck("metrics are a pure function of the sessions", ui.week_metrics(weeks["2026-W03"]) == m)
-    tz_ny = ui.get_tz("America/New_York")
-    cp2, _, _ = ui.collect(projects, {"fingerprint": "y", "files": {}}, table, tz_ny, None)
-    ck("a timezone moves a late-night session to the week it was lived in",
-       "2026-W03" in ui.weeks_from(cp2, None) and ui.fingerprint(table, tz) != ui.fingerprint(table, tz_ny))
+    return cp, parsed, same, ui.weeks_from(cp, None)
 
 
-def test_write_and_idempotency(projects: Path):
-    print("\n== writing nodes: idempotent, never deleting ==")
-    r = ui.ingest(projects)
-    ck("first run creates one node per week", [w["action"] for w in r["weeks"]] == ["created", "created"], str(r["weeks"]))
-    n1 = nodes()
-    ck("stable ids, the shape the report reads", sorted(n1) == ["usage-week_2026-W03", "usage-week_2026-W04"]
-       and n1["usage-week_2026-W03"]["week"] == "2026-W03" and n1["usage-week_2026-W03"]["from"] == "2026-01-12"
-       and n1["usage-week_2026-W03"]["source"] == "usage_ingest.py")
-    r2 = ui.ingest(projects)
-    ck("a rerun on the same logs changes nothing and parses nothing",
-       [w["action"] for w in r2["weeks"]] == ["unchanged", "unchanged"] and r2["parsed"] == 0, str(r2))
-    ck("and adds no node", nodes() == n1)
-    # the week's logs grow: the node updates in place
-    p = projects / "proj-a" / "s4.jsonl"
-    with open(p, "a", encoding="utf-8") as fh:
-        fh.write(json.dumps(asst("2026-01-20T09:30:00Z", "m7", sid="s4")) + "\n")
-    os.utime(p, (time.time() + 5, time.time() + 5))
-    r3 = ui.ingest(projects)
-    ck("only the changed file is re-parsed", r3["parsed"] == 1, str(r3["parsed"]))
-    n3 = nodes()
-    ck("the week updates in place, one node per week", [w["action"] for w in r3["weeks"]] == ["unchanged", "updated"]
-       and len(n3) == 2 and n3["usage-week_2026-W04"]["metrics"]["turns"] == 2)
-    # the dry run writes nothing, the checkpoint included
-    cp_before = (Path(HOME) / ui.CHECKPOINT).read_bytes()
-    with open(p, "a", encoding="utf-8") as fh:
-        fh.write(json.dumps(asst("2026-01-20T09:40:00Z", "m8", sid="s4")) + "\n")
-    os.utime(p, (time.time() + 10, time.time() + 10))
-    r4 = ui.ingest(projects, dry_run=True)
-    ck("--dry-run reports but writes neither nodes nor checkpoint",
-       any(w["action"] == "would-write" for w in r4["weeks"]) and nodes() == n3
-       and (Path(HOME) / ui.CHECKPOINT).read_bytes() == cp_before)
-    # never replaced by less data
-    shutil_dir = projects / "proj-a"
-    hidden = shutil_dir / "s3.jsonl"
-    saved = hidden.read_text(encoding="utf-8")
-    hidden.unlink()
-    (Path(HOME) / ui.CHECKPOINT).unlink()   # logs pruned AND checkpoint lost
-    r5 = ui.ingest(projects)
-    kept = [w for w in r5["weeks"] if w["week"] == "2026-W03"][0]
-    ck("a week is never overwritten by fewer sessions than it holds", kept["action"] == "kept"
-       and nodes()["usage-week_2026-W03"]["metrics"]["sessions"] == 3, str(kept))
-    forced = ui.ingest(projects, force=True)
-    ck("--force replaces it", [w for w in forced["weeks"] if w["week"] == "2026-W03"][0]["action"] == "updated"
-       and nodes()["usage-week_2026-W03"]["metrics"]["sessions"] == 2)
-    hidden.write_text(saved, encoding="utf-8")
-    ui.ingest(projects)
-    # another tool's node is left alone (a separate throwaway brain)
-    with tempfile.TemporaryDirectory() as home:
-        env = {**os.environ, "SECOND_BRAIN_HOME": home, "MEMORY_LEDGER_NO_AUTOSYNC": "1"}
-        theirs = {"week": "2026-W03", "from": "2026-01-12", "to": "2026-01-18", "source": "other-tool",
-                  "metrics": {"costUSD": 1.0, "sessions": 1}}
-        subprocess.run([sys.executable, str(SCRIPTS / "graph.py"), "add-node", "--type", "usage-week",
-                        "--id", "usage-week_2026-W03", "--title", "theirs", "--props", json.dumps(theirs)],
-                       capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, check=True)
-        res = json.loads(cli("run", "--projects-dir", str(projects), "--json", env=env).stdout)
-        w03 = [w for w in res["weeks"] if w["week"] == "2026-W03"][0]
-        ck("a node written by another tool is kept, with the reason",
-           w03["action"] == "kept" and "other-tool" in w03["reason"], str(w03))
-        res = json.loads(cli("run", "--projects-dir", str(projects), "--json", "--force", env=env).stdout)
-        ck("--force replaces it", [w for w in res["weeks"] if w["week"] == "2026-W03"][0]["action"] == "updated")
+class TestWeeks:
+    def test_every_log_is_parsed_once(self, collected):
+        _, parsed, same, _ = collected
+        assert (parsed, same) == (6, 0)     # 4 sessions' files + the subagent + the junk
+
+    def test_sessions_fall_in_their_iso_week_by_start(self, collected):
+        weeks = collected[3]
+        assert list(weeks) == [W03, W04]
+        assert [len(v) for v in weeks.values()] == [3, 1]
+
+    def test_week_bounds_are_monday_to_sunday(self):
+        lo, hi = ui.week_bounds(W03)
+        assert (lo.isoformat(), hi.isoformat()) == ("2026-01-12", "2026-01-18")
+
+    @pytest.fixture
+    def metrics(self, collected):
+        return ui.week_metrics(collected[3][W03])
+
+    def test_every_key_the_report_reads_is_present(self, metrics):
+        needed = ["costUSD", "sessions", "turns", "typedPrompts", "activeDays", "byModel",
+                  "composition", "cacheReadTokens", "durationBuckets", "noCompactionSessions",
+                  "byRepo", "editsByRepo", "totalEdits", "workingDirs", "noWriteSessions",
+                  "noWriteCostUSD", "noWriteOutward", "noWriteOutwardTotal",
+                  "noWriteProductiveSessions", "noWriteProductiveCostUSD",
+                  "investigationOnlySessions", "investigationOnlyCostUSD", "tickets",
+                  "rateLimits"]
+        assert [k for k in needed if k not in metrics] == []
+
+    def test_sessions_typed_prompts_and_active_days(self, metrics):
+        assert (metrics["sessions"], metrics["typedPrompts"], metrics["activeDays"]) == (3, 4, 3)
+
+    def test_composition_sums_to_the_cost_to_a_cent(self, metrics):
+        assert sum(metrics["composition"].values()) == pytest.approx(metrics["costUSD"], abs=0.02)
+
+    def test_cost_is_credited_to_the_repository_actually_edited(self, metrics):
+        assert list(metrics["byRepo"]) == ["alpha"]
+        assert metrics["totalEdits"] >= 2
+
+    def test_no_write_sessions_and_outward_actions(self, metrics):
+        assert metrics["noWriteSessions"] == 2
+        assert metrics["noWriteProductiveSessions"] == 1
+        assert metrics["investigationOnlySessions"] == 1
+        assert metrics["noWriteOutwardTotal"] == 2
+
+    def test_a_ticket_key_is_read_off_the_worktree_directory_name(self, metrics):
+        assert metrics["tickets"] == ["ABC-123"]
+
+    def test_the_compacted_session_is_not_counted_as_never_compacted(self, metrics):
+        assert metrics["noCompactionSessions"] == 2
+
+    def test_session_length_buckets(self, metrics):
+        # s1 is 105 min (30m-2h), s2 is 2 min and s3 1 min (<30m)
+        assert [b["bucket"] for b in metrics["durationBuckets"]] == ["<30m", "30m-2h"]
+        assert metrics["durationBuckets"][0]["sessions"] == 2
+
+    def test_the_rate_limit_hit_and_the_unpriced_model_are_carried(self, metrics):
+        assert len(metrics["rateLimits"]) == 1
+        assert metrics["unpricedModels"] == [UNKNOWN_MODEL]
+
+    def test_cost_by_hour_and_weekday_each_sum_to_the_cost(self, metrics):
+        assert sum(metrics["costByHour"]) == pytest.approx(metrics["costUSD"], abs=0.05)
+        assert sum(metrics["costByWeekday"]) == pytest.approx(metrics["costUSD"], abs=0.05)
+        assert len(metrics["costByHour"]) == 24
+        assert len(metrics["costByWeekday"]) == 7
+
+    def test_metrics_are_a_pure_function_of_the_sessions(self, collected, metrics):
+        assert ui.week_metrics(collected[3][W03]) == metrics
+
+    def test_a_timezone_moves_a_late_night_session_to_the_week_it_was_lived_in(
+            self, projects, table, tz):
+        tz_ny = ui.get_tz("America/New_York")
+        cp, _, _ = ui.collect(projects, {"fingerprint": "y", "files": {}}, table, tz_ny, None)
+        assert W03 in ui.weeks_from(cp, None)
+        assert ui.fingerprint(table, tz) != ui.fingerprint(table, tz_ny)
 
 
-def test_checkpoint(projects: Path):
-    print("\n== the checkpoint ==")
-    cp_path = Path(HOME) / ui.CHECKPOINT
-    cp = json.loads(cp_path.read_text(encoding="utf-8"))
-    ck("it records each log's mtime+size and summary", len(cp["files"]) >= 6
-       and all("sig" in f for f in cp["files"].values()))
-    ck("it holds no prompt or answer text", "please add a flag" not in cp_path.read_text(encoding="utf-8")
-       and "hit your 5-hour limit" not in cp_path.read_text(encoding="utf-8"))
-    table, tz = ui.load_prices(None), ui.get_tz("UTC")
-    ck("a changed price table invalidates it (so every session is re-priced)",
-       ui.load_checkpoint(cp_path, "other-fingerprint")["files"] == {})
-    r = ui.ingest(projects, since="2026-01-19")
-    ck("--since snaps to its ISO week and writes only from there", [w["week"] for w in r["weeks"]] == ["2026-W04"])
-    st = json.loads(cli("status").stdout)
-    ck("status reports the checkpoint", st["ok"] and st["files"] >= 6 and st["lastRun"])
+# ------------------------------------------------------------------- the flow
+@pytest.mark.usefixtures("module_brain_home")
+class TestIngestFlow:
+    """Writing nodes, the checkpoint, and the report, on one brain, in order."""
+
+    def test_first_run_creates_one_node_per_week_with_stable_ids(
+            self, shared_projects, module_brain_home):
+        r = ui.ingest(shared_projects)
+        assert [w["action"] for w in r["weeks"]] == ["created", "created"]
+        n1 = nodes(module_brain_home)
+        assert sorted(n1) == [NODE_W03, NODE_W04]
+        assert n1[NODE_W03]["week"] == W03
+        assert n1[NODE_W03]["from"] == "2026-01-12"
+        assert n1[NODE_W03]["source"] == "usage_ingest.py"
+
+    def test_a_rerun_changes_nothing_and_parses_nothing(self, shared_projects, module_brain_home):
+        before = nodes(module_brain_home)
+        r = ui.ingest(shared_projects)
+        assert [w["action"] for w in r["weeks"]] == ["unchanged", "unchanged"]
+        assert r["parsed"] == 0
+        assert nodes(module_brain_home) == before
+
+    def test_a_week_whose_logs_grow_updates_in_place(self, shared_projects, module_brain_home):
+        p = shared_projects / "proj-a" / "s4.jsonl"
+        with open(p, "a", encoding=UTF8) as fh:
+            fh.write(json.dumps(asst("2026-01-20T09:30:00Z", "m7", sid="s4")) + "\n")
+        os.utime(p, (time.time() + 5, time.time() + 5))
+        r = ui.ingest(shared_projects)
+        assert r["parsed"] == 1
+        n = nodes(module_brain_home)
+        assert [w["action"] for w in r["weeks"]] == ["unchanged", "updated"]
+        assert len(n) == 2
+        assert n[NODE_W04]["metrics"]["turns"] == 2
+
+    def test_dry_run_writes_neither_nodes_nor_checkpoint(self, shared_projects, module_brain_home):
+        before = nodes(module_brain_home)
+        checkpoint = module_brain_home / ui.CHECKPOINT
+        cp_before = checkpoint.read_bytes()
+        p = shared_projects / "proj-a" / "s4.jsonl"
+        with open(p, "a", encoding=UTF8) as fh:
+            fh.write(json.dumps(asst("2026-01-20T09:40:00Z", "m8", sid="s4")) + "\n")
+        os.utime(p, (time.time() + 10, time.time() + 10))
+        r = ui.ingest(shared_projects, dry_run=True)
+        assert any(w["action"] == "would-write" for w in r["weeks"])
+        assert nodes(module_brain_home) == before
+        assert checkpoint.read_bytes() == cp_before
+
+    def test_a_week_is_never_overwritten_by_fewer_sessions_than_it_holds(
+            self, shared_projects, module_brain_home):
+        hidden = shared_projects / "proj-a" / "s3.jsonl"
+        TestIngestFlow.saved_s3 = hidden.read_text(encoding=UTF8)
+        hidden.unlink()
+        (module_brain_home / ui.CHECKPOINT).unlink()    # logs pruned AND checkpoint lost
+        r = ui.ingest(shared_projects)
+        assert action_of(r, W03)["action"] == "kept"
+        assert nodes(module_brain_home)[NODE_W03]["metrics"]["sessions"] == 3
+
+    def test_force_replaces_it(self, shared_projects, module_brain_home):
+        forced = ui.ingest(shared_projects, force=True)
+        assert action_of(forced, W03)["action"] == "updated"
+        assert nodes(module_brain_home)[NODE_W03]["metrics"]["sessions"] == 2
+        (shared_projects / "proj-a" / "s3.jsonl").write_text(TestIngestFlow.saved_s3,
+                                                             encoding=UTF8)
+        ui.ingest(shared_projects)
+
+    def test_the_checkpoint_records_each_logs_signature_and_summary(
+            self, shared_projects, module_brain_home):
+        cp = json.loads((module_brain_home / ui.CHECKPOINT).read_text(encoding=UTF8))
+        assert len(cp["files"]) >= 6
+        assert all("sig" in f for f in cp["files"].values())
+
+    def test_the_checkpoint_holds_no_prompt_or_answer_text(self, module_brain_home):
+        text = (module_brain_home / ui.CHECKPOINT).read_text(encoding=UTF8)
+        assert "please add a flag" not in text
+        assert "hit your 5-hour limit" not in text
+
+    def test_a_changed_price_table_invalidates_it(self, module_brain_home):
+        assert ui.load_checkpoint(module_brain_home / ui.CHECKPOINT, "other-fingerprint")[
+            "files"] == {}
+
+    def test_since_snaps_to_its_iso_week_and_writes_only_from_there(self, shared_projects):
+        r = ui.ingest(shared_projects, since="2026-01-19")
+        assert [w["week"] for w in r["weeks"]] == [W04]
+
+    def test_status_reports_the_checkpoint(self, module_brain_home):
+        st = json.loads(cli(module_brain_home, "status").stdout)
+        assert st["ok"]
+        assert st["files"] >= 6
+        assert st["lastRun"]
+
+    def test_the_report_reads_what_the_ingest_wrote(self, module_brain_home):
+        tags = [w["week"] for w in ur.load_weeks()]
+        assert W03 in tags
+        assert W04 in tags
+
+    @pytest.fixture
+    def page(self):
+        return ur.render([w for w in ur.load_weeks() if w["week"] in (W03, W04)])
+
+    def test_it_draws_the_page_repositories_and_all(self, page):
+        assert page.startswith("<!doctype html>")
+        for needle in ("alpha", "beta", "ABC-123"):
+            assert needle in page
+
+    def test_the_habits_are_there(self, page):
+        for needle in ('id="ch-usage"', "Never compacted", "Cache read", "outward action"):
+            assert needle in page
+
+    def test_cost_by_hour_and_weekday_are_drawn(self, page):
+        assert 'id="ch-hour"' in page
+        assert 'id="ch-weekday"' in page
+
+    def test_a_rate_limit_hit_shows_as_a_hard_stop(self, page):
+        assert "five-hour" in page
+
+    def test_the_page_is_deterministic(self, page):
+        assert page == ur.render([w for w in ur.load_weeks() if w["week"] in (W03, W04)])
+
+    def test_render_ingest_ingests_first_then_renders(self, shared_projects, module_brain_home):
+        p = run_py(SCRIPTS / "usage_report.py", "render", "--ingest",
+                   env=child_env(module_brain_home, **{PROJECTS_ENV: str(shared_projects)}))
+        assert p.returncode == 0, p.stderr[:200]
+        assert "Where the Quota Went" in p.stdout
 
 
-def test_cli_and_hook(projects: Path):
-    print("\n== the CLI, the lock and the hook ==")
-    with tempfile.TemporaryDirectory() as home:
-        env = {"SECOND_BRAIN_HOME": home, "MEMORY_LEDGER_NO_AUTOSYNC": "1"}
-        p = cli("run", "--projects-dir", str(projects), "--json", env=env)
-        res = json.loads(p.stdout or "{}")
-        ck("run --json ingests and says what it did", p.returncode == 0 and len(res.get("weeks", [])) == 2, p.stderr[:200])
-        p = cli("run", "--projects-dir", str(projects), "--dry-run", env=env)
-        ck("run --dry-run prints the plan", p.returncode == 0 and "unchanged" in p.stdout or "would-write" in p.stdout)
-        p = cli("run", "--projects-dir", str(projects), "--quiet", env=env)
-        ck("--quiet prints nothing", p.returncode == 0 and p.stdout == "" and p.stderr == "")
-        p = cli("run", "--projects-dir", str(projects), "--prices", "/nope.json", env=env)
-        ck("a missing prices file exits non-zero with the reason", p.returncode == 2 and "error" in p.stderr)
-        p = cli("run", "--projects-dir", "/does/not/exist", "--json", env=env)
-        ck("no logs directory is a note, not a failure", p.returncode == 0 and "no session logs" in p.stdout)
-        (Path(home) / ui.LOCK).write_text("999", encoding="utf-8")
-        p = cli("run", "--projects-dir", str(projects), "--quiet", "--locked", env=env)
-        ck("a held lock makes a background run stand down", p.returncode == 0 and (Path(home) / ui.LOCK).exists())
-        (Path(home) / ui.LOCK).unlink()
+# ------------------------------------------------------------------- independent
+def test_a_node_written_by_another_tool_is_kept_with_the_reason_until_forced(projects, tmp_path):
+    home = tmp_path / "other-home"
+    home.mkdir()
+    theirs = {"week": W03, "from": "2026-01-12", "to": "2026-01-18", "source": "other-tool",
+              "metrics": {"costUSD": 1.0, "sessions": 1}}
+    subprocess.run([sys.executable, str(SCRIPTS / "graph.py"), "add-node", "--type",
+                    "usage-week", "--id", NODE_W03, "--title", "theirs", "--props",
+                    json.dumps(theirs)],
+                   capture_output=True, text=True, encoding=UTF8, errors="replace",
+                   env=child_env(home), check=True)
+    res = json.loads(cli(home, "run", "--projects-dir", str(projects), "--json").stdout)
+    w03 = action_of(res, W03)
+    assert w03["action"] == "kept"
+    assert "other-tool" in w03["reason"]
+    res = json.loads(cli(home, "run", "--projects-dir", str(projects), "--json",
+                         "--force").stdout)
+    assert action_of(res, W03)["action"] == "updated"
 
-    def hook(home, extra=None, stdin='{"session_id":"t"}'):
-        env = {**os.environ, "SECOND_BRAIN_HOME": home, "HOME": home, "MEMORY_LEDGER_NO_AUTOSYNC": "1",
-               **(extra or {})}
-        return subprocess.run([sys.executable, str(ROOT / "hooks" / "usage_ingest.py")], input=stdin,
-                              capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
 
-    with tempfile.TemporaryDirectory() as home:
-        (Path(home) / ".claude" / "projects").mkdir(parents=True)
+class TestCli:
+    """The CLI and the lock, each on a brain of its own."""
+
+    @pytest.fixture
+    def home(self, tmp_path) -> Path:
+        h = tmp_path / "cli-home"
+        h.mkdir()
+        return h
+
+    def test_run_json_ingests_and_says_what_it_did(self, home, projects):
+        p = cli(home, "run", "--projects-dir", str(projects), "--json")
+        assert p.returncode == 0, p.stderr[:200]
+        assert len(json.loads(p.stdout)["weeks"]) == 2
+
+    def test_run_dry_run_prints_the_plan(self, home, projects):
+        p = cli(home, "run", "--projects-dir", str(projects), "--dry-run")
+        assert p.returncode == 0
+        assert "would-write" in p.stdout
+        cli(home, "run", "--projects-dir", str(projects), "--quiet")
+        p = cli(home, "run", "--projects-dir", str(projects), "--dry-run")
+        assert "unchanged" in p.stdout
+
+    def test_quiet_prints_nothing(self, home, projects):
+        p = cli(home, "run", "--projects-dir", str(projects), "--quiet")
+        assert p.returncode == 0
+        assert p.stdout == ""
+        assert p.stderr == ""
+
+    def test_a_missing_prices_file_exits_non_zero_with_the_reason(self, home, projects, tmp_path):
+        p = cli(home, "run", "--projects-dir", str(projects), "--prices",
+                str(tmp_path / "nope.json"))
+        assert p.returncode == 2
+        assert "error" in p.stderr
+
+    def test_no_logs_directory_is_a_note_not_a_failure(self, home, tmp_path):
+        p = cli(home, "run", "--projects-dir", str(tmp_path / "does" / "not" / "exist"), "--json")
+        assert p.returncode == 0
+        assert "no session logs" in p.stdout
+
+    def test_a_held_lock_makes_a_background_run_stand_down(self, home, projects):
+        lock = home / ui.LOCK
+        lock.write_text("999", encoding=UTF8)
+        p = cli(home, "run", "--projects-dir", str(projects), "--quiet", "--locked")
+        assert p.returncode == 0
+        assert lock.exists()
+
+
+class TestHook:
+    """The SessionStart hook: it only forks, and it respects every off switch."""
+
+    def hook(self, home: Path | str, projects: Path, stdin: str = '{"session_id":"t"}',
+             **extra: str):
+        env = child_env(home, HOME=str(home), **{PROJECTS_ENV: str(projects), **extra})
+        return run_py(HOOK, env=env, stdin=stdin)
+
+    @pytest.fixture
+    def home(self, tmp_path) -> Path:
+        h = tmp_path / "hook-home"
+        (h / ".claude" / "projects").mkdir(parents=True)
+        return h
+
+    def test_it_exits_zero_prints_nothing_and_returns_fast(self, home, projects):
         t0 = time.time()
-        p = hook(home, {"MEMORY_LEDGER_USAGE_PROJECTS_DIR": str(projects)})
-        ck("the hook exits 0 and prints nothing", p.returncode == 0 and p.stdout == "" and p.stderr == "", p.stderr[:200])
-        ck("and returns fast (it only forks)", time.time() - t0 < 3, f"{time.time() - t0:.2f}s")
-        stamp = Path(home) / ui.STAMP
-        ck("it leaves a stamp so the next start does not spawn again", stamp.exists())
-        for _ in range(100):
-            if (Path(home) / "graph.db").exists() and (Path(home) / ui.CHECKPOINT).exists():
-                break
+        p = self.hook(home, projects)
+        assert p.returncode == 0
+        assert p.stdout == ""
+        assert p.stderr == ""
+        assert time.time() - t0 < 3
+
+    def test_it_leaves_a_stamp_and_the_detached_run_writes_the_checkpoint(self, home, projects):
+        self.hook(home, projects)
+        assert (home / ui.STAMP).exists()
+        deadline = time.time() + HOOK_WAIT_S
+        while time.time() < deadline and not (
+                (home / "graph.db").exists() and (home / ui.CHECKPOINT).exists()):
             time.sleep(0.1)
-        ck("the detached run wrote the checkpoint", (Path(home) / ui.CHECKPOINT).exists())
-        old = (Path(home) / ui.CHECKPOINT).stat().st_mtime_ns
-        hook(home, {"MEMORY_LEDGER_USAGE_PROJECTS_DIR": str(projects)})
+        assert (home / ui.CHECKPOINT).exists()
+
+    def test_a_second_start_inside_the_window_spawns_nothing(self, home, projects):
+        self.hook(home, projects)
+        deadline = time.time() + HOOK_WAIT_S
+        while time.time() < deadline and not (home / ui.CHECKPOINT).exists():
+            time.sleep(0.1)
+        old = (home / ui.CHECKPOINT).stat().st_mtime_ns
+        self.hook(home, projects)
         time.sleep(0.5)
-        ck("a second start inside the window spawns nothing", (Path(home) / ui.CHECKPOINT).stat().st_mtime_ns == old)
-    with tempfile.TemporaryDirectory() as home:
-        p = hook(home, {"MEMORY_LEDGER_NO_USAGE_INGEST": "1", "MEMORY_LEDGER_USAGE_PROJECTS_DIR": str(projects)})
-        ck("the opt-out env var stops it: no stamp, no output", p.returncode == 0 and p.stdout == ""
-           and not (Path(home) / ui.STAMP).exists())
-    with tempfile.TemporaryDirectory() as home:
-        (Path(home) / "settings.json").write_text('{"usage_ingest": false}', encoding="utf-8")
-        hook(home, {"MEMORY_LEDGER_USAGE_PROJECTS_DIR": str(projects)})
-        ck("so does settings.json", not (Path(home) / ui.STAMP).exists())
-    with tempfile.TemporaryDirectory() as home:
-        p = hook(home + "/not-created", {"MEMORY_LEDGER_USAGE_PROJECTS_DIR": str(projects)}, stdin="garbage")
-        ck("a brain that does not exist is not created by the hook, and garbage on stdin is fine",
-           p.returncode == 0 and not Path(home + "/not-created").exists())
-    hooks = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
-    ck("it is bound to SessionStart startup", any(
-        "usage_ingest.py" in h["command"] for blk in hooks["hooks"]["SessionStart"]
-        if blk["matcher"] == "startup" for h in blk["hooks"]))
+        assert (home / ui.CHECKPOINT).stat().st_mtime_ns == old
+
+    def test_the_opt_out_env_var_stops_it(self, home, projects):
+        p = self.hook(home, projects, **{OPT_OUT_ENV: "1"})
+        assert p.returncode == 0
+        assert p.stdout == ""
+        assert not (home / ui.STAMP).exists()
+
+    def test_settings_json_stops_it_too(self, home, projects):
+        (home / "settings.json").write_text('{"usage_ingest": false}', encoding=UTF8)
+        self.hook(home, projects)
+        assert not (home / ui.STAMP).exists()
+
+    def test_a_brain_that_does_not_exist_is_not_created_and_garbage_on_stdin_is_fine(
+            self, tmp_path, projects):
+        missing = tmp_path / "not-created"
+        p = self.hook(missing, projects, stdin="garbage")
+        assert p.returncode == 0
+        assert not missing.exists()
+
+    def test_it_is_bound_to_session_start_startup(self):
+        hooks = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding=UTF8))
+        assert any("usage_ingest.py" in h["command"]
+                   for blk in hooks["hooks"]["SessionStart"] if blk["matcher"] == "startup"
+                   for h in blk["hooks"])
 
 
-def test_end_to_end(projects: Path):
-    print("\n== ingest -> render ==")
-    weeks = ur.load_weeks()
-    tags = [w["week"] for w in weeks]
-    ck("the report reads what the ingest wrote", "2026-W03" in tags and "2026-W04" in tags)
-    page = ur.render([w for w in weeks if w["week"] in ("2026-W03", "2026-W04")])
-    ck("it draws the page, repositories and all", page.startswith("<!doctype html>")
-       and "alpha" in page and "beta" in page and "ABC-123" in page)
-    ck("the habits are there: session length, compaction, cache read, no-write output",
-       'id="ch-usage"' in page and "Never compacted" in page and "Cache read" in page and "outward action" in page)
-    ck("cost by hour and weekday are drawn", 'id="ch-hour"' in page and 'id="ch-weekday"' in page)
-    ck("rate-limit hit shows as a hard stop", "five-hour" in page)
-    ck("deterministic", page == ur.render([w for w in ur.load_weeks() if w["week"] in ("2026-W03", "2026-W04")]))
-    env = {**os.environ, "SECOND_BRAIN_HOME": HOME, "MEMORY_LEDGER_USAGE_PROJECTS_DIR": str(projects)}
-    p = subprocess.run([sys.executable, str(SCRIPTS / "usage_report.py"), "render", "--ingest"],
-                       capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
-    ck("render --ingest ingests first, then renders", p.returncode == 0 and "Where the Quota Went" in p.stdout, p.stderr[:200])
-    with tempfile.TemporaryDirectory() as home:
-        env2 = {**env, "SECOND_BRAIN_HOME": home}
-        p = subprocess.run([sys.executable, str(SCRIPTS / "usage_report.py"), "render", "--ingest"],
-                           capture_output=True, text=True, encoding="utf-8", errors="replace", env=env2)
-        ck("on a fresh brain render --ingest fills it from the logs", p.returncode == 0 and "alpha" in p.stdout, p.stderr[:200])
-        p = subprocess.run([sys.executable, str(SCRIPTS / "usage_report.py"), "--db", "x.db", "render", "--ingest"],
-                           capture_output=True, text=True, encoding="utf-8", errors="replace", env=env2)
-        ck("--ingest with --db is refused", p.returncode == 2)
-    ck("an older node without the hour series still renders (no rhythm section)",
-       'id="rhythm"' not in ur.render([{"id": "x", "week": "2026-W01", "from": "2025-12-29", "to": "2026-01-04",
-                                        "source": "", "metrics": {"costUSD": 1.0, "sessions": 1, "turns": 2,
-                                                                  "byModel": {"claude-opus-5": 1.0}}}]))
+class TestRenderIngest:
+    def env(self, home: Path, projects: Path) -> dict[str, str]:
+        return child_env(home, **{PROJECTS_ENV: str(projects)})
 
+    def test_on_a_fresh_brain_render_ingest_fills_it_from_the_logs(self, tmp_path, projects):
+        home = tmp_path / "fresh"
+        home.mkdir()
+        p = run_py(SCRIPTS / "usage_report.py", "render", "--ingest",
+                   env=self.env(home, projects))
+        assert p.returncode == 0, p.stderr[:200]
+        assert "alpha" in p.stdout
 
-def main():
-    base = Path(tempfile.mkdtemp(prefix="ml-usage-logs-"))
-    projects = make_world(base)
-    test_cost_math()
-    test_parsing(projects)
-    test_weeks(projects)
-    test_write_and_idempotency(projects)
-    test_checkpoint(projects)
-    test_cli_and_hook(projects)
-    test_end_to_end(projects)
-    print(f"\n{'ALL PASS' if not FAILS else f'{len(FAILS)} FAILED: ' + ', '.join(FAILS)}")
-    return 1 if FAILS else 0
+    def test_ingest_with_db_is_refused(self, tmp_path, projects):
+        home = tmp_path / "fresh"
+        home.mkdir()
+        p = run_py(SCRIPTS / "usage_report.py", "--db", "x.db", "render", "--ingest",
+                   env=self.env(home, projects))
+        assert p.returncode == 2
 
-
-if __name__ == "__main__":
-    sys.exit(main())
+    def test_an_older_node_without_the_hour_series_still_renders(self):
+        page = ur.render([{"id": "x", "week": "2026-W01", "from": "2025-12-29",
+                           "to": "2026-01-04", "source": "",
+                           "metrics": {"costUSD": 1.0, "sessions": 1, "turns": 2,
+                                       "byModel": {"claude-opus-5": 1.0}}}])
+        assert 'id="rhythm"' not in page

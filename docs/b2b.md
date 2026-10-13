@@ -273,7 +273,7 @@ See [the API](api.md).
 
 ## Tests
 
-`python3 tests/test_b2b.py` checks the crypto (only the recipient opens, a
+`python3 -m pytest tests/test_b2b.py` checks the crypto (only the recipient opens, a
 forged sender does not), starts two real relays on free ports and drives one
 from the outside (challenge, wrong and spent answers, session, send, read-once),
 then runs the brain's side against a throwaway brain with a fake `claude`:

@@ -201,7 +201,7 @@ on Windows would terminate it.
 ```bash
 python3 scripts/agents.py status          # connectors, models, what is running
 python3 scripts/agents.py run <reply-id>  # run one queued reply in this process
-python3 tests/test_agents.py              # fake claude + fake Ollama, no model call
+python3 -m pytest tests/test_agents.py   # fake claude + fake Ollama, no model call
 ```
 
 Storage is two tables in the brain's database, `agent_conv` and `agent_msg`. The
