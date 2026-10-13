@@ -205,6 +205,18 @@ function Thread({ peer, conversation, messages, error, writable, onSent }: Threa
     setText(next.text);
     el.focus();
   };
+  // Newest at the bottom: open scrolled to the end, and follow new messages
+  // only while the reader is already near the end (not while reading history).
+  const list = useRef<HTMLOListElement>(null);
+  const stick = useRef(true);
+  useLayoutEffect(() => {
+    const el = list.current;
+    if (el && stick.current) el.scrollTop = el.scrollHeight;
+  }, [messages]);
+  const onScroll = () => {
+    const el = list.current;
+    if (el) stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  };
   const connected = !!conversation?.connected;
   const canSend = writable && connected && !busy && !!text.trim();
 
@@ -259,7 +271,7 @@ function Thread({ peer, conversation, messages, error, writable, onSent }: Threa
         {conversation && !conversation.allowed ? <Badge tone="warn">not allowed to send to you</Badge> : null}
       </header>
 
-      <ol className="ml-msg__thread" aria-label="messages">
+      <ol className="ml-msg__thread" aria-label="messages" ref={list} onScroll={onScroll}>
         {error ? <StatusMessage tone="error">{error}</StatusMessage> : null}
         {!messages && !error ? <Spinner label="reading messages" /> : null}
         {messages && !messages.length ? <EmptyState title="No messages yet" hint="Say hello below." /> : null}
