@@ -49,6 +49,13 @@ describe("DocCard", () => {
     const user = userEvent.setup();
     render(<Markdown text="[n.zip](attach:x-n.zip)" />);
     await user.click(screen.getByRole("button", { name: "Expand n.zip" }));
-    expect(await screen.findByRole("link", { name: "Download n.zip" })).toHaveAttribute("download", "n.zip");
+    expect((await screen.findAllByRole("link", { name: "Download n.zip" })).length).toBe(2);
+  });
+
+  it("downloads straight from the card, without expanding", () => {
+    render(<Markdown text="[Notes](attach:notes.md)" />);
+    const link = screen.getByRole("link", { name: "Download Notes" });
+    expect(link).toHaveAttribute("download", "Notes");
+    expect(link.getAttribute("href")).toContain("/api/document-file");
   });
 });

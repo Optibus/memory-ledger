@@ -223,8 +223,8 @@ the content into `scripts/make_document.py`, which saves it under
 
     [Q3 report](doc:documents/20261007-1030-q3-report.html)
 
-On a line of its own, that link shows as a card: the name and an **Expand**
-button. Expanded, the file overlays the interface; the cross at the top right,
+On a line of its own, that link shows as a card: the name, an **Expand**
+button and a **Download** button (saves the file as is). Expanded, the file overlays the interface; the cross at the top right,
 Escape, or a click outside closes it. Markdown is rendered, text is shown as is,
 HTML and PDF show in a frame (HTML sandboxed: it can run its own script, but
 cannot reach this server's API).

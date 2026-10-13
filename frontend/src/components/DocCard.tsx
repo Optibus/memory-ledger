@@ -21,6 +21,14 @@ import "./DocCard.css";
  * An image is the exception to "collapsed": it shows as a thumbnail in the
  * message, and clicking it opens the viewer.
  */
+function DownloadLink({ name, src }: { name: string; src: string }) {
+  return (
+    <a className="ml-btn ml-btn--default ml-btn--sm" href={src} download={name} aria-label={`Download ${name}`}>
+      Download
+    </a>
+  );
+}
+
 export function DocCard({ name, path, area = "exports" }: { name: string; path: string; area?: DocArea }) {
   const [open, setOpen] = useState(false);
   const src = documentFileUrl(path, area);
@@ -32,6 +40,7 @@ export function DocCard({ name, path, area = "exports" }: { name: string; path: 
         </button>
         {open ? (
           <Modal title={name} subtitle={path} width="min(1100px, 96vw)" onClose={() => setOpen(false)}>
+            <p><DownloadLink name={name} src={src} /></p>
             <img className="ml-doc__image" src={src} alt={name} />
           </Modal>
         ) : null}
@@ -45,6 +54,7 @@ export function DocCard({ name, path, area = "exports" }: { name: string; path: 
         <Button size="sm" onClick={() => setOpen(true)} aria-label={`Expand ${name}`}>
           Expand
         </Button>
+        <DownloadLink name={name} src={src} />
       </div>
       {open ? (
         <Modal title={name} subtitle={path} width="min(1100px, 96vw)" onClose={() => setOpen(false)}>
