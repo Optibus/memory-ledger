@@ -264,7 +264,9 @@ brain can reuse it later, in any project:
 1. **Learn:** `add-skill` stores a `skill` **node in the DB** (triggers + full
    procedure in the body, synced everywhere) — no file unless you pass
    `--with-file`. Skills are nodes, not isolated markdown. Existing markdown
-   skills are pulled in with `ingest-skills`.
+   skills are pulled in with `ingest-skills`. The built-in ones need no step:
+   the database `connect()` creates starts with them, and `init` and `doctor`
+   ingest any that are missing (`SECOND_BRAIN_NO_SKILL_SEED=1` turns that off).
 2. **Recall:** at the start of handling a request, run `match-skills "<the
    user's situation>"` (ranked by relevance, reinforcement as a booster). If a
    skill matches, **read its procedure from the node body** (`get-node --id`) and

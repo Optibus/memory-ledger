@@ -24,6 +24,8 @@ import decay  # noqa: E402
 import noise  # noqa: E402
 
 BRAIN = tempfile.mkdtemp(prefix="ledger-noise-test-")
+# a brain from scratch is seeded with the built-in skills; these checks count nodes in an empty one
+os.environ["SECOND_BRAIN_NO_SKILL_SEED"] = "1"
 ENV = {**os.environ, "SECOND_BRAIN_HOME": BRAIN, "MEMORY_LEDGER_HOME": BRAIN,
        "SECOND_BRAIN_NO_AUTOSYNC": "1"}
 FAILS = []

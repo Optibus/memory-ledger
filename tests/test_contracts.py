@@ -34,6 +34,8 @@ BRAIN = tempfile.mkdtemp(prefix="second-brain-contracts-")
 # or half the file would quietly test the developer's real brain.
 os.environ["SECOND_BRAIN_HOME"] = BRAIN
 os.environ["SECOND_BRAIN_NO_AUTOSYNC"] = "1"
+# a brain from scratch is seeded with the built-in skills; these checks count nodes in an empty one
+os.environ["SECOND_BRAIN_NO_SKILL_SEED"] = "1"
 FAILS = []
 
 

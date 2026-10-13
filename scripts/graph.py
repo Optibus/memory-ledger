@@ -405,10 +405,15 @@ def connect():
     import sqlite3
     path = db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
+    fresh = not path.exists() or path.stat().st_size == 0
     con = sqlite3.connect(str(path))
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys=ON")
     _ensure_schema(con)
+    if fresh:
+        # A brain made from scratch starts with the built-in skills, as if
+        # `ingest-skills` had been run (SECOND_BRAIN_NO_SKILL_SEED=1 skips it).
+        ensure_builtin_skills(con)
     return con
 
 
@@ -1083,8 +1088,10 @@ def cmd_init(args):
     # ~/.memory-ledger at the existing ~/.second_brain, so the connect() below
     # opens the brain that is already there instead of starting a second one.
     home = adopt_canonical_home()
-    connect().close()
-    out({"ok": True, "db": str(db_path()), "home": home})
+    con = connect()
+    skills = ensure_builtin_skills(con)
+    con.close()
+    out({"ok": True, "db": str(db_path()), "home": home, "skills": skills})
 
 
 def cmd_backups(args):
@@ -2311,32 +2318,38 @@ def cmd_ingest_skills(args):
     (and sync everywhere), not as isolated files. Idempotent: re-run any time to
     refresh. Scans --dir (repeatable); defaults to the plugin skills + the
     runtime learned_skills tree."""
-    con = connect()
-    dirs = [Path(d).expanduser() for d in (args.dir or [])]
+    out(ingest_skills(connect(), args.dir, args.kind, args.realm, args.all_md, args.no_rules))
+
+
+def ingest_skills(con, dirs=None, kind=None, realm="shared", all_md=False,
+                  no_rules=False) -> dict:
+    """The work of `ingest-skills`, on an open connection. See cmd_ingest_skills."""
+    dirs = [Path(d).expanduser() for d in (dirs or [])]
     if not dirs:
         dirs = [_plugin_skills_dir(), learned_skills_dir()]
     kind_for = {str(_plugin_skills_dir()): "plugin",
                 str(learned_skills_dir()): "learned"}
+    default_kind = kind
     results, touched, rules = [], [], []
     for d in dirs:
         if not d.exists():
             continue
-        kind = kind_for.get(str(d), args.kind or "plugin")
+        kind = kind_for.get(str(d), default_kind or "plugin")
         # Rules first, always: a skill file names the rules it honors, and a rule
         # that is not in the brain yet when the skill lands cannot be linked to.
-        if not args.no_rules:
+        if not no_rules:
             for rpath in sorted((d / "rules").glob("*.md")):
                 rid, action = _ingest_rule_file(con, rpath)
                 rules.append({"id": rid, "action": action, "path": str(rpath)})
                 if action == "created":
                     touched.append(rid)
         for path in sorted(d.rglob("SKILL.md")) + (
-                sorted(d.rglob("*.md")) if args.all_md else []):
-            if path.name != "SKILL.md" and not args.all_md:
+                sorted(d.rglob("*.md")) if all_md else []):
+            if path.name != "SKILL.md" and not all_md:
                 continue
             if path.parent.name == "rules":
                 continue
-            nid, action, missing = _ingest_skill_file(con, path, kind, args.realm)
+            nid, action, missing = _ingest_skill_file(con, path, kind, realm)
             touched.append(nid)
             row = {"id": nid, "action": action, "kind": kind, "path": str(path)}
             if missing:
@@ -2344,9 +2357,45 @@ def cmd_ingest_skills(args):
             results.append(row)
     con.commit()
     sync = _after_write(con, nodes=touched) if touched else None
-    tree = sync_skill_tree(con, args.realm) if touched else None
-    out({"ok": True, "count": len(results), "ingested": results,
-         "rules": rules, "tree": tree, "sync": sync})
+    tree = sync_skill_tree(con, realm) if touched else None
+    return {"ok": True, "count": len(results), "ingested": results,
+            "rules": rules, "tree": tree, "sync": sync}
+
+
+def missing_builtin_skills(con) -> list:
+    """Built-in skills (the plugin's skills/*/SKILL.md) with no `skill` node yet."""
+    want = []
+    for path in sorted(_plugin_skills_dir().glob("*/SKILL.md")):
+        try:
+            meta, _ = _parse_frontmatter(path.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+        want.append(f"skill_{slugify(meta.get('name') or path.parent.name)}")
+    if not want:
+        return []
+    have = {r[0] for r in con.execute(
+        f"SELECT id FROM nodes WHERE id IN ({','.join('?' * len(want))})", want)}
+    return [w for w in want if w not in have]
+
+
+def ensure_builtin_skills(con) -> dict:
+    """Ingest the built-in skills when any is missing from the brain; a no-op
+    otherwise. A brain made from scratch has none until this runs: connect()
+    calls it on the database it creates, `init` and `doctor` on every run.
+    A skill the owner archived is still a node, so it is not brought back.
+    SECOND_BRAIN_NO_SKILL_SEED=1 turns it off everywhere (a restore about to
+    overwrite the file, a test that counts nodes in an empty brain)."""
+    if os.environ.get("SECOND_BRAIN_NO_SKILL_SEED") == "1":
+        return {"ok": True, "ingested": 0, "missing": [], "skipped": "SECOND_BRAIN_NO_SKILL_SEED=1"}
+    missing = missing_builtin_skills(con)
+    if not missing:
+        return {"ok": True, "ingested": 0, "missing": []}
+    try:
+        res = ingest_skills(con)
+    except Exception as e:   # a broken SKILL.md must not stop the brain opening
+        return {"ok": False, "ingested": 0, "missing": missing, "error": str(e)[:300]}
+    return {"ok": True, "ingested": len(missing), "missing": missing_builtin_skills(con),
+            "count": res.get("count")}
 
 
 # ---------------------------------------------------------------------------

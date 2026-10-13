@@ -164,6 +164,19 @@ def check_content():
         con.close()
 
 
+def check_skills():
+    """The built-in skills are in the brain; any that are missing are ingested
+    here (the same idempotent pass `ingest-skills` makes), so a brain made
+    before the seed existed, or one restored without them, is repaired."""
+    if not G.db_path().exists():
+        return {"ok": False, "error": "no DB — see paths section"}
+    con = G.connect()
+    try:
+        return G.ensure_builtin_skills(con)
+    finally:
+        con.close()
+
+
 def check_hooks():
     hooks_json = Path(__file__).resolve().parent.parent / "hooks" / "hooks.json"
     if not hooks_json.exists():
@@ -227,6 +240,7 @@ def run() -> dict:
     paths = _section("paths", check_paths)
     config = _section("config", check_config)
     content = _section("content", check_content)
+    skills = _section("skills", check_skills)
     hooks = _section("hooks", check_hooks)
     mirror = _section("mirror", check_mirror)
 
@@ -238,6 +252,9 @@ def run() -> dict:
         problems.append("one or more hooks reference a missing script")
     if config.get("ok") is False:
         problems.append(config.get("error") or "config unreadable")
+    if skills.get("missing"):
+        problems.append(f"{len(skills['missing'])} built-in skill(s) could not be ingested: "
+                        + (skills.get("error") or ", ".join(skills["missing"][:5])))
     healthy = not problems
 
     return {
@@ -247,6 +264,7 @@ def run() -> dict:
         "paths": paths,
         "config": config,
         "content": content,
+        "skills": skills,
         "hooks": hooks,
         "mirror": mirror,
     }
@@ -315,6 +333,21 @@ def render_human(report: dict) -> str:
                       + (f"  ({ct.get('last_capture_age_days')}d ago)" if lc else ""))
         if ct.get("warning"):
             lines.append(f"  {warn} {ct['warning']}")
+
+    sk = report.get("skills") or {}
+    lines.append("")
+    lines.append("Built-in skills:")
+    if sk.get("missing"):
+        lines.append(f"  {bad} missing: {', '.join(sk['missing'])}"
+                     + (f"  ({sk['error']})" if sk.get("error") else ""))
+    elif sk.get("ok") is False:
+        lines.append(f"  {bad} {sk.get('error')}")
+    elif sk.get("skipped"):
+        lines.append(f"  - not checked ({sk['skipped']})")
+    elif sk.get("ingested"):
+        lines.append(f"  {ok} {sk['ingested']} missing, ingested now")
+    else:
+        lines.append(f"  {ok} all in the brain")
 
     h = report["hooks"]
     lines.append("")

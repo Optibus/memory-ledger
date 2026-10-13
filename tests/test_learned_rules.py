@@ -18,6 +18,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BRAIN = tempfile.mkdtemp(prefix="second-brain-learned-")
+# a brain from scratch is seeded with the built-in skills; these checks count nodes in an empty one
+os.environ["SECOND_BRAIN_NO_SKILL_SEED"] = "1"
 ENV = {**os.environ, "SECOND_BRAIN_HOME": BRAIN, "SECOND_BRAIN_NO_AUTOSYNC": "1"}
 for _k in list(ENV):
     if _k.startswith(("MEMORY_LEDGER_NO_", "SECOND_BRAIN_NO_LEARNED")):

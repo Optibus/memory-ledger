@@ -333,6 +333,9 @@ It reports, in plain language:
 - **Content** — total node count, a breakdown by type, open-loop count, and
   how stale the newest capture is (a warning if nothing's landed in the last
   2 days, or ever).
+- **Built-in skills** — whether every skill in the plugin's `skills/` has its
+  node in the brain. Any that are missing are ingested on the spot (the same
+  idempotent pass as `graph.py ingest-skills`), and the report says how many.
 - **Hook registration** — every hook in `hooks.json` per event, with its
   matchers, and whether the script file it points at actually exists.
 - **Mirror status** — whether a neo4j mirror is configured and how many
@@ -341,7 +344,7 @@ It reports, in plain language:
 
 Add `--json` for machine-readable output. It exits non-zero only when
 something is **actionably** wrong (a missing DB, a hook pointing at a missing
-script, unreadable config) — being disabled is a choice, not a fault, and
+script, unreadable config, a built-in skill that could not be ingested) — being disabled is a choice, not a fault, and
 never affects the exit code by itself.
 
 Complementary, Claude-Code-side checks:

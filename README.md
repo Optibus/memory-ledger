@@ -118,7 +118,9 @@ the DB, synced everywhere; not an isolated file). Next time a matching situation
 appears, it recalls the skill (ranked by relevance, reinforcement as a booster),
 follows it, and `reinforce`s it so proven skills surface first. Learnings are
 global, so a skill learned in one project applies in another. (`ingest-skills`
-pulls any existing markdown skills into the DB as nodes.)
+pulls any existing markdown skills into the DB as nodes. The built-in skills are
+already there: a brain made from scratch is seeded with them, and `init` and
+`doctor` put back any that are missing.)
 
 ## Designed around four needs
 
