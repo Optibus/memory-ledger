@@ -28,6 +28,26 @@ Nothing else. The engine, the CLI and the hooks have zero third-party
 dependencies. The optional web UI's server does (FastAPI, uvicorn), and installs
 them itself into its own venv the first time you start it — see below.
 
+### One command to set a machine up: `scripts/setup.py`
+
+From a clone, on macOS, Linux or Windows:
+
+```bash
+./scripts/setup.sh                                          # macOS, Linux
+powershell -ExecutionPolicy Bypass -File scripts\setup.ps1   # Windows
+python3 scripts/setup.py --voice                            # also dictation (and --piper for TTS)
+```
+
+The wrappers only find a Python 3.10+ (`py -3` first on Windows) and run
+`setup.py`, which: builds the server's venv, runs `npm ci` and `npm run build`
+for the UI (reported and skipped when npm is missing), detects the TTS engine
+for this OS and ffmpeg, with `--voice` builds a separate voice venv with
+faster-whisper and downloads the STT model (`--stt-model`, default `medium`),
+runs `graph.py init` (the brain, with its built-in skills), and ends with
+`doctor`, whose verdict is the exit code. It is idempotent, so run it again
+after an upgrade. `--json` prints one report; `--skip-venv` and `--skip-ui`
+leave those steps out. Nothing here is required: the plugin works without it.
+
 ## 1. Install the plugin (global)
 
 The plugin ships its own marketplace manifest (`.claude-plugin/marketplace.json`),

@@ -52,6 +52,28 @@ def powershell() -> str | None:
     return shutil.which("pwsh") or shutil.which("powershell")
 
 
+def cache_dir() -> Path:
+    """Where rebuildable things go: $XDG_CACHE_HOME, else %LOCALAPPDATA% on
+    Windows, else ~/.cache."""
+    xdg = os.environ.get("XDG_CACHE_HOME", "").strip()
+    if xdg:
+        return Path(xdg).expanduser()
+    if WINDOWS and os.environ.get("LOCALAPPDATA"):
+        return Path(os.environ["LOCALAPPDATA"])
+    return Path.home() / ".cache"
+
+
+def venv_python(d: Path) -> Path:
+    """The interpreter inside the venv at `d`."""
+    return d / ("Scripts/python.exe" if WINDOWS else "bin/python")
+
+
+def voice_venv() -> Path:
+    """The venv `scripts/setup.py --voice` builds for faster-whisper (and Piper),
+    kept out of the server's: the STT worker and Piper run under it."""
+    return cache_dir() / "memory-ledger" / "voice"
+
+
 def python3() -> list[str]:
     """argv prefix that runs a Python 3: this interpreter, else `py -3` on
     Windows, else python3 on PATH."""

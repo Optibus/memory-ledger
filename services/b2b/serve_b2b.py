@@ -39,7 +39,9 @@ def venv_dir() -> Path:
     override = os.environ.get("B2B_VENV", "").strip()
     if override:
         return Path(override).expanduser()
-    cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    cache = Path(os.environ.get("XDG_CACHE_HOME")
+                 or (os.name == "nt" and os.environ.get("LOCALAPPDATA"))
+                 or Path.home() / ".cache")
     return cache / "memory-ledger" / f"b2b-{_venv_key()}"
 
 

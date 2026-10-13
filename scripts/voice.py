@@ -282,8 +282,12 @@ def _worker_script() -> Path:
 
 def _python_candidates() -> list[tuple[str, ...]]:
     """Pythons to try, as argv prefixes: this one first, then `py -3` (the
-    Windows launcher), then python3/python on PATH, then the usual POSIX places."""
+    Windows launcher), then python3/python on PATH, then the usual POSIX places.
+    The voice venv `scripts/setup.py --voice` builds comes right after this one."""
     cands: list[tuple[str, ...]] = [(sys.executable,)] if sys.executable else []
+    venv = _platform.venv_python(_platform.voice_venv())
+    if venv.exists():
+        cands.append((str(venv),))
     if _platform.WINDOWS and shutil.which("py"):
         cands.append((shutil.which("py") or "py", "-3"))
     for name in ("python3", "python"):
@@ -443,11 +447,12 @@ class PiperEngine(TTSEngine):
     LOCALES = {"pt": "pt_BR", "en": "en_US", "es": "es_ES", "it": "it_IT"}
 
     def _dir(self) -> Path:
-        return Path(os.environ.get("BRAIN_PIPER_VOICES") or Path.home() / ".cache" / "brain-piper")
+        return Path(os.environ.get("BRAIN_PIPER_VOICES") or _platform.cache_dir() / "brain-piper")
 
     def _python(self) -> str:
         want = os.environ.get("BRAIN_PIPER_PYTHON", "").strip()
-        for py in dict.fromkeys(c for c in (want, sys.executable) if c):
+        venv = _platform.venv_python(_platform.voice_venv())
+        for py in dict.fromkeys(c for c in (want, sys.executable, str(venv) if venv.exists() else "") if c):
             try:
                 if subprocess.run([py, "-c", "import piper"], capture_output=True, timeout=60).returncode == 0:
                     return py

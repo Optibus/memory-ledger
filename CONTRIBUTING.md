@@ -105,6 +105,7 @@ claude --plugin-dir ~/dev/memory-ledger
 | `scripts/brain_sync.py` | full push into neo4j, `--verify` against it, `--pull` restore from it |
 | `hooks/` | the always-on hooks + `_capture.py` shared helpers; `usage_ingest.py` only forks a throttled, detached `scripts/usage_ingest.py run` |
 | `hooks/hooks.json` | which hook binds to which Claude Code event |
+| `scripts/setup.py` | one-command machine setup on any OS (venv, UI build, voice, brain, doctor); `setup.sh` and `setup.ps1` wrap it |
 | `scripts/serve.py` | the one command: builds the server's venv, the UI, and runs the app |
 | `scripts/brain_api/` | the FastAPI app — reads, writes, request models, the SPA fallback, and the trigger watchers (`trigger_runtime.py`, the one user of `slack_sdk`) |
 | `scripts/requirements-server.txt` | the server's pinned dependencies, and only the server's |

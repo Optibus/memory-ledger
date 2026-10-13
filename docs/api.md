@@ -563,7 +563,7 @@ which is what enqueues the neo4j sync. See [the neo4j backend](neo4j.md).
 no install step. So it owns its environment:
 
 - The venv lives at `~/.cache/memory-ledger/server-<hash>` (or under
-  `$XDG_CACHE_HOME`). The hash covers `scripts/requirements-server.txt` and the
+  `$XDG_CACHE_HOME`; on Windows, under `%LOCALAPPDATA%`). The hash covers `scripts/requirements-server.txt` and the
   Python version, since a venv is tied to both.
 - The first start creates it with `python -m venv` and `pip install -r`, which
   **needs the network once**. It is built in a temp directory and renamed into

@@ -46,6 +46,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
+import _platform  # noqa: E402
 
 # The SPA, and where it is built from. `dist/` is a build artifact and is NOT
 # in git; `ensure_ui` builds it when it is missing and refreshes it when the
@@ -248,12 +249,11 @@ def venv_dir() -> Path:
     override = os.environ.get("MEMORY_LEDGER_VENV", "").strip()
     if override:
         return Path(override).expanduser()
-    cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
-    return cache / "memory-ledger" / f"server-{_venv_key()}"
+    return _platform.cache_dir() / "memory-ledger" / f"server-{_venv_key()}"
 
 
 def _venv_python(d: Path) -> Path:
-    return d / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    return _platform.venv_python(d)
 
 
 def _in(d: Path) -> bool:
