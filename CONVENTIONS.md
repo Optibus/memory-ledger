@@ -303,6 +303,23 @@ still awaiting action, and it stays open until closed.
   oldest/highest-priority first, and flag anything the person is blocking others on.
 - **Track new loops** as they appear (a PR to move, an email/message to answer)
   as `pr`/`email`/`message` nodes with a `props.state`, so they can't slip.
+- **An external task board may own a task.** Another app (a kanban, a desk, a
+  team tracker) claims a task with `track --id <task> --system <name> --ref <its
+  id> [--url]`, which sets `props.tracked_by = {system, ref, url, since}`. From
+  then on that board decides open or closed and reports back with `complete`
+  or `update-node --status cancelled`; a due date it sets comes back with
+  `update-node --due`. The brain keeps capturing and remembering the task but
+  stops nagging: `open-loops` leaves tracked tasks out of its results and
+  counts them as `tracked: {<name>: n}`, and the SessionStart brief says
+  "Tracked elsewhere: n in <name>" in one line instead of listing them. The
+  date views (`brain_query.py`) keep them, so a date the board wrote back still
+  shows on the agenda. The board pulls what is still unclaimed with
+  `list --type task --status open --untracked` and lists what it holds with
+  `--tracked-by <name>`; `untrack --id` releases a task. This is the whole
+  contract: no board is named here, and any app that speaks these commands
+  (`track`, `untrack`, `complete`, `update-node`, `list`) is a board. `open-loops`
+  `count`, `by_kind` and `by_priority` leave tracked loops out unless
+  `--include-tracked`; the `tracked` map counts them per board.
 
 ## 2d. Storage: one local file, an optional mirror, and sections
 

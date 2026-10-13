@@ -225,10 +225,10 @@ _TASK_CUES = re.compile(
     \b(
        remind \s+ me
      | don'?t \s+ forget
-     | i \s+ (?:need|have|want) \s+ to
+     | i \s+ (?:need|have) \s+ to (?! \s+ (?:say|admit|confess|be\s+honest)\b)
      | need \s+ to \s+ (?:remember|do|send|finish|ping|follow)
      | follow \s* up
-     | make \s+ sure \s+ (?:to|that|i)
+     | make \s+ sure \s+ (?:to|i)
      | todo
      | to-do
      | task \s*:
@@ -246,6 +246,8 @@ def detect_tasks(text: str) -> list[str]:
     for raw in re.split(r"(?<=[.!?\n])\s+", text or ""):
         s = raw.strip(" -*•\t")
         if not s or not _TASK_CUES.search(s):
+            continue
+        if s.rstrip("\"')] ").endswith("?"):          # "what do I need to check?" asks; it does not commit
             continue
         title = title_of(s, 90)
         key = title.lower()
