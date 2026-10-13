@@ -554,6 +554,18 @@ def event_of(defn: dict, ev: dict, run_id: str) -> dict:
                      "at": trigger.now_iso()}}
 
 
+def run_now(tid: str, **kw) -> dict:
+    """A run by hand (the CLI, the page): under the trigger's lock, so it never
+    overlaps a scheduled run of the same trigger."""
+    lock = _lock_for(tid)
+    if not lock.acquire(blocking=False):
+        return {"ok": False, "id": tid, "status": "busy", "error": f"{tid} is running already"}
+    try:
+        return execute(tid, **kw)
+    finally:
+        lock.release()
+
+
 def execute(tid: str, *, cfg: dict | None = None, dry_run: bool = False, dispatch=None,
             scheduled: bool = False, con=None, sleep=time.sleep) -> dict:
     """One run of one trigger, end to end. `scheduled` skips a trigger that is
@@ -643,3 +655,41 @@ def summary(tid: str, con=None) -> dict:
     return {**row, "ok": True, "name": str(defn.get("name") or tid),
             "enabled": defn.get("enabled") is True, "interval": defn.get("interval"),
             "blocks": len(defn.get("blocks") or [])}
+
+
+# ---------------------------------------------------------------- schedule
+_locks: dict = {}
+_locks_guard = threading.Lock()
+
+
+def _lock_for(tid: str) -> threading.Lock:
+    with _locks_guard:
+        return _locks.setdefault(tid, threading.Lock())
+
+
+def run_due(cfg: dict, dispatch, con=None) -> list:
+    """One scheduler pass: every enabled trigger that is due, one after the
+    other, each file read afresh so an edit counts without a restart. A
+    trigger that does not load is noted in its state and the rest still run;
+    one already running (a manual run from the page) is left to finish."""
+    con = con if con is not None else db()
+    done = []
+    for tid in list_ids():
+        defn, err = load(tid)
+        if err:
+            _set_state(con, tid, last_status="invalid", last_error=err[:500])
+            continue
+        if defn.get("enabled") is not True:
+            continue
+        lock = _lock_for(tid)
+        if not lock.acquire(blocking=False):
+            done.append({"ok": True, "id": tid, "status": "busy"})
+            continue
+        try:
+            done.append(execute(tid, cfg=cfg, dispatch=dispatch, scheduled=True, con=con))
+        except Exception as e:     # one trigger's crash must not stop the others
+            _set_state(con, tid, last_status="error", last_error=f"crashed: {e}"[:500])
+            done.append({"ok": False, "id": tid, "status": "error", "error": str(e)})
+        finally:
+            lock.release()
+    return [r for r in done if r.get("status") != "not_due"]

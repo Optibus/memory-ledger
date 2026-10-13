@@ -4103,7 +4103,7 @@ def custom_cli(action: str, tid: str, limit: int = 20) -> dict:
             return {"ok": False, "error": f"custom triggers are not enabled in {config_path()} "
                                           "(enabled and custom.enabled); dry-run works anyway"}
         ran = []
-        res = ct.execute(tid, cfg=cfg, dispatch=lambda rid: ran.append(run_request(rid, cfg)))
+        res = ct.run_now(tid, cfg=cfg, dispatch=lambda rid: ran.append(run_request(rid, cfg)))
         res["ran"] = ran
         return res
     if action in ("enable", "disable"):

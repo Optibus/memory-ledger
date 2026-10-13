@@ -49,6 +49,7 @@ owe, to whom, by when. The person just said:
    - "message/tell X" → `send-slack`    · "ask X to..." → `delegate`
    - Jira / tickets → `read-jira`       · "look up / google" → `web-search`
    - "learn this / next time do X" → `learn-skill`  · "export my memory" → `export-memory`
+   - "watch this API / alert me when / poll this" → `custom-trigger-builder`
 5. **Always externalize.** Whatever the intent, persist anything worth keeping
    to the graph (via `remember`), and **complete** finished tasks (archive, never
    delete). If you notice a repeatable procedure, `learn-skill` it.

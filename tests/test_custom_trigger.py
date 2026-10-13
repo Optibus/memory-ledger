@@ -464,6 +464,66 @@ def test_cli():
     ck("real YAML loads", not err and defn["blocks"][0]["event"]["id"] == "fixed", err)
 
 
+# ---------------------------------------------------------------- phase 5
+def test_scheduler():
+    print("scheduler")
+    from datetime import timedelta
+    con = ct.db()
+    for t in ct.list_ids():
+        (ct.triggers_dir() / f"{t}.yaml").unlink()
+    Site.status = 503
+    due = json.loads(json.dumps(SITE_HEALTH)) | {"id": "sched", "enabled": True}
+    due["blocks"][2]["event"]["id"] = "sched:{{now}}"
+    write(due)
+    write(due | {"id": "sched-off", "enabled": False})
+    (ct.triggers_dir() / "bad.yaml").write_text("{not json, not yaml: [", encoding="utf-8")
+    ran = []
+    res = ct.run_due(CFG, ran.append, con=con)
+    ck("an enabled trigger that never ran is due and runs", [r["id"] for r in res] == ["sched"]
+       and len(ran) == 1, res)
+    ck("a disabled one does not run", not ct.get_state(con, "sched-off"))
+    ck("a file that does not parse is noted, and the loop goes on",
+       ct.get_state(con, "bad")["last_status"] == "invalid")
+    res = ct.run_due(CFG, ran.append, con=con)
+    ck("not due again inside its interval", res == [] and len(ran) == 1, res)
+    long_ago = (datetime.now(timezone.utc) - timedelta(minutes=6)).isoformat(timespec="seconds")
+    con.execute("UPDATE custom_trigger_state SET last_run_at=? WHERE trigger_id='sched'",
+                (long_ago,))
+    con.commit()
+    ck("due again once the interval has passed",
+       ct.is_due(con, ct.load("sched")[0]))
+    lock = ct._lock_for("sched")
+    lock.acquire()
+    try:
+        res = ct.run_due(CFG, ran.append, con=con)
+        busy = ct.run_now("sched", cfg=CFG, con=con)
+    finally:
+        lock.release()
+    ck("a trigger already running is not started twice",
+       [r["status"] for r in res] == ["busy"] and busy["status"] == "busy", (res, busy))
+    ck("and it runs on the next pass", [r["status"] for r in ct.run_due(CFG, ran.append, con=con)]
+       == ["ok"])
+
+    # The server's loop: one pass, then stop.
+    sys.path.insert(0, str(ROOT / "scripts" / "brain_api"))
+    import threading as th
+
+    import trigger_runtime as rt
+    stop = th.Event()
+    calls = []
+    real = ct.run_due
+    ct.run_due = lambda cfg, dispatch, con=None: (calls.append(1), stop.set(),
+                                                  [{"id": "x", "status": "error",
+                                                    "error": "boom"}])[2]
+    try:
+        rt._custom_loop(CFG, stop, tick=0.01)
+    finally:
+        ct.run_due = real
+    st = rt.status()["custom"]
+    ck("the runtime loop runs a pass and notes its errors", calls == [1]
+       and st["state"] == "scheduling" and "x: boom" in st["last_error"], st)
+
+
 if __name__ == "__main__":
     graph.connect().close()
     test_validate()
@@ -471,6 +531,7 @@ if __name__ == "__main__":
     test_isolation()
     test_execute()
     test_cli()
+    test_scheduler()
     SERVER.shutdown()
     print(f"\n{'FAILED: ' + ', '.join(FAILS) if FAILS else 'all passed'}")
     sys.exit(1 if FAILS else 0)

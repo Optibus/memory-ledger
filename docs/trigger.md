@@ -506,6 +506,22 @@ python3 scripts/trigger.py custom enable site-health   # rewrites only `enabled:
 python3 scripts/trigger.py custom runs site-health --limit 5
 ```
 
+**Scheduling.** With `enabled` and `custom.enabled` on, the server runs a
+scheduler (`_custom_loop` in `brain_api/trigger_runtime.py`) that wakes every
+15 seconds and runs each trigger whose file says `enabled: true` and whose
+`interval` has passed since its last run, one after the other. The files are
+read on every pass, so an edit or an `enable` counts without a restart; a file
+that does not parse is marked `invalid` in its state and skipped, and the
+others still run. A trigger never runs twice at once in the server: a run by
+hand from the page waits its turn (`busy`). A `custom run` from the CLI is
+another process, and if it overlaps a scheduled run the dedupe keeps the
+events to one task each. The scheduler's state is `runtime.custom` in
+`GET /api/trigger`.
+
+The **`custom-trigger-builder`** skill writes a trigger with you: it shows the
+YAML with one sentence per block, validates it, runs it dry, and saves it
+switched off.
+
 `run` needs `enabled` and `custom.enabled` in `trigger.json`; `dry-run` and
 `validate` work with them off. YAML needs PyYAML (in the server's venv,
 `scripts/requirements-server.txt`); on a Python without it, a JSON-shaped
@@ -1029,7 +1045,6 @@ Then:
 - DMs to the bot (`message.im`) — today only `app_mention` in channels.
 - Catch-up for the Slack channel events and your DMs: they are live only.
 - Allowed and blocked lists for Jira and GitHub; only Slack has them.
-- Custom triggers run from the CLI only: the server does not schedule them yet,
-  and Settings has no editor for them.
+- Settings has no editor for custom triggers yet: the file and the CLI only.
 - Custom triggers: webhooks, branching, loops, parallel blocks, languages other
   than Python in a script block, and switching a failing trigger off by itself.
