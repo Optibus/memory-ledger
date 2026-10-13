@@ -408,6 +408,111 @@ What an event or a command does:
   exit code and argv), and a switched-on one that could not run (no URL, a
   script that is gone) is refused on save and reported by **Check**.
 
+## Custom triggers
+
+A trigger for a service the brain has no watcher for: a poll you write as a
+short list of blocks. One file per trigger, `<home>/triggers/<id>.yaml`, the
+file name being the `id`. Every event it emits becomes a task like any other,
+in the same log, with the same dedupe.
+
+```yaml
+id: site-health
+name: Site health
+enabled: false          # trigger.py custom enable site-health
+mode: poll              # the only mode in v1
+interval: 5m            # 30s, 5m, 1h, 1d; at least 30s
+do: "Tell me on Slack that {event_title}, with the payload."
+config:
+  url: https://example.com/health
+secrets: [STATUS_TOKEN]  # names only; the values are in trigger.json
+limits: {timeout_s: 30, memory_mb: 256, network: true}
+retry: {attempts: 2, backoff_s: 5}
+blocks:
+  - id: check
+    type: http_request
+    url: "{{config.url}}"
+    headers: {Authorization: "Bearer {{secrets.STATUS_TOKEN}}"}
+    on_error: continue          # a failed call leaves prev.status empty
+  - id: down
+    type: condition
+    if: "prev.status == None or prev.status >= 400"
+    then: continue
+    else: stop
+  - id: alert
+    type: emit
+    event:
+      id: "site-health:{{prev.status}}"   # stable: the same outage is one task
+      title: "site down: {{prev.status}}"
+      payload: {status: "{{prev.status}}"}
+```
+
+| Block | Does | `prev` after it |
+|---|---|---|
+| `http_request` | `method` (GET), `url`, `headers`, `body` (a mapping is sent as JSON), `timeout_s` (≤ 30). `on_error: continue` turns a failed call into `prev.status: None` instead of an error | `{status, ok, body, json}` |
+| `condition` | `if`: comparisons, `and`/`or`/`not`, `in`, literals and paths. `then`/`else`: `continue` or `stop` (default continue / stop) | unchanged |
+| `transform` | `pick` (keep these fields), `drop`, then `set` (field: value) | the new mapping |
+| `script` | a Python file in `<home>/scripts`, run in the same isolated process | what it sets as `result` |
+| `emit` | `event: {id, title, payload, permalink}`; with `each: "{{prev.items}}"`, one event per item, as `item`; `checkpoint:` moves the cursor | unchanged |
+| `stop` | ends the run | |
+
+- **References** are `{{path}}`: `prev`, `config`, `checkpoint`, `now`,
+  `secrets.NAME` (a declared one) and, inside an `emit` with `each`, `item`.
+  `a.b[0].c` walks; a missing field is empty, never an error. A string that is
+  one reference and nothing else keeps the value's type. There is no `eval`:
+  a condition is parsed with `ast` against a short list of allowed nodes, so a
+  call, a lambda or a `__dunder__` is refused before anything runs.
+- **A script block** sees `prev`, `config`, `checkpoint`, `now` and `secrets`
+  as globals. It answers by setting `result`, may rebind `checkpoint`, and may
+  set `stop = True`. What it prints goes to the run's stderr.
+- **The checkpoint** is one opaque string per trigger (`custom:<id>` in
+  `trigger_checkpoint`), set by an `emit`'s `checkpoint:` or a script. It is
+  empty on the first run, and the trigger decides what that means: process the
+  past, or start from now. It moves only **after** the run's tasks are logged,
+  so a crash in between re-finds the same events, and `(source, event_id)`
+  makes the second pass a no-op.
+- **The task** is a request on `custom:<id>`, `reason: subscribed: custom`: you
+  chose it by enabling the trigger, so no gate is asked, and it opens nothing
+  for anyone. Its run command is the trigger's `do`, with four more variables:
+  `{trigger_id}`, `{run_id}`, `{event_title}` and `{event_payload}` (JSON). The
+  session is shown the payload fenced as data, never as instructions.
+
+**Isolation.** The blocks run in a child, `python -I -X utf8
+scripts/_trigger_block_runner.py`, with an empty environment (a `PATH`, and on
+Windows what Python needs to start): nothing of the server's environment, no
+token, reaches it. The context goes in on stdin, one JSON answer comes out on
+stdout.
+
+| Limit | Default | Held by |
+|---|---|---|
+| `timeout_s` 1–600 | 60 | the whole process tree is killed; the run is `error` |
+| output | 1 MB | more is `error` |
+| `memory_mb` 32–2048 | 256 | `RLIMIT_AS` on Linux. **Not enforced on Windows or macOS** (best effort; `validate` says so) |
+| `network: false` | true | refuses `http_request`. **A script block can still open a socket**: Python has no sandbox for that; `validate` says so |
+| events per run | 20 | `custom.max_events_per_run`; more is `error`, and nothing is created |
+| `retry.attempts` 1–5 | 1 | each attempt is in the run's log |
+
+**Secrets** live in `trigger.json`, under `custom.secrets` (`{"NAME":
+"value"}`), mode 600 like the other tokens. The trigger file names them; the
+child gets them on stdin only; and every value is replaced with `***` in
+whatever comes back, the run log, the tasks and the CLI's output included.
+
+```bash
+python3 scripts/trigger.py custom list                 # every trigger, with its last run
+python3 scripts/trigger.py custom show site-health     # the file, its state and checkpoint
+python3 scripts/trigger.py custom validate site-health # exit 1 when it has errors
+python3 scripts/trigger.py custom dry-run site-health  # runs the blocks; writes nothing
+python3 scripts/trigger.py custom run site-health      # one real run, tasks run here
+python3 scripts/trigger.py custom enable site-health   # rewrites only `enabled:`
+python3 scripts/trigger.py custom runs site-health --limit 5
+```
+
+`run` needs `enabled` and `custom.enabled` in `trigger.json`; `dry-run` and
+`validate` work with them off. YAML needs PyYAML (in the server's venv,
+`scripts/requirements-server.txt`); on a Python without it, a JSON-shaped
+trigger still loads, since JSON is YAML. Each run is a row in
+`custom_trigger_run` (status, attempts, events found, tasks created, the
+per-block log); `custom_trigger_state` keeps the last one per trigger.
+
 ## Loops
 
 The brain answers as you, and on Jira the mention *is* your own account. So its
@@ -900,6 +1005,16 @@ Then:
   values are escaped where they land in a request. What the script does with a
   stranger's argument is the script's business, so treat `{trigger_content}`
   and `{arg_N}` as untrusted input in it.
+- **A custom trigger fetches text from anywhere.** What it finds reaches the
+  session as a payload fenced as data, and the task it starts is never the
+  owner's (`requester_is_owner: false`). An `http_request` may call any URL,
+  local and private addresses included: only you write the file, so that is
+  documented rather than blocked. Each event is a session, which is why the
+  interval has a floor and a run a ceiling on events.
+- **A custom trigger's script is your code, run unattended.** It runs only from
+  `<home>/scripts`, in a separate process with an empty environment, a timeout
+  and an output cap; on Linux a memory cap too. It is not a sandbox: it can
+  read your files and open a socket.
 - **A refusal costs nothing.** With `refuse_without_model` on, someone the brain
   turns away never starts a model, however often they try.
 
@@ -914,3 +1029,7 @@ Then:
 - DMs to the bot (`message.im`) — today only `app_mention` in channels.
 - Catch-up for the Slack channel events and your DMs: they are live only.
 - Allowed and blocked lists for Jira and GitHub; only Slack has them.
+- Custom triggers run from the CLI only: the server does not schedule them yet,
+  and Settings has no editor for them.
+- Custom triggers: webhooks, branching, loops, parallel blocks, languages other
+  than Python in a script block, and switching a failing trigger off by itself.

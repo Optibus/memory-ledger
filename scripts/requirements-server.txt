@@ -15,3 +15,6 @@ cryptography==50.0.2
 # Dictation itself runs in a child process under a Python with faster-whisper
 # (scripts/stt_worker.py), so none of that is installed here.
 websockets==17.2
+# Custom triggers are YAML files (scripts/custom_trigger.py); safe_load only.
+# Without it a JSON-shaped trigger still parses, so the CLI works on a bare Python.
+PyYAML==6.0.3
