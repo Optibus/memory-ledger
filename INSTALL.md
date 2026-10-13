@@ -440,6 +440,16 @@ restored brain without a restart. With a neo4j master configured, the next sync
 brings down what was written there after the backup — right for a lost machine,
 worth knowing before a rollback.
 
+**Importing a node file into a ledger: `scripts/import_nodes.py FILE`.** Brings the
+nodes and edges of a handoff export into another brain. It is a dry-run unless
+`--apply`, which first backs up `graph.db` (restorable with `restore.py`). Nodes
+keep their original id and dates, so a second run adds nothing; nodes already
+present are left alone unless `--update` (title, body, status, due, props — never
+the realm). Imported nodes land in the `handoff` realm (`--realm` to change it) and
+carry `imported_from` and `imported_at`. Edges come in only when both ends exist.
+Nothing is sent to neo4j; the changes wait for the next sync. A file in another
+format is refused.
+
 **`--include` for anything company-specific.** The plugin is agnostic — it holds no
 company's rules, runbooks or names. Material like that belongs outside the repo (in
 your brain home, which is never committed) and rides along at bundle time:
