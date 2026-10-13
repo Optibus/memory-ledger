@@ -65,7 +65,8 @@ FAKE_CLAUDE.write_text("""#!/usr/bin/env python3
 import json, os, sys
 args = sys.argv[1:]
 with open(os.path.join(os.environ["SECOND_BRAIN_HOME"], "claude-calls.jsonl"), "a") as f:
-    f.write(json.dumps({"args": args, "src": os.environ.get("MEMORY_LEDGER_TRIGGER_SOURCE")})
+    f.write(json.dumps({"args": args, "prompt": sys.stdin.read(),
+                        "src": os.environ.get("MEMORY_LEDGER_TRIGGER_SOURCE")})
             + "\\n")
 print(json.dumps({"result": "noted it", "total_cost_usd": 0.01}))
 """, encoding="utf-8")
@@ -410,7 +411,7 @@ def test_brain(base: str, base2: str) -> None:
     run = trigger.run_request(req["id"])
     ck("the session runs", run.get("ok") and run["status"] == "done", str(run))
     calls = [json.loads(x) for x in (Path(HOME) / "claude-calls.jsonl").read_text(encoding="utf-8").splitlines()]
-    prompt = calls[-1]["args"][calls[-1]["args"].index("-p") + 1]
+    prompt = calls[-1]["prompt"]
     ck("it is told the source and that it is not a conversation to post in",
        "source: b2b" in prompt and "b2b_event: message" in prompt
        and "not a conversation to post in" in prompt and calls[-1]["src"] == "b2b")

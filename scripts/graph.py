@@ -3215,7 +3215,8 @@ SCRIPT_MODES = ("replace", "keep")
 _SCRIPT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,120}")
 _SCRIPT_LANG = {".py": "python", ".sh": "shell", ".bash": "shell", ".zsh": "shell",
                 ".js": "javascript", ".mjs": "javascript", ".ts": "typescript",
-                ".rb": "ruby", ".pl": "perl", ".sql": "sql", ".applescript": "applescript"}
+                ".rb": "ruby", ".pl": "perl", ".sql": "sql", ".applescript": "applescript",
+                ".ps1": "powershell", ".bat": "batch", ".cmd": "batch"}
 
 
 def scripts_dir() -> Path:
@@ -3262,7 +3263,8 @@ def _script_lang(name: str, text: str) -> str:
     first = text.split("\n", 1)[0]
     if first.startswith("#!"):
         for word, lang in (("python", "python"), ("bash", "shell"), ("zsh", "shell"),
-                           ("/sh", "shell"), ("node", "javascript"), ("ruby", "ruby")):
+                           ("/sh", "shell"), ("node", "javascript"), ("ruby", "ruby"),
+                           ("pwsh", "powershell")):
             if word in first:
                 return lang
     return "text"

@@ -32,6 +32,8 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _platform  # noqa: E402
+import _textio  # noqa: E402
 import graph  # noqa: E402
 
 LANGS = ("pt", "en", "es", "it")
@@ -534,10 +536,11 @@ def translate(text: str, target: str, claude_bin: str = "claude") -> tuple[str, 
         return text, False
     if not clean_for_speech(text):
         return text, False
-    r = subprocess.run([claude_bin, "-p", f"<text>\n{text}\n</text>", "--model", TRANSLATE_MODEL,
-                        "--tools", "", "--append-system-prompt",
-                        TRANSLATE_PROMPT.format(lang=LANG_NAME.get(target, target))],
-                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
+    # the text on stdin: a long block would overflow Windows' command line
+    r = _textio.run_text([_platform.resolve_bin(claude_bin), "-p", "--model", TRANSLATE_MODEL,
+                          "--tools", "", "--append-system-prompt",
+                          TRANSLATE_PROMPT.format(lang=LANG_NAME.get(target, target))],
+                         input=f"<text>\n{text}\n</text>", timeout=120)
     out = r.stdout.strip()
     if r.returncode != 0 or not out:
         raise RuntimeError(r.stderr.strip()[:300] or "the translator returned nothing")

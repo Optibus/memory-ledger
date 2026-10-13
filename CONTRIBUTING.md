@@ -93,6 +93,7 @@ claude --plugin-dir ~/dev/memory-ledger
 |---|---|
 | `scripts/graph.py` | the engine — schema, commands, recall, consolidation (~2.6k lines) |
 | `scripts/brain_query.py` | read-only date views, no writes |
+| `scripts/_platform.py` | what differs per OS: `resolve_bin()` (PATH, `claude.cmd`), the interpreter for a script by its kind |
 | `scripts/_textio.py` | UTF-8 text I/O for subprocesses: `run_text()`, `popen_text()`, `child_env()` |
 | `scripts/trigger.py` | the Slack/Jira trigger engine — gate, audit log, checkpoints, Jira poll, `claude -p` dispatch ([triggers](docs/trigger.md)) |
 | `scripts/b2b.py` | B2B, this brain's side: its key pair, the brokers, peers (`b2b_peer`, linked to people), send, and the poll that turns each message into a trigger request ([B2B](docs/b2b.md)) |

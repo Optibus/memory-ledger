@@ -35,6 +35,7 @@ import secrets
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -45,6 +46,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _platform  # noqa: E402
 import _textio  # noqa: E402
 import documents  # noqa: E402
 import graph  # noqa: E402
@@ -797,11 +799,15 @@ def _clip(v: Any, n: int = EVENT_MAX) -> str:
 
 
 # ---------------------------------------------------------------- claude
-def claude_command(c: dict[str, Any], turn: dict[str, Any], model: str, full: bool,
-                   session_id: str) -> list[str]:
-    cmd = [str(c.get("bin") or "claude"), "-p", turn["prompt"], "--output-format",
+def claude_command(c: dict[str, Any], model: str, full: bool, session_id: str,
+                   system_file: Path) -> list[str]:
+    """argv for one turn. Neither the prompt nor the system prompt is in it:
+    the prompt goes in on stdin and the system prompt is read from
+    `system_file`, so neither is capped by the command line (~32 KB on
+    Windows) nor re-read by a shell on the way."""
+    cmd = [_platform.resolve_bin(str(c.get("bin") or "claude")), "-p", "--output-format",
            "stream-json", "--verbose", "--model", model, "--session-id", session_id,
-           "--append-system-prompt", turn["system"]]
+           "--append-system-prompt-file", str(system_file)]
     if full:
         cmd.append("--dangerously-skip-permissions")
     else:
@@ -929,17 +935,36 @@ def run_claude(con: sqlite3.Connection, reply: dict[str, Any], c: dict[str, Any]
     session_id = str(uuid.uuid4())
     log = _Log(con, reply["id"])
     log.model = reply["model"]
-    cmd = claude_command(c, turn, reply["model"], bool(reply["full_tools"]), session_id)
+    fd, name = tempfile.mkstemp(prefix="agent-system-", suffix=".md")
+    system_file = Path(name)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(turn["system"])
+    try:
+        return _run_claude(con, reply, c, turn, log, session_id, system_file)
+    finally:
+        system_file.unlink(missing_ok=True)
+
+
+def _run_claude(con: sqlite3.Connection, reply: dict[str, Any], c: dict[str, Any],
+                turn: dict[str, Any], log: "_Log", session_id: str,
+                system_file: Path) -> dict[str, Any]:
+    cmd = claude_command(c, reply["model"], bool(reply["full_tools"]), session_id, system_file)
     _update(con, reply["id"], session_id=session_id)
     env = _textio.child_env({**os.environ, "MEMORY_LEDGER_AGENT_REPLY": reply["id"],
                              "MEMORY_LEDGER_AGENT_CONV": reply["conv_id"]})
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace", env=env,
+                                stdin=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", env=env,
                                 cwd=str(graph.home_dir()) if graph.home_dir().is_dir()
                                 else str(Path.home()), bufsize=1)
     except OSError as e:
         raise AgentError(f"could not start {cmd[0]}: {e}") from None
+    try:
+        # the prompt, then EOF: `claude -p` reads it all before it answers
+        proc.stdin.write(turn["prompt"])   # type: ignore[union-attr]
+        proc.stdin.close()                 # type: ignore[union-attr]
+    except OSError:
+        pass   # it died before reading; its exit and stderr say why, below
     with _lock:
         _procs[reply["id"]] = proc
     timer = threading.Timer(int(c.get("timeout_s") or 900), proc.kill)

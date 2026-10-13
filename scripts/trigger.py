@@ -51,6 +51,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import _platform  # noqa: E402
 import _textio  # noqa: E402
 import graph  # noqa: E402
 from _switch import _env  # noqa: E402
@@ -1883,9 +1884,18 @@ def session_cwd(cfg: dict) -> str:
     return str(Path.home())
 
 
-def build_command(prompt: str, cfg: dict, session_id: str = "") -> list:
+def claude_bin(cfg: dict) -> str:
+    """The claude to run: the configured one, else `claude` from PATH (on
+    Windows that finds claude.cmd or claude.exe)."""
+    return _platform.resolve_bin(str((cfg.get("claude") or {}).get("bin") or "claude"))
+
+
+def build_command(cfg: dict, session_id: str = "") -> list:
+    """argv for one headless session. The prompt is NOT in it: it goes in on
+    stdin, so its size is not capped by the command line (~32 KB on Windows)
+    and no quote or newline in it is ever re-read by a shell."""
     c = cfg.get("claude") or {}
-    cmd = [str(c.get("bin") or "claude"), "-p", prompt, "--output-format", "json",
+    cmd = [claude_bin(cfg), "-p", "--output-format", "json",
            "--dangerously-skip-permissions"]
     if session_id:
         # Chosen up front, so the transcript can be read while the task runs.
@@ -1918,7 +1928,8 @@ def run_request(request_id: str, cfg: dict | None = None) -> dict:
     c = cfg.get("claude") or {}
     timeout = max(30, int(c.get("timeout_s") or 900))
     session_id = str(uuid.uuid4())
-    cmd = build_command(build_prompt(req, cfg), cfg, session_id)
+    cmd = build_command(cfg, session_id)
+    prompt = build_prompt(req, cfg)
     env = {**os.environ, "MEMORY_LEDGER_REQUEST_ID": request_id,
            "MEMORY_LEDGER_TRIGGER_SOURCE": req["source"]}
     cwd = session_cwd(cfg)
@@ -1931,9 +1942,10 @@ def run_request(request_id: str, cfg: dict | None = None) -> dict:
              req.get("requester_name") or req.get("requester_id") or "someone")
     took = lambda: f"{(datetime.now(timezone.utc) - t0).total_seconds():.0f}s"  # noqa: E731
     try:
-        # stdin closed: with none attached, `claude -p` waits for input, and
-        # in the server it would inherit the server's own terminal.
-        pr = run_watched(con, request_id, cmd, timeout, env=env, cwd=cwd)
+        # The prompt is written to stdin, which is then closed: with none
+        # attached, `claude -p` waits for input, and in the server it would
+        # inherit the server's own terminal.
+        pr = run_watched(con, request_id, cmd, timeout, input=prompt, env=env, cwd=cwd)
     except Cancelled:
         cost = estimate_cost(transcript_path(get_request(con, request_id) or req))
         _set_request(con, request_id, cost_usd=cost, cost_estimated=int(cost is not None))
@@ -2001,18 +2013,22 @@ def _status(con, request_id: str) -> str:
     return r["status"] if r else ""
 
 
-def run_watched(con, request_id: str, argv: list, timeout: int, **kw) -> subprocess.CompletedProcess:
+def run_watched(con, request_id: str, argv: list, timeout: int, input: str | None = None,
+                **kw) -> subprocess.CompletedProcess:
     """`subprocess.run` with the output captured, killed when `timeout` runs
     out (TimeoutExpired) or when the request turns `cancelled` (Cancelled). The
     row is the signal, so a cancel reaches a run in another process too."""
     p = _textio.popen_text(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                           stdin=subprocess.DEVNULL, **kw)
+                           stdin=subprocess.DEVNULL if input is None else subprocess.PIPE, **kw)
     deadline = time.monotonic() + timeout
     while True:
         try:
-            out, err = p.communicate(timeout=CANCEL_POLL_S)
+            # `input` goes with the first call only: communicate() refuses it
+            # once started, and a retry after a timeout carries on where it was
+            out, err = p.communicate(input, timeout=CANCEL_POLL_S)
             return subprocess.CompletedProcess(argv, p.returncode, out, err)
         except subprocess.TimeoutExpired:
+            input = None
             cancelled = _status(con, request_id) == "cancelled"
             if cancelled or time.monotonic() >= deadline:
                 p.kill()
@@ -2075,10 +2091,6 @@ def action_env(req: dict, cfg: dict) -> dict:
     return env
 
 
-# An interpreter per language, for a script that is not executable itself.
-INTERPRETERS = {"python": lambda: sys.executable, "shell": lambda: "/bin/bash"
-                if Path("/bin/bash").exists() else "/bin/sh",
-                "javascript": lambda: "node", "ruby": lambda: "ruby", "perl": lambda: "perl"}
 
 
 def script_argv(name: str) -> tuple:
@@ -2089,12 +2101,15 @@ def script_argv(name: str) -> tuple:
     path = graph.scripts_dir() / name
     if not path.is_file() or path.is_symlink():
         return None, f"no script {name} in {graph.scripts_dir()}"
-    if os.access(path, os.X_OK):
+    # On Windows every file passes X_OK, and only an .exe runs by itself:
+    # there the interpreter always comes from the script's kind.
+    if os.access(path, os.X_OK) and not _platform.WINDOWS:
         return [str(path)], ""
     lang = graph._script_lang(name, path.read_text(encoding="utf-8", errors="replace")[:200])
-    if lang not in INTERPRETERS:
+    prefix = _platform.interpreter(lang, path)
+    if not prefix:
         return None, f"{name} is not executable, and a {lang} file has no interpreter to run it"
-    return [INTERPRETERS[lang](), str(path)], ""
+    return [*prefix, str(path)], ""
 
 
 def run_script(con, req: dict, spec: dict, cfg: dict) -> dict:
@@ -2217,13 +2232,13 @@ def _notice_env(req: dict) -> dict:
                               "MEMORY_LEDGER_TRIGGER_NOTICE": "1", "MEMORY_LEDGER_OFF": "1"})
 
 
-def _claude_json(cmd: list, req: dict, cfg: dict, timeout: int) -> tuple:
-    """(ok, result text, error) for one headless call."""
+def _claude_json(cmd: list, prompt: str, req: dict, cfg: dict, timeout: int) -> tuple:
+    """(ok, result text, error) for one headless call, `prompt` on stdin."""
     c = cfg.get("claude") or {}
     cwd = session_cwd(cfg)
     try:
-        pr = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
-                            env=_notice_env(req), cwd=cwd, stdin=subprocess.DEVNULL)
+        pr = subprocess.run(cmd, input=prompt, capture_output=True, text=True, encoding="utf-8",
+                            errors="replace", timeout=timeout, env=_notice_env(req), cwd=cwd)
     except (OSError, subprocess.TimeoutExpired) as e:
         return False, "", str(e)[:300]
     try:
@@ -2252,11 +2267,10 @@ MESSAGE>>>
 <<<NOTICE
 {body}
 NOTICE>>>"""
-    cmd = [str(c.get("bin") or "claude"), "-p", prompt, "--output-format", "json",
-           "--strict-mcp-config"]
+    cmd = [claude_bin(cfg), "-p", "--output-format", "json", "--strict-mcp-config"]
     if c.get("notice_model"):
         cmd += ["--model", str(c["notice_model"])]
-    ok, text, _ = _claude_json(cmd, req, cfg, 60)
+    ok, text, _ = _claude_json(cmd, prompt, req, cfg, 60)
     if not ok or not text or len(text) > 4 * len(body) + 200:
         return body
     return text
@@ -2358,7 +2372,7 @@ def deliver_notice(request_id: str, body: str, cfg: dict | None = None) -> dict:
             c = cfg.get("claude") or {}
             timeout = min(NOTICE_TIMEOUT_S, max(30, int(c.get("timeout_s") or 900)))
             ok, out, err = _claude_json(
-                build_command(build_notice_prompt(req, body, sig, translate), cfg), req, cfg,
+                build_command(cfg), build_notice_prompt(req, body, sig, translate), req, cfg,
                 timeout)
             if not ok:
                 raise TriggerError(err or "the notice session failed")
@@ -3834,7 +3848,7 @@ CHECK_TARGETS = ("claude", "slack", "jira", "github", "meeting")
 
 def _check_claude(cfg: dict, problems: list, notes: list) -> None:
     c = cfg.get("claude") or {}
-    bin_ = str(c.get("bin") or "claude")
+    bin_ = claude_bin(cfg)
     try:
         v = subprocess.run([bin_, "--version"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
                            stdin=subprocess.DEVNULL)

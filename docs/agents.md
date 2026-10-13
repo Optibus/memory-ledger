@@ -27,6 +27,12 @@ finds earlier turns like any other memory, and so does every other session on
 any machine. The exchanges already carried in step 2 are left out of recall, so
 nothing appears twice.
 
+Claude gets the turn's prompt on stdin and its system prompt from a temporary
+file (`--append-system-prompt-file`, removed when the turn ends), so neither is
+capped by the command line (about 32 KB on Windows) nor re-read by
+`claude.cmd`'s shell. `claude` is the connector's `bin`, else the first one on
+PATH.
+
 The system prompt also names the conversation: its id, its graph node, and how
 to read the whole thread back when the owner refers to something the carried
 exchanges do not cover. Claude runs `python3 scripts/agents.py thread <id>

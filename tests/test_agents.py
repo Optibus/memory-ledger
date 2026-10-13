@@ -47,8 +47,13 @@ def ck(label: str, cond: bool, extra: str = "") -> None:
 
 FAKE_CLAUDE = r'''#!/usr/bin/env python3
 import json, os, sys
-with open(os.path.join(os.environ["SECOND_BRAIN_HOME"], "claude-argv.jsonl"), "a") as f:
-    f.write(json.dumps(sys.argv[1:]) + "\n")
+argv = sys.argv[1:]
+system = ""
+if "--append-system-prompt-file" in argv:
+    with open(argv[argv.index("--append-system-prompt-file") + 1], encoding="utf-8") as f:
+        system = f.read()
+with open(os.path.join(os.environ["SECOND_BRAIN_HOME"], "claude-argv.jsonl"), "a", encoding="utf-8") as f:
+    f.write(json.dumps({"argv": argv, "stdin": sys.stdin.read(), "system": system}) + "\n")
 mode = os.environ.get("FAKE_CLAUDE_MODE", "ok")
 if mode == "crash":
     sys.stderr.write("boom: no credentials\n"); sys.exit(2)
@@ -174,7 +179,8 @@ def main() -> int:
     ck("tokens come from the final usage", (m["tokens_in"], m["tokens_out"]) == (1500, 80))
     ck("the recalled task was in the turn's context",
        any(c.startswith("task_renew-the-parking-permit") for c in m["context"]), str(m["context"]))
-    argv = json.loads((Path(HOME) / "claude-argv.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    call = json.loads((Path(HOME) / "claude-argv.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    argv, prompt = call["argv"], call["stdin"]
     ck("read-only cuts the tool set and denies the rest",
        "--tools=Read,Grep,Glob,WebSearch,WebFetch,Skill,Bash" in argv and "dontAsk" in argv
        and "--dangerously-skip-permissions" not in argv)
@@ -185,14 +191,17 @@ def main() -> int:
        "mcp__atlassian__getJiraIssue" in allowed and "mcp__claude_ai_Slack__slack_read_thread" in allowed
        and not any(w in a for a in allowed for w in ("send", "create", "edit", "update", "delete", "trash",
                                                       "executeWrite", "executeDestructive", "comment")), str(allowed))
-    system = argv[argv.index("--append-system-prompt") + 1]
+    system = call["system"]
+    ck("neither prompt is on the command line: the prompt is on stdin, the system prompt in a file",
+       "--append-system-prompt-file" in argv and "-p" in argv and argv[argv.index("-p") + 1].startswith("--")
+       and not any("What must I renew?" in a for a in argv))
     ck("the system prompt names the conversation and how to read it",
        r["conversation"]["id"] in system and f"{agents.THREAD_CMD} {r['conversation']['id']}" in system, system)
     ck("the system prompt gives the brain's commands, to read and write without asking",
        f"{agents.GRAPH_CMD} match-rules" in system and f"{agents.GRAPH_CMD} add-node" in system
        and "without asking" in system and "READ-ONLY" in system, system)
     ck("the prompt carries the message and the recalled node",
-       "What must I renew?" in argv[1] and "Renew the parking permit" in argv[1])
+       "What must I renew?" in prompt and "Renew the parking permit" in prompt)
     ck("the conversation badge is a question", agents.conv_state(con, r["conversation"]["id"]) == "question")
     node = con.execute("SELECT * FROM nodes WHERE id=?", (m["node_id"],)).fetchone()
     ck("the exchange is written to the graph", node is not None and "Oct 5" in node["body"])
@@ -205,15 +214,17 @@ def main() -> int:
     cid = conv["id"]
     r2 = agents.send(con, "yes", cid, full_tools=True, start=False)
     agents.run_reply(r2["reply_id"])
-    argv = json.loads((Path(HOME) / "claude-argv.jsonl").read_text(encoding="utf-8").splitlines()[-1])
-    ck("one earlier exchange is carried by default", "Earlier in this conversation" in argv[1]
-       and "What must I renew?" in argv[1])
+    call = json.loads((Path(HOME) / "claude-argv.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    argv, prompt = call["argv"], call["stdin"]
+    ck("one earlier exchange is carried by default", "Earlier in this conversation" in prompt
+       and "What must I renew?" in prompt)
     ck("tools on runs without prompts", "--dangerously-skip-permissions" in argv and "--tools=" not in " ".join(argv))
     agents.save_conversation(con, cid, context_turns=0)
     r3 = agents.send(con, "and?", cid, start=False)
     agents.run_reply(r3["reply_id"])
-    argv = json.loads((Path(HOME) / "claude-argv.jsonl").read_text(encoding="utf-8").splitlines()[-1])
-    ck("zero carries none", "Earlier in this conversation" not in argv[1])
+    call = json.loads((Path(HOME) / "claude-argv.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    argv, prompt = call["argv"], call["stdin"]
+    ck("zero carries none", "Earlier in this conversation" not in prompt)
     ck("the window is clamped", agents.save_conversation(con, cid, context_turns=99)["conversation"]["context_turns"] == 10)
 
     print("failures")

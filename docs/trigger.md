@@ -399,8 +399,11 @@ What an event or a command does:
   `BRAIN_ARGS_JSON`, and `MEMORY_LEDGER_REQUEST_ID` plus
   `MEMORY_LEDGER_TRIGGER_SCRIPT` (the path of `trigger.py`) so it can log what it
   did: `python3 "$MEMORY_LEDGER_TRIGGER_SCRIPT" action --kind … --detail …`. A
-  file that is not executable runs through its language's interpreter (python,
-  sh, node, ruby, perl). Exit 0 is `done`; its output is the result.
+  file that is not executable runs through its language's interpreter: this
+  Python for a `.py`, the `bash` on PATH (Git Bash on Windows) for a shell
+  script, `pwsh` or `powershell -File` for a `.ps1`, `cmd /c` for a `.bat` on
+  Windows, and node, ruby or perl from PATH. On Windows every script goes
+  through its interpreter, since only an `.exe` runs by itself there. Exit 0 is `done`; its output is the result.
 - Both log an action on the request (`http` with the status, `script` with the
   exit code and argv), and a switched-on one that could not run (no URL, a
   script that is gone) is refused on save and reported by **Check**.
@@ -589,9 +592,16 @@ GitHub Enterprise: set `api_url` to `https://<host>/api/v3`.
 Each allowed mention runs:
 
 ```bash
-claude -p "<the request>" --output-format json --dangerously-skip-permissions \
-       --session-id <uuid> [--mcp-config=<your config>] [--strict-mcp-config] [extra args]
+claude -p --output-format json --dangerously-skip-permissions \
+       --session-id <uuid> [--mcp-config=<your config>] [--strict-mcp-config] [extra args] \
+       < <the request>
 ```
+
+The prompt goes in on stdin, never on the command line: Windows caps a command
+line at about 32 KB, and a prompt with quotes and newlines passed through
+`claude.cmd` is re-read by `cmd.exe` on the way. `claude` is the configured
+`claude.bin`, else the first `claude` on PATH (`claude.cmd` or `claude.exe` on
+Windows). The same holds for a notice and its translation.
 
 `--dangerously-skip-permissions` is what makes it run end to end with no one at a
 prompt. The prompt carries the three things the session cannot work without:

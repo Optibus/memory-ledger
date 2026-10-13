@@ -49,11 +49,11 @@ import json, os, sys
 args = sys.argv[1:]
 log = os.path.join(os.environ["SECOND_BRAIN_HOME"], "claude-calls.jsonl")
 with open(log, "a") as f:
-    f.write(json.dumps({"args": args, "rid": os.environ.get("MEMORY_LEDGER_REQUEST_ID"),
+    prompt = "" if "--version" in args else sys.stdin.read()
+    f.write(json.dumps({"args": args, "prompt": prompt, "rid": os.environ.get("MEMORY_LEDGER_REQUEST_ID"),
                         "src": os.environ.get("MEMORY_LEDGER_TRIGGER_SOURCE")}) + "\\n")
 if "--version" in args:
     print("9.9.9 (fake)"); sys.exit(0)
-prompt = args[args.index("-p") + 1]
 if prompt.startswith("Rewrite NOTICE"):
     # A translation: mark it, so a test can see it happened and to what.
     notice = prompt.split("<<<NOTICE\\n", 1)[1].split("\\nNOTICE>>>", 1)[0]
@@ -307,7 +307,9 @@ def test_dispatch(cfg):
     ck("extra args ride along", args[-2:] == ["--model", "x"])
     ck("the request id and source reach the session's env",
        last["rid"] == rid and last["src"] == "slack")
-    prompt = args[1]
+    prompt = last["prompt"]
+    ck("the prompt goes in on stdin, not on the command line",
+       "summarise this" not in " ".join(args) and args[1] == "--output-format")
     ck("the prompt carries the text, the permalink and the source",
        "summarise this" in prompt and ev["permalink"] in prompt and "source: slack" in prompt)
     ck("and names the respond skill and the signature",
@@ -324,7 +326,7 @@ def test_dispatch(cfg):
 
     mcfg = json.loads(json.dumps(cfg))
     mcfg["claude"].update(mcp_config="~/mcp.json", strict_mcp_config=True)
-    cmd = trigger.build_command("p", mcfg)
+    cmd = trigger.build_command(mcfg)
     ck("--mcp-config is expanded, and strict when asked",
        f"--mcp-config={Path('~/mcp.json').expanduser()}" in cmd
        and "--strict-mcp-config" in cmd)
@@ -602,7 +604,7 @@ def test_notices(cfg):
     before = len((Path(HOME) / "claude-calls.jsonl").read_text(encoding="utf-8").splitlines())
     res = trigger.deliver_notice(rid, "Not here.", no_user)
     calls = [json.loads(x) for x in (Path(HOME) / "claude-calls.jsonl").read_text(encoding="utf-8").splitlines()]
-    prompt = calls[-1]["args"][1]
+    prompt = calls[-1]["prompt"]
     ck("without a user token: one session through the Slack MCP, no direct post",
        res["ok"] and len(calls) == before + 1 and not calls_to(fake, "chat.postMessage"))
     ck("told to translate, sign untranslated, and DM when it cannot post",
@@ -634,7 +636,7 @@ def test_notices(cfg):
 
 
 def test_session_hygiene(cfg):
-    print("\n== every headless call: stdin closed, a working directory that exists ==")
+    print("\n== every headless call: the prompt on stdin, then closed; a working directory that exists ==")
     install_http()
     seen = []
     orig_popen = trigger.subprocess.Popen
@@ -655,8 +657,8 @@ def test_session_hygiene(cfg):
         trigger.translate_notice("Not here.", "olá", gone, trigger.get_request(trigger.db(), rid))
     finally:
         trigger.subprocess.Popen = orig_popen
-    ck("stdin is closed, or `claude -p` waits on it (and in the server, on its terminal)",
-       len(seen) == 3 and all(k.get("stdin") is trigger.subprocess.DEVNULL for k in seen))
+    ck("stdin is a pipe that carries the prompt and is closed after it, never the server's terminal",
+       len(seen) == 3 and all(k.get("stdin") is trigger.subprocess.PIPE for k in seen))
     ck("a notice or a translation runs with capture off: plumbing is not a conversation",
        seen[1]["env"].get("MEMORY_LEDGER_OFF") == "1"
        and seen[0]["env"].get("MEMORY_LEDGER_OFF") != "1")
