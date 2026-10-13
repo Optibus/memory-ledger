@@ -623,7 +623,7 @@ def cancel(con: sqlite3.Connection, msg_id: str) -> dict[str, Any]:
             _cancelled.add(msg_id)
         proc = _procs.get(msg_id)
     if proc is not None and proc.poll() is None:
-        proc.kill()
+        _platform.kill_tree(proc)
     _update(con, msg_id, status="error", error=CANCELLED, finished_at=now_iso())
     return {"ok": True, "reply_id": msg_id, "was": r["status"]}
 
@@ -956,9 +956,10 @@ def _run_claude(con: sqlite3.Connection, reply: dict[str, Any], c: dict[str, Any
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 stdin=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", env=env,
                                 cwd=str(graph.home_dir()) if graph.home_dir().is_dir()
-                                else str(Path.home()), bufsize=1)
+                                else str(Path.home()), bufsize=1, **_platform.group_kwargs())
     except OSError as e:
         raise AgentError(f"could not start {cmd[0]}: {e}") from None
+    _platform.track(proc)
     try:
         # the prompt, then EOF: `claude -p` reads it all before it answers
         proc.stdin.write(turn["prompt"])   # type: ignore[union-attr]
@@ -967,7 +968,8 @@ def _run_claude(con: sqlite3.Connection, reply: dict[str, Any], c: dict[str, Any
         pass   # it died before reading; its exit and stderr say why, below
     with _lock:
         _procs[reply["id"]] = proc
-    timer = threading.Timer(int(c.get("timeout_s") or 900), proc.kill)
+    # the whole tree: claude's MCP servers and tools die with it
+    timer = threading.Timer(int(c.get("timeout_s") or 900), _platform.kill_tree, (proc,))
     timer.start()
     result = None
     try:
@@ -980,6 +982,7 @@ def _run_claude(con: sqlite3.Connection, reply: dict[str, Any], c: dict[str, Any
     finally:
         timed_out = not timer.is_alive() and proc.returncode not in (0, None)
         timer.cancel()
+        _platform.untrack(proc)
         with _lock:
             _procs.pop(reply["id"], None)
     log.flush(force=True)
@@ -1296,13 +1299,7 @@ BEAT_STALE_S = 30    # no heartbeat for this long: the owner is gone
 
 
 def _alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+    return _platform.pid_alive(pid)
 
 
 def recover() -> int:

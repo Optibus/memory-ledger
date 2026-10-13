@@ -2019,7 +2019,17 @@ def run_watched(con, request_id: str, argv: list, timeout: int, input: str | Non
     out (TimeoutExpired) or when the request turns `cancelled` (Cancelled). The
     row is the signal, so a cancel reaches a run in another process too."""
     p = _textio.popen_text(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                           stdin=subprocess.DEVNULL if input is None else subprocess.PIPE, **kw)
+                           stdin=subprocess.DEVNULL if input is None else subprocess.PIPE,
+                           **_platform.group_kwargs(), **kw)
+    _platform.track(p)
+    try:
+        return _watch(con, request_id, p, argv, timeout, input)
+    finally:
+        _platform.untrack(p)
+
+
+def _watch(con, request_id: str, p: subprocess.Popen, argv: list, timeout: int,
+           input: str | None) -> subprocess.CompletedProcess:
     deadline = time.monotonic() + timeout
     while True:
         try:
@@ -2031,7 +2041,8 @@ def run_watched(con, request_id: str, argv: list, timeout: int, input: str | Non
             input = None
             cancelled = _status(con, request_id) == "cancelled"
             if cancelled or time.monotonic() >= deadline:
-                p.kill()
+                # the whole tree: a session's MCP servers and tools die with it
+                _platform.kill_tree(p)
                 p.communicate()
                 if cancelled:
                     raise Cancelled(request_id) from None

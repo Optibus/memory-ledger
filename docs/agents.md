@@ -192,6 +192,12 @@ at once as `cancelled by you`, so Retry runs it again. A running Claude session 
 killed; an Ollama chat stops before its next round, and whatever the call in
 flight returns is dropped. A cancelled reply writes no `message` node.
 
+A Claude session runs in its own process group, and a cancel or a timeout kills
+the whole tree (`killpg` on macOS and Linux, `taskkill /T /F` on Windows), so
+the MCP servers and tools it started go with it. Whether a reply's server is
+still alive is asked with `_platform.pid_alive`, never `os.kill(pid, 0)`, which
+on Windows would terminate it.
+
 ```bash
 python3 scripts/agents.py status          # connectors, models, what is running
 python3 scripts/agents.py run <reply-id>  # run one queued reply in this process

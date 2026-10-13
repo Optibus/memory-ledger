@@ -67,5 +67,34 @@ if argv and sh:
                          encoding="utf-8", errors="replace").stdout
     ck("an argument is data, never shell text", out.strip() == "olá mundo; echo injected", out)
 
+print("processes")
+import time  # noqa: E402
+
+ck("this process is alive", _platform.pid_alive(os.getpid()))
+dead = subprocess.Popen([sys.executable, "-c", "pass"])
+dead.wait()
+ck("one that exited is not, and asking does not signal anything", not _platform.pid_alive(dead.pid))
+ck("a pid that cannot exist is not alive", not _platform.pid_alive(0) and not _platform.pid_alive(-1))
+
+# a parent that starts a grandchild and prints its pid, then sleeps
+tree = subprocess.Popen(
+    [sys.executable, "-c",
+     "import subprocess, sys, time\n"
+     "c = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+     "print(c.pid, flush=True)\n"
+     "time.sleep(60)"],
+    stdout=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", **_platform.group_kwargs())
+grandchild = int(tree.stdout.readline())
+_platform.kill_tree(tree)
+tree.wait(timeout=10)
+for _ in range(50):
+    if not _platform.pid_alive(grandchild):
+        break
+    time.sleep(0.1)
+ck("kill_tree takes the grandchildren with it", not _platform.pid_alive(grandchild))
+_platform.kill_tree(tree)
+ck("and is safe on a process that already exited", tree.poll() is not None)
+ck("our own group is never the one killed", _platform.pid_alive(os.getpid()))
+
 print(f"\n{len(FAILS)} failed" if FAILS else "\nall passed")
 raise SystemExit(1 if FAILS else 0)

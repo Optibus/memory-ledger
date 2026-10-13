@@ -312,9 +312,9 @@ class SttWorker:
         if not py:
             raise SttError("no Python with faster-whisper found: pip install faster-whisper, "
                            "or set $BRAIN_VOICE_PYTHON")
-        self.proc = subprocess.Popen([py, str(_worker_script())],
-                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                     stderr=subprocess.DEVNULL)
+        self.proc = _platform.track(subprocess.Popen(
+            [py, str(_worker_script())], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, env=_textio.child_env(), **_platform.group_kwargs()))
         return self.proc
 
     def transcribe(self, pcm: bytes, language: str | None) -> tuple[str, str]:
@@ -339,8 +339,9 @@ class SttWorker:
             return res.get("text", "").strip(), res.get("language", "")
 
     def close(self) -> None:
-        if self.proc and self.proc.poll() is None:
-            self.proc.kill()
+        if self.proc:
+            _platform.kill_tree(self.proc)
+            _platform.untrack(self.proc)
         self.proc = None
 
 

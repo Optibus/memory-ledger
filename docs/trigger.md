@@ -635,6 +635,13 @@ The dispatcher records the exit code, the final text, stderr and the cost on the
 request. A session that outlives `timeout_s` is killed and marked `timeout`; a
 server restart that orphans one marks it `interrupted` on the next start.
 
+A session or script runs as the leader of its own process group, and a kill
+(timeout or cancel) takes the whole tree: `killpg` on macOS and Linux,
+`taskkill /T /F` on Windows, so the MCP servers and tools `claude` started do
+not outlive it. Being in its own group, it no longer gets the terminal's
+Ctrl-C; the server kills every tree it still holds when it exits instead
+(`_platform.track`).
+
 ### The audit log
 
 Two tables in `graph.db`, and one node per request:
