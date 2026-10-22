@@ -12,7 +12,7 @@
 .ml-dd.is-active .ml-dd__btn { background: var(--selected); }
 .ml-dd__summary { color: var(--muted); font-variant-numeric: tabular-nums; }
 .ml-dd.is-active .ml-dd__summary { color: var(--accent); }
-.ml-dd__caret { font-size: 9px; color: var(--muted); }
+.ml-dd__caret { font-size: 10px; color: var(--muted); }
 
 /* The menu grows out of its button, not out of its own centre. */
 .ml-dd__menu {
