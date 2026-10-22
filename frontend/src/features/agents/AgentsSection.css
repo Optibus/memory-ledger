@@ -116,7 +116,7 @@
 .ml-pick__btn:active:not(:disabled) { transform: scale(0.97); transition-duration: var(--t-press); }
 .ml-pick__btn:disabled { opacity: 0.55; cursor: not-allowed; }
 .ml-pick__model { color: var(--muted); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.ml-pick__caret { font-size: 9px; color: var(--muted); }
+.ml-pick__caret { font-size: 10px; color: var(--muted); }
 .ml-pick__menu, .ml-pick__sub {
   list-style: none; margin: 0; padding: 5px; min-width: 170px;
   background: var(--panel); border: 0.5px solid var(--border); border-top-color: var(--material-edge); border-radius: 12px;
