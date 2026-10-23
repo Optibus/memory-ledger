@@ -73,8 +73,9 @@ def panel_binary() -> Path | None:
         return None
     _say("Building the Ledger Agent box (first run, ~30s)…")
     exe.parent.mkdir(parents=True, exist_ok=True)
-    (app / "Contents" / "Info.plist").write_text(PLIST)
-    build = subprocess.run(["swiftc", "-O", str(SRC), "-o", str(exe)], capture_output=True, text=True)
+    (app / "Contents" / "Info.plist").write_text(PLIST, encoding="utf-8")
+    build = subprocess.run(["swiftc", "-O", str(SRC), "-o", str(exe)], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace")
     if build.returncode != 0:
         _say("Could not build the box:", (build.stderr or "").strip()[-800:])
         return None
@@ -89,7 +90,7 @@ def conversation(con, full_tools: bool, model: str = "") -> str:
     clean session. Tools and model follow this run's flags."""
     path = graph.home_dir() / STATE_NAME
     try:
-        cid = str(json.loads(path.read_text()).get("conversation") or "")
+        cid = str(json.loads(path.read_text(encoding="utf-8")).get("conversation") or "")
     except (OSError, ValueError):
         cid = ""
     changes: dict[str, Any] = {"full_tools": full_tools, "context_turns": 0}
@@ -103,7 +104,7 @@ def conversation(con, full_tools: bool, model: str = "") -> str:
         raise RuntimeError(res.get("error") or "could not open the Ledger Agent conversation")
     cid = res["conversation"]["id"]
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"conversation": cid}))
+    path.write_text(json.dumps({"conversation": cid}), encoding="utf-8")
     return cid
 
 
@@ -201,7 +202,8 @@ def run(cwd: Path, full_tools: bool, model: str = "") -> int:
     where = str(cwd).replace(home, "~", 1) if str(cwd).startswith(home) else str(cwd)
     subtitle = f"{where} · {'tools on' if full_tools else 'read-only'}"
     proc = subprocess.Popen([str(exe), str(ICON) if ICON.exists() else "", subtitle],
-                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding="utf-8",
+                            errors="replace", bufsize=1)
     lock = threading.Lock()
     running: dict[str, str] = {}
 
@@ -253,6 +255,22 @@ def run(cwd: Path, full_tools: bool, model: str = "") -> int:
                 proc.terminate()
     _say(f"Ledger Agent: {asked} message(s). They are in the Agents tab under \"{TITLE}\".")
     return 0
+
+
+def launch(cwd: str = "") -> dict[str, Any]:
+    """Open the box from the brain UI, detached from the server: it lives on when
+    the tab closes, and the server never waits on it."""
+    if sys.platform != "darwin":
+        return {"ok": False, "error": "the Ledger Agent box needs macOS"}
+    folder = Path(cwd).expanduser() if cwd else HERE.parent
+    if not folder.is_dir():
+        return {"ok": False, "error": f"no folder {folder}"}
+    if panel_binary() is None:
+        return {"ok": False, "error": "could not build the box (needs xcode-select --install)"}
+    subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--cwd", str(folder)],
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True, cwd=str(folder))
+    return {"ok": True, "cwd": str(folder)}
 
 
 def main(argv: list[str] | None = None) -> int:

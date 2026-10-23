@@ -293,6 +293,9 @@ export const api = {
   /** Save a file the owner attached to the chat under <home>/attachments (base64). No model call. */
   attachFile: (name: string, data: string) =>
     post<import("./types").AgentAttachResult>("/api/agent-attach", { name, data }),
+  /** Opens the Ledger Agent floating box on this Mac. No model call. */
+  openAgentPanel: (body: { cwd?: string } = {}) =>
+    post<{ ok: boolean; cwd?: string; error?: string }>("/api/agent-panel", body),
   /** Starts a model call: the reply runs in the background, poll the thread. */
   sendAgent: (body: {
     text: string;

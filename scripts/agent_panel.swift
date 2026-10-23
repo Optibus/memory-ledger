@@ -246,6 +246,11 @@ final class App: NSObject, NSApplicationDelegate {
         output.textContainer?.widthTracksTextView = true
         outputScroll.documentView = output
         outputScroll.isHidden = true
+        // A faint dark glass behind the exchange, so long answers stay easy to read.
+        outputScroll.wantsLayer = true
+        outputScroll.layer?.backgroundColor = NSColor(white: 0.02, alpha: reduceTransparency ? 0.6 : 0.24).cgColor
+        outputScroll.layer?.cornerRadius = 12
+        output.textContainerInset = NSSize(width: 10, height: 10)
         card.addSubview(outputScroll)
 
         // Dark glass box with the input in it.
@@ -479,7 +484,9 @@ final class App: NSObject, NSApplicationDelegate {
             out.append(NSAttributedString(string: "Ledger Agent\n", attributes: [.font: NSFont.systemFont(ofSize: 11, weight: .bold),
                                                                                  .foregroundColor: MINT]))
             let opts = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-            if let md = try? NSMutableAttributedString(markdown: s, options: opts, baseURL: nil) {
+            let tidy = s.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
+                        .replacingOccurrences(of: "\n\n", with: "\n")
+            if let md = try? NSMutableAttributedString(markdown: tidy, options: opts, baseURL: nil) {
                 md.addAttributes([.foregroundColor: NSColor(white: 1, alpha: 0.96), .paragraphStyle: para],
                                  range: NSRange(location: 0, length: md.length))
                 // Markdown keeps bold/italic/code as font traits on top of the body size.

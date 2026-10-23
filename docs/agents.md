@@ -267,6 +267,30 @@ Texts from subagents show as bubbles like the agent's own; only their thinking
 stays folded in the tool log. The last text is dropped only when it equals the
 final reply exactly.
 
+## Ledger Agent: the floating box
+
+The Agents tab, as a small box that floats over whatever you are doing — the
+same idea as Dora's note. Open it from a terminal, in the folder Claude should
+work in, or with the pop-out button next to **＋ New** (Claude then runs in this
+repo):
+
+    python3 scripts/agent_panel.py                 # Claude runs in this folder
+    python3 scripts/agent_panel.py --cwd ~/dev/x   # ...or in another one
+    python3 scripts/agent_panel.py --read-only     # look things up, change nothing
+
+- **Every message is a clean session.** It goes through the same path as a
+  turn here (`send` → one stateless `claude -p`), in one conversation named
+  "Ledger Agent" with `context_turns` 0. Recall still brings the brain's memory.
+  Everything asked there shows up in this tab, and in the graph.
+- **Thin by default**: one line to type, one status line that shows each tool as
+  it runs and then the answer's first line. **⌘E** (or ⤢) expands it to the whole
+  exchange above a taller box; drag the corner grip to resize.
+- Return asks, Shift-Return is a new line, **⌘.** stops a running reply, Esc
+  closes (and stops what it started).
+- Tools are on unless `--read-only`. The box is a tiny AppKit app
+  (`scripts/agent_panel.swift`), compiled on first use into
+  `<home>/LedgerAgent.app` (needs `xcode-select --install`).
+
 ## Voice
 
 Dictation, reading aloud and a hands-free conversation mode, in the chat and in

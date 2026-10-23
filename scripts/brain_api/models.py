@@ -456,6 +456,10 @@ class AgentCancel(Body):
     id: Text = T("A reply that is queued or running.")
 
 
+class AgentPanel(Body):
+    cwd: Text = T("The folder Claude runs in; empty is the memory-ledger repo.")
+
+
 class AgentPlugin(Body):
     key: Text = T("The plugin, as `name@marketplace`.")
     enabled: Any = Field(None, description="`true` turns it on, anything else off.")

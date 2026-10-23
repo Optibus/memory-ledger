@@ -75,7 +75,7 @@ class TestConversation:
         assert not agents.get_conv(ctx.con, cid)["full_tools"]
 
     def test_a_deleted_conversation_is_made_again(self, ctx):
-        (ctx.home / agent_panel.STATE_NAME).write_text(json.dumps({"conversation": "aconv_gone"}))
+        (ctx.home / agent_panel.STATE_NAME).write_text(json.dumps({"conversation": "aconv_gone"}), encoding="utf-8")
         cid = agent_panel.conversation(ctx.con, full_tools=True)
         assert cid != "aconv_gone" and agents.get_conv(ctx.con, cid)
 
