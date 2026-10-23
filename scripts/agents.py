@@ -75,6 +75,10 @@ CLAUDE_MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5-20251
 # Read-only Claude: these built-ins and nothing else, every other call denied.
 CLAUDE_READ_TOOLS = ["Read", "Grep", "Glob", "WebSearch", "WebFetch", "Skill"]
 SCRIPT = Path(__file__).resolve()
+# Where the owner is talking from, and where Claude runs. The floating Ledger
+# Agent panel (agent_panel.py) sets both for its own process; the server never does.
+SURFACE = "the Agents tab of the brain's own UI"
+CLAUDE_CWD: Path | None = None
 # How an agent reads its own conversation back, and reads and writes the brain.
 # These run in both tool modes: read-only limits what an agent does OUTSIDE the
 # brain, never its memory (the offload rule, CONVENTIONS §0). Read-only Claude
@@ -711,13 +715,15 @@ def system_prompt(conv: dict[str, Any] | None, carried: int, kind: str = "claude
     full = bool(conv and conv.get("full_tools"))
     owner = graph.owner() or "the owner"
     lines = [
-        f"You are {graph.brain_name()}, {owner}'s second brain, answering in the Agents "
-        "tab of the brain's own UI.",
+        f"You are {graph.brain_name()}, {owner}'s second brain, answering in {SURFACE}.",
         "Every turn is stateless. You see only the owner's message, "
         + (f"the last {carried} exchange(s) of this conversation, " if carried else "")
         + "and the memory the brain recalled for it. If that is not enough, look things "
           "up rather than guess.",
     ]
+    if CLAUDE_CWD is not None and kind == "claude":
+        lines.append(f"You run in {CLAUDE_CWD}, the folder the owner opened you from: "
+                     "it is the folder they mean by \"here\" or \"this repo\".")
     if conv:
         how = ("call the read_thread tool" if kind == "ollama" else
                f"run `{THREAD_CMD} {conv['id']}` (add `--limit N` for the last N messages)")
@@ -930,6 +936,12 @@ def handle_stream_line(log: _Log, line: str) -> dict[str, Any] | None:
     return None
 
 
+def _claude_cwd() -> Path:
+    if CLAUDE_CWD is not None and CLAUDE_CWD.is_dir():
+        return CLAUDE_CWD
+    return graph.home_dir() if graph.home_dir().is_dir() else Path.home()
+
+
 def run_claude(con: sqlite3.Connection, reply: dict[str, Any], c: dict[str, Any],
                turn: dict[str, Any]) -> dict[str, Any]:
     session_id = str(uuid.uuid4())
@@ -955,8 +967,7 @@ def _run_claude(con: sqlite3.Connection, reply: dict[str, Any], c: dict[str, Any
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 stdin=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", env=env,
-                                cwd=str(graph.home_dir()) if graph.home_dir().is_dir()
-                                else str(Path.home()), bufsize=1, **_platform.group_kwargs())
+                                cwd=str(_claude_cwd()), bufsize=1, **_platform.group_kwargs())
     except OSError as e:
         raise AgentError(f"could not start {cmd[0]}: {e}") from None
     _platform.track(proc)
