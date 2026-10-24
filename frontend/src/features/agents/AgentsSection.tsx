@@ -110,7 +110,7 @@ export function AgentsSection() {
             <Button
               size="sm"
               onClick={() => void api.openAgentPanel()}
-              title="Open the Ledger Agent: a floating box over your work, one clean Claude session per message"
+              title="Open the Ledger Agent: a floating terminal running Claude Code (the first open builds it, ~1-2 min)"
               aria-label="pop out the ledger agent"
               disabled={!writable}
             >

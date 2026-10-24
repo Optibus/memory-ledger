@@ -1,51 +1,58 @@
 #!/usr/bin/env python3
-"""Ledger Agent: a floating box in front of whatever you are doing, that hands
-each message to Claude in a clean session (docs/agents.md, "Ledger Agent").
+"""Ledger Agent: a floating terminal box, in front of whatever you are doing,
+running the `claude` CLI (docs/agents.md, "Ledger Agent").
 
-The box is a tiny AppKit app (agent_panel.swift), compiled on first use into
-`<home>/LedgerAgent.app`. This process runs it and does the work: every message
-goes through the same path as the Agents tab — `agents.send` stores it, one
-stateless `claude -p` call answers it, the exchange is written to the graph —
-in one conversation named "Ledger Agent" that carries no earlier turns. So the
-Agents tab shows everything the box was asked, and recall finds it later.
+It is a real terminal, so it behaves like Claude Code anywhere: Ctrl-C stops a
+reply, Esc interrupts, `/model`, `/clear` (a clean session), `/resume`, slash
+commands and permission prompts all work. Claude starts in the folder the box was
+opened from (or `--cwd`); anything after `--` goes to `claude` as is.
 
-Claude runs in the folder the box was opened from (or `--cwd`), with every
-tool on unless `--read-only`.
+The box is a tiny AppKit app (agent_terminal.swift) compiled together with
+SwiftTerm's sources — a pinned commit, cloned once — into
+`<home>/LedgerAgentTerminal.app`. The first run builds it (~1-2 min, needs
+`xcode-select --install` and network); later runs open at once.
 
-    python3 scripts/agent_panel.py                 # the box, Claude runs here
-    python3 scripts/agent_panel.py --cwd ~/dev/x   # Claude runs in ~/dev/x
-    python3 scripts/agent_panel.py --read-only     # look things up, change nothing
+    python3 scripts/agent_panel.py                       # claude, here
+    python3 scripts/agent_panel.py --cwd ~/dev/x         # claude, in ~/dev/x
+    python3 scripts/agent_panel.py -- --model claude-opus-5-5 --continue
 """
 
 from __future__ import annotations
 
 import argparse
-import json
+import fcntl
+import shlex
 import shutil
 import subprocess
 import sys
-import threading
-import time
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import agents  # noqa: E402
 import graph  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
-SRC = HERE / "agent_panel.swift"
+SRC = HERE / "agent_terminal.swift"
 ICON = HERE.parent / "frontend" / "public" / "favicon.svg"
-STATE_NAME = "agent-panel.json"
-TITLE = "Ledger Agent"
-POLL_S = 0.4
-EVENT_TEXT_MAX = 160
-PLIST = """<?xml version="1.0" encoding="UTF-8"?>
+APP_NAME = "LedgerAgentTerminal"
+SWIFTTERM_URL = "https://github.com/migueldeicaza/SwiftTerm"
+SWIFTTERM_TAG = "v1.20.0"
+SWIFTTERM_COMMIT = "5d14406844143538cd8f8851d2d8a67c1fe443e5"   # what the tag pointed at when pinned
+# SwiftTerm's package plugin generates this at build time; swiftc alone needs it written.
+BUILD_INFO = f'''public enum SwiftTermBuildInfo {{
+    public static let branch: String? = nil
+    public static let tag: String? = "{SWIFTTERM_TAG}"
+    public static let commit: String? = "{SWIFTTERM_COMMIT}"
+    public static let hasUncommittedChanges: Bool? = false
+    public static let version: String = "{SWIFTTERM_TAG.lstrip('v')}"
+}}
+'''
+PLIST = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>CFBundleIdentifier</key><string>com.memory-ledger.agent</string>
-<key>CFBundleName</key><string>LedgerAgent</string>
-<key>CFBundleExecutable</key><string>LedgerAgent</string>
+<key>CFBundleIdentifier</key><string>com.memory-ledger.agent-terminal</string>
+<key>CFBundleName</key><string>{APP_NAME}</string>
+<key>CFBundleExecutable</key><string>{APP_NAME}</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleVersion</key><string>1</string>
 <key>LSUIElement</key><true/>
@@ -58,232 +65,136 @@ def _say(*a: Any) -> None:
     print(*a, file=sys.stderr, flush=True)
 
 
-# ---------------------------------------------------------------- the app
+def _run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", **kw)
+
+
+# ---------------------------------------------------------------- building
+def build_dir() -> Path:
+    return graph.home_dir() / "build"
+
+
 def app_dir() -> Path:
-    return graph.home_dir() / "LedgerAgent.app"
+    return graph.home_dir() / f"{APP_NAME}.app"
 
 
-def panel_binary() -> Path | None:
-    """The compiled box, rebuilt when the Swift source is newer than it."""
-    app = app_dir()
-    exe = app / "Contents" / "MacOS" / "LedgerAgent"
+def swiftterm_sources() -> tuple[list[Path], str]:
+    """SwiftTerm's macOS sources at the pinned commit, cloned once. A checkout
+    that is not at that commit is refused, never built."""
+    repo = build_dir() / f"SwiftTerm-{SWIFTTERM_TAG}"
+    if not (repo / ".git").is_dir():
+        shutil.rmtree(repo, ignore_errors=True)
+        repo.parent.mkdir(parents=True, exist_ok=True)
+        _say(f"Fetching SwiftTerm {SWIFTTERM_TAG} (once)…")
+        r = _run(["git", "clone", "-q", "--depth", "1", "--branch", SWIFTTERM_TAG, SWIFTTERM_URL, str(repo)])
+        if r.returncode != 0:
+            shutil.rmtree(repo, ignore_errors=True)
+            return [], f"could not fetch SwiftTerm: {(r.stderr or '').strip()[-300:]}"
+    head = _run(["git", "-C", str(repo), "rev-parse", "HEAD"]).stdout.strip()
+    if head != SWIFTTERM_COMMIT:
+        return [], f"SwiftTerm checkout is at {head[:12]}, expected {SWIFTTERM_COMMIT[:12]}; delete {repo}"
+    files = sorted(p for p in (repo / "Sources" / "SwiftTerm").rglob("*.swift") if "iOS" not in p.parts)
+    return files, ""
+
+
+def panel_binary() -> tuple[Path | None, str]:
+    """The compiled box, rebuilt when the Swift source is newer than it. One
+    build at a time: a second caller waits for the first."""
+    exe = app_dir() / "Contents" / "MacOS" / APP_NAME
     if exe.exists() and exe.stat().st_mtime >= SRC.stat().st_mtime:
-        return exe
+        return exe, ""
     if not shutil.which("swiftc"):
-        return None
-    _say("Building the Ledger Agent box (first run, ~30s)…")
-    exe.parent.mkdir(parents=True, exist_ok=True)
-    (app / "Contents" / "Info.plist").write_text(PLIST, encoding="utf-8")
-    build = subprocess.run(["swiftc", "-O", str(SRC), "-o", str(exe)], capture_output=True, text=True,
-                           encoding="utf-8", errors="replace")
-    if build.returncode != 0:
-        _say("Could not build the box:", (build.stderr or "").strip()[-800:])
-        return None
-    subprocess.run(["codesign", "-s", "-", "-f", str(app)], capture_output=True)
-    return exe
+        return None, "needs the Xcode command line tools: xcode-select --install"
+    build_dir().mkdir(parents=True, exist_ok=True)
+    with open(build_dir() / "agent-terminal.lock", "w", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if exe.exists() and exe.stat().st_mtime >= SRC.stat().st_mtime:   # built while we waited
+            return exe, ""
+        sources, err = swiftterm_sources()
+        if err:
+            return None, err
+        work = build_dir() / "agent-terminal"
+        shutil.rmtree(work, ignore_errors=True)
+        work.mkdir(parents=True)
+        shutil.copy(SRC, work / "main.swift")       # top-level code must live in main.swift
+        (work / "BuildInfo.swift").write_text(BUILD_INFO, encoding="utf-8")
+        _say("Building the Ledger Agent box (first run, ~1-2 min)…")
+        tmp = work / APP_NAME
+        r = _run(["swiftc", "-O", "-module-name", APP_NAME, *map(str, sources),
+                  str(work / "main.swift"), str(work / "BuildInfo.swift"), "-o", str(tmp)])
+        if r.returncode != 0:
+            return None, "could not build the box: " + (r.stderr or "").strip()[-800:]
+        exe.parent.mkdir(parents=True, exist_ok=True)
+        (app_dir() / "Contents" / "Info.plist").write_text(PLIST, encoding="utf-8")
+        shutil.move(str(tmp), str(exe))              # whole file at once: never a half-written app
+        _run(["codesign", "-s", "-", "-f", str(app_dir())])
+        return exe, ""
 
 
-# ---------------------------------------------------------------- the conversation
-def conversation(con, full_tools: bool, model: str = "") -> str:
-    """The one "Ledger Agent" conversation, made on first use and remembered in
-    `<home>/agent-panel.json`. It carries no earlier turns: every message is a
-    clean session. Tools and model follow this run's flags."""
-    path = graph.home_dir() / STATE_NAME
-    try:
-        cid = str(json.loads(path.read_text(encoding="utf-8")).get("conversation") or "")
-    except (OSError, ValueError):
-        cid = ""
-    changes: dict[str, Any] = {"full_tools": full_tools, "context_turns": 0}
-    if model:
-        changes["model"] = model
-    if cid and agents.get_conv(con, cid):
-        res = agents.save_conversation(con, cid, **changes)
-    else:
-        res = agents.save_conversation(con, "", title=TITLE, **changes)
-    if not res.get("ok"):
-        raise RuntimeError(res.get("error") or "could not open the Ledger Agent conversation")
-    cid = res["conversation"]["id"]
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"conversation": cid}), encoding="utf-8")
-    return cid
+# ---------------------------------------------------------------- running
+def claude_command(claude_args: list[str]) -> str:
+    """What the box's login shell runs: `exec claude …`, every argument quoted."""
+    return " ".join(["exec", "claude", *map(shlex.quote, claude_args)])
 
 
-def event_line(ev: dict[str, Any]) -> str:
-    """One line for something the agent did, or "" for what is not worth a line
-    (thinking, the text it says on the way to its answer)."""
-    kind = ev.get("kind")
-    if kind in ("thinking", "text"):
-        return ""
-    name = str(ev.get("name") or ev.get("tool") or kind or "tool")
-    detail = ""
-    try:
-        inp = json.loads(ev.get("input") or "{}")
-    except ValueError:
-        inp = {}
-    if isinstance(inp, dict):
-        for k in ("command", "file_path", "pattern", "path", "query", "url", "description", "prompt"):
-            if inp.get(k):
-                detail = str(inp[k])
-                break
-    elif ev.get("input"):
-        detail = str(ev["input"])
-    if kind == "skill":
-        name = f"skill {name}"
-    elif kind == "agent":
-        name = f"agent {name}"
-    line = f"{name} · {' '.join(detail.split())}" if detail else name
-    if ev.get("error"):
-        line += "  ✗"
-    return line if len(line) <= EVENT_TEXT_MAX else line[:EVENT_TEXT_MAX - 1] + "…"
-
-
-def meta_line(row: dict[str, Any], seconds: float) -> str:
-    bits = []
-    if row.get("cost_usd") is not None:
-        bits.append(f"{'~' if row.get('cost_estimated') else ''}${float(row['cost_usd']):.2f}")
-    bits.append(f"{seconds:.0f}s")
-    if row.get("model"):
-        bits.append(str(row["model"]))
-    return " · ".join(bits)
-
-
-def ask(conv_id: str, text: str, full_tools: bool, emit: Callable[[dict[str, Any]], None],
-        on_reply: Callable[[str], None] = lambda _id: None) -> dict[str, Any]:
-    """Send one message and run its reply here, telling `emit` about each step
-    and the end. Returns the reply row."""
-    con = agents.db()
-    started = time.monotonic()
-    res = agents.send(con, text, conv_id, full_tools=full_tools, context_turns=0, start=False)
-    if not res.get("ok"):
-        emit({"t": "error", "text": str(res.get("error") or "could not send")})
-        return {}
-    reply_id = res["reply_id"]
-    on_reply(reply_id)
-    worker = threading.Thread(target=agents.run_reply, args=(reply_id,), daemon=True)
-    worker.start()
-    seen = 0
-    while True:
-        alive = worker.is_alive()
-        row = dict(con.execute("SELECT * FROM agent_msg WHERE id=?", (reply_id,)).fetchone())
-        events = json.loads(row.get("events") or "[]")
-        for ev in events[seen:]:
-            line = event_line(ev)
-            if line:
-                emit({"t": "event", "text": line})
-        seen = len(events)
-        if not alive or row["status"] not in agents.PENDING:
-            if alive:
-                worker.join(timeout=5)
-            break
-        time.sleep(POLL_S)
-    row = dict(con.execute("SELECT * FROM agent_msg WHERE id=?", (reply_id,)).fetchone())
-    if row["status"] in ("done", "question"):
-        emit({"t": "done", "text": row["text"] or "(no answer)",
-              "meta": meta_line(row, time.monotonic() - started)})
-    else:
-        emit({"t": "error", "text": row.get("error") or f"the reply ended {row['status']}"})
-    return row
-
-
-# ---------------------------------------------------------------- the loop
-def run(cwd: Path, full_tools: bool, model: str = "") -> int:
-    if sys.platform != "darwin":
-        _say("The Ledger Agent box needs macOS. Use the Agents tab instead.")
-        return 1
-    exe = panel_binary()
-    if exe is None:
-        _say("No box (needs the Xcode command line tools: xcode-select --install).")
-        return 1
-    agents.CLAUDE_CWD = cwd
-    agents.SURFACE = "the Ledger Agent, a small floating box over the owner's work"
-    con = agents.db()
-    conv_id = conversation(con, full_tools, model)
+def subtitle(cwd: Path) -> str:
     home = str(Path.home())
-    where = str(cwd).replace(home, "~", 1) if str(cwd).startswith(home) else str(cwd)
-    subtitle = f"{where} · {'tools on' if full_tools else 'read-only'}"
-    proc = subprocess.Popen([str(exe), str(ICON) if ICON.exists() else "", subtitle],
-                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding="utf-8",
-                            errors="replace", bufsize=1)
-    lock = threading.Lock()
-    running: dict[str, str] = {}
+    return "~" + str(cwd)[len(home):] if str(cwd).startswith(home) else str(cwd)
 
-    def emit(msg: dict[str, Any]) -> None:
-        with lock:
-            try:
-                proc.stdin.write(json.dumps(msg, ensure_ascii=False) + "\n")   # type: ignore[union-attr]
-                proc.stdin.flush()                                              # type: ignore[union-attr]
-            except (BrokenPipeError, ValueError, OSError):
-                pass
 
-    def turn(text: str) -> None:
-        try:
-            ask(conv_id, text, full_tools, emit, on_reply=lambda rid: running.update(id=rid))
-        except Exception as e:   # noqa: BLE001 — the box is waiting for an end, always give one
-            emit({"t": "error", "text": f"{type(e).__name__}: {e}"})
-        finally:
-            running.pop("id", None)
+def box_argv(exe: Path, cwd: Path, claude_args: list[str]) -> list[str]:
+    return [str(exe), str(ICON) if ICON.exists() else "", subtitle(cwd), str(cwd), claude_command(claude_args)]
 
-    asked = 0
+
+def run(cwd: Path, claude_args: list[str]) -> int:
+    if sys.platform != "darwin":
+        _say("The Ledger Agent box needs macOS.")
+        return 1
+    exe, err = panel_binary()
+    if exe is None:
+        _say(err)
+        return 1
+    # Waits for the box: Ctrl-C here closes it too.
     try:
-        for line in proc.stdout:   # type: ignore[union-attr]
-            verb, _, rest = line.rstrip("\n").partition("\t")
-            if verb == "Ask":
-                try:
-                    text = json.loads(rest)
-                except ValueError:
-                    continue
-                asked += 1
-                threading.Thread(target=turn, args=(str(text),), daemon=True).start()
-            elif verb == "Cancel":
-                if running.get("id"):
-                    agents.cancel(agents.db(), running["id"])
-            elif verb == "Done":
-                break
+        return subprocess.call(box_argv(exe, cwd, claude_args), cwd=str(cwd))
     except KeyboardInterrupt:
-        pass
-    finally:
-        if running.get("id"):          # closing the box stops what it started
-            agents.cancel(agents.db(), running["id"])
-        if proc.poll() is None:
-            try:
-                proc.stdin.close()     # type: ignore[union-attr]
-            except OSError:
-                pass
-            try:
-                proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                proc.terminate()
-    _say(f"Ledger Agent: {asked} message(s). They are in the Agents tab under \"{TITLE}\".")
-    return 0
+        return 130
 
 
 def launch(cwd: str = "") -> dict[str, Any]:
-    """Open the box from the brain UI, detached from the server: it lives on when
-    the tab closes, and the server never waits on it."""
+    """Open the box from the brain UI, detached: it outlives the tab, and the
+    server never waits on it — not even on the first build."""
     if sys.platform != "darwin":
         return {"ok": False, "error": "the Ledger Agent box needs macOS"}
     folder = Path(cwd).expanduser() if cwd else HERE.parent
     if not folder.is_dir():
         return {"ok": False, "error": f"no folder {folder}"}
-    if panel_binary() is None:
-        return {"ok": False, "error": "could not build the box (needs xcode-select --install)"}
-    subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--cwd", str(folder)],
-                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                     start_new_session=True, cwd=str(folder))
-    return {"ok": True, "cwd": str(folder)}
+    log = graph.home_dir() / "agent-terminal.log"
+    with open(log, "a", encoding="utf-8") as out:
+        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--cwd", str(folder)],
+                         stdin=subprocess.DEVNULL, stdout=out, stderr=out,
+                         start_new_session=True, cwd=str(folder))
+    built = (app_dir() / "Contents" / "MacOS" / APP_NAME).exists()
+    return {"ok": True, "cwd": str(folder), "building": not built}
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--cwd", default="", help="the folder Claude runs in (default: this one)")
-    ap.add_argument("--read-only", action="store_true", help="look things up, change nothing")
-    ap.add_argument("--model", default="", help="the Claude model (default: the connector's)")
-    a = ap.parse_args(argv)
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0],
+                                 epilog="Anything after `--` goes to claude, e.g. -- --model claude-opus-5-5")
+    ap.add_argument("--cwd", default="", help="the folder claude starts in (default: this one)")
+    ap.add_argument("--build", action="store_true", help="only build the box, then exit")
+    a, rest = ap.parse_known_args(argv)
+    if rest[:1] == ["--"]:
+        rest = rest[1:]
+    if a.build:
+        exe, err = panel_binary()
+        _say(str(exe) if exe else err)
+        return 0 if exe else 1
     cwd = Path(a.cwd).expanduser().resolve() if a.cwd else Path.cwd()
     if not cwd.is_dir():
         _say(f"No folder {cwd}")
         return 1
-    return run(cwd, not a.read_only, a.model)
+    return run(cwd, rest)
 
 
 if __name__ == "__main__":

@@ -1,136 +1,71 @@
-"""Ledger Agent, the floating box (scripts/agent_panel.py), against a THROWAWAY
-brain. The AppKit box itself is not opened: these drive the work behind it — the
-one "Ledger Agent" conversation, a message run to its end with every step
-reported, the folder Claude runs in — with `claude` replaced by a script that
-records where and how it ran. Nothing leaves the machine and no model is called.
+"""Ledger Agent, the floating terminal box (scripts/agent_panel.py), against a
+THROWAWAY brain. The AppKit box is not opened and nothing is compiled: these
+cover what the launcher hands the box, the pinned SwiftTerm checkout it insists
+on, and the server's detached launch.
 
     python -m pytest tests/test_agent_panel.py
+
+The box's own size handling has a self-test in the app itself:
+LEDGER_AGENT_SELFTEST=1 <home>/LedgerAgentTerminal.app/Contents/MacOS/LedgerAgentTerminal "" t /tmp "sleep 30"
 """
 
 from __future__ import annotations
 
-import json
-from collections.abc import Iterator
+import shlex
+import subprocess
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 import agent_panel
-import agents
-import graph
-from _fakes import make_exe
-
-MODEL = "claude-sonnet-5-5"
-FAKE_CLAUDE = r'''#!/usr/bin/env python3
-import json, os, sys
-argv = sys.argv[1:]
-system = open(argv[argv.index("--append-system-prompt-file") + 1], encoding="utf-8").read()
-with open(os.path.join(os.environ["SECOND_BRAIN_HOME"], "panel-claude.jsonl"), "a", encoding="utf-8") as f:
-    f.write(json.dumps({"argv": argv, "cwd": os.getcwd(), "stdin": sys.stdin.read(), "system": system}) + "\n")
-if os.environ.get("FAKE_PANEL_MODE") == "crash":
-    sys.stderr.write("boom: no credentials\n"); sys.exit(2)
-def p(o): print(json.dumps(o), flush=True)
-p({"type": "system", "subtype": "init", "model": "claude-sonnet-5-5", "session_id": "s"})
-p({"type": "assistant", "message": {"id": "m1", "content": [
-   {"type": "thinking", "thinking": "look"},
-   {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "git status"}},
-   {"type": "tool_use", "id": "t2", "name": "Skill", "input": {"skill": "recall"}}]}})
-p({"type": "user", "message": {"content": [
-   {"type": "tool_result", "tool_use_id": "t1", "content": "clean"},
-   {"type": "tool_result", "tool_use_id": "t2", "content": "ok"}]}})
-p({"type": "result", "subtype": "success", "is_error": False, "total_cost_usd": 0.0312,
-   "usage": {"input_tokens": 900, "output_tokens": 40},
-   "result": "The tree is **clean**.\n[[next: push it]]"})
-'''
 
 
-@pytest.fixture(scope="module")
-def ctx(module_brain_home: Path, tmp_path_factory: pytest.TempPathFactory) -> Iterator[SimpleNamespace]:
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setenv("MEMORY_LEDGER_OWNER", "Owner")
-        mp.delenv("FAKE_PANEL_MODE", raising=False)
-        bin_path = make_exe(module_brain_home / "fake-claude", FAKE_CLAUDE)
-        agents.save_config({"connectors": [
-            {"kind": "claude", "name": "Claude", "bin": str(bin_path), "default_model": MODEL}]})
-        work = tmp_path_factory.mktemp("work")
-        mp.setattr(agents, "CLAUDE_CWD", work)
-        yield SimpleNamespace(home=module_brain_home, work=work, con=agents.db())
+class TestCommand:
+    def test_plain_claude(self):
+        assert agent_panel.claude_command([]) == "exec claude"
+
+    def test_arguments_reach_claude_quoted(self):
+        cmd = agent_panel.claude_command(["--model", "claude-opus-5-5", "-p", "it's; rm -rf ~"])
+        assert shlex.split(cmd) == ["exec", "claude", "--model", "claude-opus-5-5", "-p", "it's; rm -rf ~"]
+
+    def test_the_box_gets_icon_subtitle_folder_command(self, tmp_path):
+        argv = agent_panel.box_argv(Path("/x/box"), tmp_path, ["--continue"])
+        assert argv[0] == "/x/box" and argv[3:] == [str(tmp_path), "exec claude --continue"]
+
+    def test_home_is_shortened_in_the_subtitle(self):
+        assert agent_panel.subtitle(Path.home() / "dev" / "x") == "~/dev/x"
 
 
-def calls(home: Path) -> list[dict]:
-    path = home / "panel-claude.jsonl"
-    return [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
+class TestBuild:
+    def test_a_checkout_at_another_commit_is_refused(self, brain_home):
+        repo = agent_panel.build_dir() / f"SwiftTerm-{agent_panel.SWIFTTERM_TAG}"
+        repo.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t",
+                        "commit", "-q", "--allow-empty", "-m", "not swiftterm"], check=True)
+        files, err = agent_panel.swiftterm_sources()
+        assert files == [] and "expected 5d1440684414" in err
+
+    def test_an_up_to_date_app_is_not_rebuilt(self, brain_home, monkeypatch):
+        exe = agent_panel.app_dir() / "Contents" / "MacOS" / agent_panel.APP_NAME
+        exe.parent.mkdir(parents=True)
+        exe.write_text("built", encoding="utf-8")
+        monkeypatch.setattr(agent_panel.shutil, "which", lambda _n: pytest.fail("tried to build"))
+        assert agent_panel.panel_binary() == (exe, "")
 
 
-class TestConversation:
-    def test_it_is_made_once_and_carries_no_turns(self, ctx):
-        first = agent_panel.conversation(ctx.con, full_tools=True)
-        again = agent_panel.conversation(ctx.con, full_tools=False)
-        conv = agents.get_conv(ctx.con, again)
-        assert (first, conv["title"], conv["context_turns"]) == (again, "Ledger Agent", 0)
+class TestLaunch:
+    def test_a_missing_folder_is_refused(self, brain_home):
+        res = agent_panel.launch(str(brain_home / "nope"))
+        assert not res["ok"] and "no folder" in res["error"]
 
-    def test_it_follows_this_runs_tools_flag(self, ctx):
-        cid = agent_panel.conversation(ctx.con, full_tools=False)
-        assert not agents.get_conv(ctx.con, cid)["full_tools"]
+    def test_it_starts_detached_and_says_it_is_building(self, brain_home, monkeypatch):
+        seen = {}
+        monkeypatch.setattr(agent_panel.sys, "platform", "darwin")
+        monkeypatch.setattr(agent_panel.subprocess, "Popen", lambda argv, **kw: seen.update(argv=argv, **kw))
+        res = agent_panel.launch(str(brain_home))
+        assert res == {"ok": True, "cwd": str(brain_home), "building": True}
+        assert seen["start_new_session"] and seen["argv"][-2:] == ["--cwd", str(brain_home)]
 
-    def test_a_deleted_conversation_is_made_again(self, ctx):
-        (ctx.home / agent_panel.STATE_NAME).write_text(json.dumps({"conversation": "aconv_gone"}), encoding="utf-8")
-        cid = agent_panel.conversation(ctx.con, full_tools=True)
-        assert cid != "aconv_gone" and agents.get_conv(ctx.con, cid)
-
-
-class TestAsk:
-    @pytest.fixture(scope="class")
-    def ran(self, ctx) -> SimpleNamespace:
-        cid = agent_panel.conversation(ctx.con, full_tools=True)
-        agent_panel.ask(cid, "warm-up", True, lambda _m: None)
-        sent: list[dict] = []
-        row = agent_panel.ask(cid, "is the tree clean?", True, sent.append)
-        return SimpleNamespace(sent=sent, row=row, call=calls(ctx.home)[-1], cid=cid)
-
-    def test_each_tool_and_skill_is_reported(self, ran):
-        assert [m["text"] for m in ran.sent if m["t"] == "event"] == ["Bash · git status", "skill recall"]
-
-    def test_the_answer_ends_it_without_the_next_suggestion(self, ran):
-        assert ran.sent[-1]["t"] == "done" and ran.sent[-1]["text"] == "The tree is **clean**."
-
-    def test_the_end_says_cost_and_model(self, ran):
-        assert ran.sent[-1]["meta"].startswith("$0.03 · ") and ran.sent[-1]["meta"].endswith(MODEL)
-
-    def test_claude_runs_in_the_boxs_folder(self, ran, ctx):
-        assert Path(ran.call["cwd"]).resolve() == ctx.work.resolve()
-
-    def test_and_is_told_so(self, ran, ctx):
-        assert str(ctx.work) in ran.call["system"]
-
-    def test_every_message_is_a_clean_session(self, ran):
-        # Memory may still recall the earlier exchange; the thread itself is not carried.
-        assert "Earlier in this conversation:" not in ran.call["stdin"]
-
-    def test_tools_on_means_no_permission_prompts(self, ran):
-        assert "--dangerously-skip-permissions" in ran.call["argv"]
-
-    def test_the_exchange_is_in_the_agents_tab(self, ran, ctx):
-        texts = [m["text"] for m in agents.thread(ctx.con, ran.cid)["messages"]]
-        assert "is the tree clean?" in texts
-
-    def test_a_failed_run_ends_with_an_error(self, ctx, monkeypatch):
-        monkeypatch.setenv("FAKE_PANEL_MODE", "crash")
-        sent: list[dict] = []
-        agent_panel.ask(agent_panel.conversation(ctx.con, True), "again", True, sent.append)
-        assert sent[-1]["t"] == "error" and "no credentials" in sent[-1]["text"]
-
-
-class TestEventLine:
-    def test_thinking_and_interim_text_are_not_lines(self):
-        assert agent_panel.event_line({"kind": "thinking"}) == agent_panel.event_line({"kind": "text"}) == ""
-
-    def test_a_failed_tool_is_marked(self):
-        line = agent_panel.event_line({"kind": "tool", "name": "Read", "input": '{"file_path": "/a"}', "error": True})
-        assert line == "Read · /a  ✗"
-
-    def test_a_long_line_is_cut(self):
-        line = agent_panel.event_line({"kind": "tool", "name": "Bash", "input": json.dumps({"command": "x" * 500})})
-        assert len(line) == agent_panel.EVENT_TEXT_MAX and line.endswith("…")
-
+    def test_the_cli_refuses_a_missing_folder(self, brain_home):
+        assert agent_panel.main(["--cwd", str(brain_home / "nope")]) == 1

@@ -844,9 +844,9 @@ def agent_cancel(data: m.AgentCancel = body(m.AgentCancel)):
 
 
 @router.post("/agent-panel", tags=["agents"], summary="Open the Ledger Agent floating box",
-             description="Opens the floating box on this Mac (macOS only), detached from the "
-                         "server. Each message there is one clean Claude session in `cwd`, "
-                         "kept in the \"Ledger Agent\" conversation. No model call until you ask.")
+             description="Opens the floating terminal box on this Mac (macOS only), detached "
+                         "from the server, running the `claude` CLI in `cwd`. The first open "
+                         "builds it (`building: true`, ~1-2 min). No model call until you ask.")
 def agent_panel_open(data: m.AgentPanel = body(m.AgentPanel)):
     return reply(agent_panel.launch(clip(data.cwd, 1000)))
 

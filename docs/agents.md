@@ -269,27 +269,29 @@ final reply exactly.
 
 ## Ledger Agent: the floating box
 
-The Agents tab, as a small box that floats over whatever you are doing — the
-same idea as Dora's note. Open it from a terminal, in the folder Claude should
-work in, or with the pop-out button next to **＋ New** (Claude then runs in this
-repo):
+A floating terminal over whatever you are doing, running the `claude` CLI — the
+same idea as Dora's note, but a real terminal, so Claude Code works exactly as it
+does anywhere: **Ctrl-C** stops a reply, **Esc** interrupts, `/model`, `/clear`
+(a clean session), `/resume` and every slash command and permission prompt.
+Open it from a terminal, in the folder Claude should work in, or with the
+pop-out button next to **＋ New** (Claude then starts in this repo):
 
-    python3 scripts/agent_panel.py                 # Claude runs in this folder
-    python3 scripts/agent_panel.py --cwd ~/dev/x   # ...or in another one
-    python3 scripts/agent_panel.py --read-only     # look things up, change nothing
+    python3 scripts/agent_panel.py                     # claude, in this folder
+    python3 scripts/agent_panel.py --cwd ~/dev/x       # ...or in another one
+    python3 scripts/agent_panel.py -- --model claude-opus-5-5   # args after -- go to claude
 
-- **Every message is a clean session.** It goes through the same path as a
-  turn here (`send` → one stateless `claude -p`), in one conversation named
-  "Ledger Agent" with `context_turns` 0. Recall still brings the brain's memory.
-  Everything asked there shows up in this tab, and in the graph.
-- **Thin by default**: one line to type, one status line that shows each tool as
-  it runs and then the answer's first line. **⌘E** (or ⤢) expands it to the whole
-  exchange above a taller box; drag the corner grip to resize.
-- Return asks, Shift-Return is a new line, **⌘.** stops a running reply, Esc
-  closes (and stops what it started).
-- Tools are on unless `--read-only`. The box is a tiny AppKit app
-  (`scripts/agent_panel.swift`), compiled on first use into
-  `<home>/LedgerAgent.app` (needs `xcode-select --install`).
+- **Thin by default** (720×250); **⌘E** or ⤢ expands it (960×660) and back.
+  The corner grip resizes whichever size is showing, and each size is
+  remembered on its own. The top-left corner stays put, and the box stays on
+  its screen.
+- ⌘C / ⌘V copy and paste, ⌘+ / ⌘− change the font, ⌘W or ✕ closes (and hangs
+  up claude). When claude exits (`/exit`), the box closes.
+- It is a tiny AppKit app (`scripts/agent_terminal.swift`) compiled together
+  with SwiftTerm's sources (a pinned commit, cloned once into `<home>/build/`)
+  into `<home>/LedgerAgentTerminal.app`. The first run builds it (~1-2 min,
+  needs `xcode-select --install`); `--build` only builds.
+- What you ask there is a normal Claude Code session, not an Agents-tab
+  conversation.
 
 ## Voice
 

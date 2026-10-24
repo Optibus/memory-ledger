@@ -457,7 +457,7 @@ class AgentCancel(Body):
 
 
 class AgentPanel(Body):
-    cwd: Text = T("The folder Claude runs in; empty is the memory-ledger repo.")
+    cwd: Text = T("The folder claude starts in; empty is the memory-ledger repo.")
 
 
 class AgentPlugin(Body):
