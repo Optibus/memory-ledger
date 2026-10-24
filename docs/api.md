@@ -248,6 +248,7 @@ since the dashboard lists tasks and a kind with none would be dead UI.
 | `/api/agent-retry` | `{id}` | runs a failed reply again with the conversation's current connector. **Starts a model call** |
 | `/api/agent-cancel` | `{id}` | stops a queued or running reply: it fails at once as cancelled (Retry runs it again). A Claude session is killed; an Ollama chat stops at its next round |
 | `/api/agent-plugin` | `{key, enabled}` | turns an installed plugin on or off in `~/.claude/settings.json` (`enabledPlugins`, which every Claude session reads); answers the new `/api/agent-commands` payload |
+| `/api/agent-panel` | `{cwd?}` | opens the Ledger Agent floating terminal box on this Mac (macOS only), detached from the server, running the `claude` CLI in `cwd` (default: the repo). The first open builds it (`building: true`). No model call until you ask |
 | `/api/voice-config` | `{stt_language?, stt_auto?, tts_language?, tts_auto?, translate?, translate_target?, tts_enabled?, tts_background?, silence_s?, tts_voices?, verbosity?}` | merges a validated patch into `<home>/voice.json` |
 | `/api/voice-translate` | `{text, target?}` | one block translated (a model call); skipped when already in the target |
 | `/api/voice-speak` | `{text, language?, voice?}` | the block as a WAV; open on `--no-write` too |

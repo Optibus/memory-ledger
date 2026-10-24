@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse
 
 import _platform
 import agent_commands
+import agent_panel
 import agents
 import b2b
 import custom_trigger
@@ -840,6 +841,14 @@ def agent_retry(data: m.AgentRetry = body(m.AgentRetry)):
                          "session is killed; an Ollama chat stops at its next round.")
 def agent_cancel(data: m.AgentCancel = body(m.AgentCancel)):
     return reply(agents.cancel(agents.db(), clip(data.id, 80)))
+
+
+@router.post("/agent-panel", tags=["agents"], summary="Open the Ledger Agent floating box",
+             description="Opens the floating terminal box on this Mac (macOS only), detached "
+                         "from the server, running the `claude` CLI in `cwd`. The first open "
+                         "builds it (`building: true`, ~1-2 min). No model call until you ask.")
+def agent_panel_open(data: m.AgentPanel = body(m.AgentPanel)):
+    return reply(agent_panel.launch(clip(data.cwd, 1000)))
 
 
 @router.post("/agent-plugin", tags=["agents"], summary="Turn an installed plugin on or off",
