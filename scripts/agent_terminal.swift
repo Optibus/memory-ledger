@@ -11,9 +11,9 @@
 //   the person's own). When it exits, the box closes. Closing the box hangs it up.
 //
 // Two sizes, each remembered on its own: thin (the default) and expanded. ⌘E (or ⤢)
-// switches; dragging the corner grip resizes whichever size is showing, and that is the
-// size it comes back to. The top-left corner stays put on every switch, and the window
-// is kept on its screen. All placement is computed in one place, relayout(), from the
+// switches; dragging any edge or corner resizes whichever size is showing, and that is
+// the size it comes back to. The top-left corner stays put on every switch, the window
+// is kept on its screen, and sizes, mode and position survive a relaunch. All placement is computed in one place, relayout(), from the
 // card's bounds — nothing depends on autoresizing masks surviving a big shrink.
 import AppKit
 
@@ -39,20 +39,10 @@ final class DragView: NSView {
     override func mouseDown(with event: NSEvent) { window?.performDrag(with: event) }
 }
 
+// The three-line hint in the bottom-right corner. Drawing only: the corner's EdgeHandle,
+// on top of it, does the resizing.
 final class GripView: NSView {
-    var onResize: ((NSSize) -> Void)?
-    private var start: NSPoint = .zero
-    private var startFrame: NSRect = .zero
-    override func resetCursorRects() { addCursorRect(bounds, cursor: .crosshair) }
-    override func mouseDown(with event: NSEvent) {
-        start = NSEvent.mouseLocation
-        startFrame = window?.frame ?? .zero
-    }
-    override func mouseDragged(with event: NSEvent) {
-        let p = NSEvent.mouseLocation
-        onResize?(NSSize(width: startFrame.width + (p.x - start.x) - 2*GLOW,
-                         height: startFrame.height - (p.y - start.y) - 2*GLOW))
-    }
+    override func hitTest(_ p: NSPoint) -> NSView? { nil }
     override func draw(_ r: NSRect) {
         NSColor(white: 1, alpha: 0.5).setStroke()
         for i in 0..<3 {
@@ -62,6 +52,51 @@ final class GripView: NSView {
             p.lineWidth = 1.2; p.stroke()
         }
     }
+}
+
+struct Edges: OptionSet {
+    let rawValue: Int
+    static let left = Edges(rawValue: 1), right = Edges(rawValue: 2)
+    static let top = Edges(rawValue: 4), bottom = Edges(rawValue: 8)
+}
+
+// An invisible strip along one edge (or a square on one corner) that resizes the window
+// from there. It paints at 2% alpha, because a fully clear pixel of a non-opaque window
+// lets the click through to whatever is behind it.
+final class EdgeHandle: NSView {
+    let edges: Edges
+    var onDrag: ((Edges, NSRect, NSPoint, NSPoint) -> Void)?
+    var onEnd: (() -> Void)?
+    private var startMouse: NSPoint = .zero
+    private var startFrame: NSRect = .zero
+    init(_ e: Edges) {
+        edges = e
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor(white: 0, alpha: 0.02).cgColor
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    var cursor: NSCursor {
+        let pos: NSCursor.FrameResizePosition
+        switch edges {
+        case [.top, .left]: pos = .topLeft
+        case [.top, .right]: pos = .topRight
+        case [.bottom, .left]: pos = .bottomLeft
+        case [.bottom, .right]: pos = .bottomRight
+        case .left: pos = .left
+        case .right: pos = .right
+        case .top: pos = .top
+        default: pos = .bottom
+        }
+        return NSCursor.frameResize(position: pos, directions: .all)
+    }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: cursor) }
+    override func mouseDown(with event: NSEvent) {
+        startMouse = NSEvent.mouseLocation
+        startFrame = window?.frame ?? .zero
+    }
+    override func mouseDragged(with event: NSEvent) { onDrag?(edges, startFrame, startMouse, NSEvent.mouseLocation) }
+    override func mouseUp(with event: NSEvent) { onEnd?() }
 }
 
 final class RoundButton: NSView {
@@ -111,6 +146,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, LocalProcess
     var well: NSView!
     var term: LocalProcessTerminalView!
     var grip: GripView!
+    var handles: [EdgeHandle] = []
+    let defaults = UserDefaults.standard
+    let selfTesting = ProcessInfo.processInfo.environment["LEDGER_AGENT_SELFTEST"] != nil
 
     var expanded = false
     var thinSize = THIN
@@ -204,9 +242,18 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, LocalProcess
         well.addSubview(term)
 
         grip = GripView()
-        grip.onResize = { [weak self] s in self?.resizeTo(s) }
         card.addSubview(grip)
 
+        // Last, so they sit on top of everything at the window's rim.
+        for e: Edges in [.left, .right, .top, .bottom, [.top, .left], [.top, .right], [.bottom, .left], [.bottom, .right]] {
+            let h = EdgeHandle(e)
+            h.onDrag = { [weak self] e, f, p0, p in self?.dragResize(e, from: f, mouse0: p0, mouse: p) }
+            h.onEnd = { [weak self] in self?.save() }
+            content.addSubview(h)
+            handles.append(h)
+        }
+
+        restore()
         relayout()
 
         // The person's own environment (PATH included), plus what a terminal advertises.
@@ -277,6 +324,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, LocalProcess
         win.setFrame(target, display: true, animate: !reduceMotion)
         switching = false
         relayout()
+        save()
         win.makeFirstResponder(term)
     }
 
@@ -284,7 +332,66 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, LocalProcess
         let c = clampCard(card)
         if expanded { bigSize = c } else { thinSize = c }
         win.setFrame(frameKeepingTopLeft(c), display: true)
+        save()
     }
+
+    // A drag on `e` from window frame `f`: the dragged edges follow the mouse, the others
+    // stay. A moving edge stops at the screen's edge, and at the minimum size.
+    func dragResize(_ e: Edges, from f: NSRect, mouse0: NSPoint, mouse: NSPoint) {
+        let dx = mouse.x - mouse0.x, dy = mouse.y - mouse0.y
+        var minX = f.minX, maxX = f.maxX, minY = f.minY, maxY = f.maxY
+        if e.contains(.left) { minX += dx }
+        if e.contains(.right) { maxX += dx }
+        if e.contains(.bottom) { minY += dy }
+        if e.contains(.top) { maxY += dy }
+        if let vis = (win.screen ?? NSScreen.main)?.visibleFrame {
+            if e.contains(.left) { minX = max(minX, vis.minX - GLOW) }
+            if e.contains(.right) { maxX = min(maxX, vis.maxX + GLOW) }
+            if e.contains(.bottom) { minY = max(minY, vis.minY - GLOW) }
+            if e.contains(.top) { maxY = min(maxY, vis.maxY + GLOW) }
+        }
+        let minW = MIN_CARD.width + 2*GLOW, minH = MIN_CARD.height + 2*GLOW
+        if maxX - minX < minW { if e.contains(.left) { minX = maxX - minW } else { maxX = minX + minW } }
+        if maxY - minY < minH { if e.contains(.bottom) { minY = maxY - minH } else { maxY = minY + minH } }
+        win.setFrame(NSRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY), display: true)
+        let c = NSSize(width: win.frame.width - 2*GLOW, height: win.frame.height - 2*GLOW)
+        if expanded { bigSize = c } else { thinSize = c }
+    }
+
+    // ------------------------------------------------------------ remembered between launches
+    func save() {
+        if selfTesting { return }
+        defaults.set([thinSize.width, thinSize.height], forKey: "thin")
+        defaults.set([bigSize.width, bigSize.height], forKey: "big")
+        defaults.set(expanded, forKey: "expanded")
+        defaults.set([win.frame.minX, win.frame.maxY], forKey: "topLeft")
+    }
+
+    func restore() {
+        if selfTesting { return }
+        func size(_ k: String) -> NSSize? {
+            guard let a = defaults.array(forKey: k) as? [Double], a.count == 2 else { return nil }
+            return clampCard(NSSize(width: a[0], height: a[1]))
+        }
+        if let t = size("thin") { thinSize = t }
+        if let b = size("big") { bigSize = b }
+        expanded = defaults.bool(forKey: "expanded")
+        expandButton.glyph.stringValue = expanded ? "\u{2921}" : "\u{2922}"
+        expandButton.toolTip = expanded ? "Shrink (⌘E)" : "Expand (⌘E)"
+        let s = windowSize(expanded ? bigSize : thinSize)
+        var f = NSRect(x: win.frame.minX, y: win.frame.maxY - s.height, width: s.width, height: s.height)
+        if let tl = defaults.array(forKey: "topLeft") as? [Double], tl.count == 2 {
+            f.origin = NSPoint(x: tl[0], y: tl[1] - s.height)
+        }
+        // A screen that is gone (an unplugged monitor) must not strand the box off-screen.
+        if !NSScreen.screens.contains(where: { $0.visibleFrame.intersects(f) }), let main = NSScreen.main {
+            f.origin = NSPoint(x: main.visibleFrame.midX - s.width/2, y: main.visibleFrame.midY - s.height/2)
+        }
+        win.setFrame(onScreen(f), display: false)
+        save()
+    }
+
+    func windowDidMove(_ n: Notification) { if !switching { save() } }
 
     func windowDidResize(_ n: Notification) { relayout() }
     func windowDidChangeScreen(_ n: Notification) {
@@ -314,6 +421,22 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, LocalProcess
         term.frame = well.bounds.insetBy(dx: 6, dy: 4)
         grip.frame = NSRect(x: W - 16, y: 2, width: 14, height: 14)
         grip.needsDisplay = true
+        // Edge strips: the glow margin plus a few points into the card; corners a bit bigger.
+        let WW = content.bounds.width, WH = content.bounds.height
+        let t = GLOW + 5, k = GLOW + 14
+        for h in handles {
+            switch h.edges {
+            case .left: h.frame = NSRect(x: 0, y: k, width: t, height: WH - 2*k)
+            case .right: h.frame = NSRect(x: WW - t, y: k, width: t, height: WH - 2*k)
+            case .bottom: h.frame = NSRect(x: k, y: 0, width: WW - 2*k, height: t)
+            case .top: h.frame = NSRect(x: k, y: WH - t, width: WW - 2*k, height: t)
+            case [.top, .left]: h.frame = NSRect(x: 0, y: WH - k, width: k, height: k)
+            case [.top, .right]: h.frame = NSRect(x: WW - k, y: WH - k, width: k, height: k)
+            case [.bottom, .left]: h.frame = NSRect(x: 0, y: 0, width: k, height: k)
+            default: h.frame = NSRect(x: WW - k, y: 0, width: k, height: k)
+            }
+            h.window?.invalidateCursorRects(for: h)
+        }
     }
 
     // ------------------------------------------------------------ the session
@@ -373,6 +496,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, LocalProcess
             ("resize-huge", { self.resizeTo(NSSize(width: 9000, height: 9000)) }),
             ("toggle", { self.toggle() }),
             ("toggle", { self.toggle() }),
+            ("shrink-and-centre-for-drags", { self.resizeTo(THIN); self.win.center() }),
+            ("drag-left-out-100", { self.drag(.left, -100, 0) }),
+            ("drag-top-down-500-stops-at-min", { self.drag(.top, 0, -500) }),
+            ("drag-bottom-right-out", { self.drag([.bottom, .right], 120, -150) }),
+            ("expand-after-drags", { self.setExpanded(true) }),
+            ("shrink-back-to-dragged-thin", { self.setExpanded(false) }),
         ]
         func next() {
             guard !steps.isEmpty else { finish(); return }
@@ -381,6 +510,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, LocalProcess
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { line(name); next() }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { next() }
+    }
+
+    func drag(_ e: Edges, _ dx: CGFloat, _ dy: CGFloat) {
+        let p0 = NSPoint(x: 500, y: 500)
+        dragResize(e, from: win.frame, mouse0: p0, mouse: NSPoint(x: p0.x + dx, y: p0.y + dy))
     }
 }
 

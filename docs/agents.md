@@ -281,9 +281,10 @@ pop-out button next to **＋ New** (Claude then starts in this repo):
     python3 scripts/agent_panel.py -- --model claude-opus-5-5   # args after -- go to claude
 
 - **Thin by default** (720×250); **⌘E** or ⤢ expands it (960×660) and back.
-  The corner grip resizes whichever size is showing, and each size is
-  remembered on its own. The top-left corner stays put, and the box stays on
-  its screen.
+  Drag any edge or corner to resize whichever size is showing; each size is
+  remembered on its own (minimum 460×170). The top-left corner stays put on a
+  switch, and the box stays on its screen. Sizes, mode and position survive a
+  relaunch; a position on a monitor that is gone falls back to the main screen.
 - ⌘C / ⌘V copy and paste, ⌘+ / ⌘− change the font, ⌘W or ✕ closes (and hangs
   up claude). When claude exits (`/exit`), the box closes.
 - It is a tiny AppKit app (`scripts/agent_terminal.swift`) compiled together
