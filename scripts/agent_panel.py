@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Ledger Agent: a floating terminal box, in front of whatever you are doing,
-running the `claude` CLI (docs/agents.md, "Ledger Agent").
+running the `claude` CLI (docs/agents.md, "Ledger Agent"). Its title follows
+the brain's name: a brain called Dora opens "Dora agent" (`agent_name()`).
 
 It is a real terminal, so it behaves like Claude Code anywhere: Ctrl-C stops a
 reply, Esc interrupts, `/model`, `/clear` (a clean session), `/resume`, slash
@@ -121,7 +122,7 @@ def panel_binary() -> tuple[Path | None, str]:
         work.mkdir(parents=True)
         shutil.copy(SRC, work / "main.swift")       # top-level code must live in main.swift
         (work / "BuildInfo.swift").write_text(BUILD_INFO, encoding="utf-8")
-        _say("Building the Ledger Agent box (first run, ~1-2 min)…")
+        _say(f"Building the {agent_name()} box (first run, ~1-2 min)…")
         tmp = work / APP_NAME
         r = _run(["swiftc", "-O", "-module-name", APP_NAME, *map(str, sources),
                   str(work / "main.swift"), str(work / "BuildInfo.swift"), "-o", str(tmp)])
@@ -154,18 +155,25 @@ def with_default_model(claude_args: list[str]) -> list[str]:
     return ["--model", DEFAULT_MODEL, *claude_args]
 
 
+def agent_name() -> str:
+    """What the box is called: the brain's name (the `brain_name` setting) plus
+    "agent", so a brain called Dora opens "Dora agent"."""
+    return f"{graph.brain_name()} agent"
+
+
 def subtitle(cwd: Path) -> str:
     home = str(Path.home())
     return "~" + str(cwd)[len(home):] if str(cwd).startswith(home) else str(cwd)
 
 
 def box_argv(exe: Path, cwd: Path, claude_args: list[str]) -> list[str]:
-    return [str(exe), str(ICON) if ICON.exists() else "", subtitle(cwd), str(cwd), claude_command(claude_args)]
+    return [str(exe), str(ICON) if ICON.exists() else "", subtitle(cwd), str(cwd),
+            claude_command(claude_args), agent_name()]
 
 
 def run(cwd: Path, claude_args: list[str]) -> int:
     if sys.platform != "darwin":
-        _say("The Ledger Agent box needs macOS.")
+        _say(f"The {agent_name()} box needs macOS.")
         return 1
     exe, err = panel_binary()
     if exe is None:
@@ -182,7 +190,7 @@ def launch(cwd: str = "") -> dict[str, Any]:
     """Open the box from the brain UI, detached: it outlives the tab, and the
     server never waits on it — not even on the first build."""
     if sys.platform != "darwin":
-        return {"ok": False, "error": "the Ledger Agent box needs macOS"}
+        return {"ok": False, "error": f"the {agent_name()} box needs macOS"}
     folder = Path(cwd).expanduser() if cwd else HERE.parent
     if not folder.is_dir():
         return {"ok": False, "error": f"no folder {folder}"}

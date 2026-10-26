@@ -6,7 +6,7 @@
 // with SwiftTerm's sources (a pinned tag, cloned once into <home>/build/) — this file is
 // the app's main.swift, so SwiftTerm is the same module and needs no import.
 //
-//   argv: <icon path> <subtitle> <folder> <shell command>
+//   argv: <icon path> <subtitle> <folder> <shell command> <title>
 //   The command runs as `/bin/zsh -lc <command>` in <folder> (a login shell, so PATH is
 //   the person's own). When it exits, the box closes. Closing the box hangs it up.
 //
@@ -162,6 +162,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, LocalProcess
         let subtitle = args.count > 2 ? args[2] : ""
         let folder = args.count > 3 && !args[3].isEmpty ? args[3] : FileManager.default.currentDirectoryPath
         let command = args.count > 4 && !args[4].isEmpty ? args[4] : "claude"
+        let titleText = args.count > 5 && !args[5].isEmpty ? args[5] : "Ledger Agent"
 
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let size = windowSize(THIN)
@@ -209,7 +210,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, LocalProcess
             header.addSubview(iv)
             icon = iv
         }
-        title = label("Ledger Agent", size: 13, weight: .semibold)
+        title = label(titleText, size: 13, weight: .semibold)
         header.addSubview(title)
         sub = label(subtitle, size: 11.5, weight: .regular)
         sub.textColor = NSColor(white: 1, alpha: 0.72)

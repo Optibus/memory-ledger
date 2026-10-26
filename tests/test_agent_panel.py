@@ -39,6 +39,10 @@ class TestCommand:
         assert argv[0] == "/x/box" and argv[3] == str(tmp_path)
         assert argv[4] == agent_panel.claude_command(["--continue"])
 
+    def test_the_title_follows_the_brain_name(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(agent_panel.graph, "brain_name", lambda: "Dora")
+        assert agent_panel.box_argv(Path("/x/box"), tmp_path, [])[5] == "Dora agent"
+
     def test_it_opens_on_sonnet_by_default(self):
         assert agent_panel.with_default_model([]) == ["--model", "sonnet"]
         assert agent_panel.with_default_model(["--continue"]) == ["--model", "sonnet", "--continue"]

@@ -60,7 +60,8 @@ import "./AgentsSection.css";
  * between turns is free: the next reply is written by whichever is picked.
  */
 export function AgentsSection() {
-  const { writable } = useMeta();
+  const { writable, meta } = useMeta();
+  const agentName = `${meta?.brain_name ?? "Ledger"} agent`;
   const [params, setParams] = useSearchParams();
   const selected = params.get("c") ?? "";
   const [q, setQ] = useState("");
@@ -110,8 +111,8 @@ export function AgentsSection() {
             <Button
               size="sm"
               onClick={() => void api.openAgentPanel()}
-              title="Open the Ledger Agent: a floating terminal running Claude Code (the first open builds it, ~1-2 min)"
-              aria-label="pop out the ledger agent"
+              title={`Open the ${agentName}: a floating terminal running Claude Code (the first open builds it, ~1-2 min)`}
+              aria-label={`pop out the ${agentName}`}
               disabled={!writable}
             >
               <Icon name="external" />
