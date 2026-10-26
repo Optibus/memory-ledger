@@ -32,6 +32,20 @@ class TestCommand:
         argv = agent_panel.box_argv(Path("/x/box"), tmp_path, ["--continue"])
         assert argv[0] == "/x/box" and argv[3:] == [str(tmp_path), "exec claude --continue"]
 
+    def test_it_opens_on_sonnet_by_default(self):
+        assert agent_panel.with_default_model([]) == ["--model", "sonnet"]
+        assert agent_panel.with_default_model(["--continue"]) == ["--model", "sonnet", "--continue"]
+
+    def test_a_chosen_model_wins(self):
+        for args in (["--model", "claude-opus-5-5"], ["--continue", "--model=opus"]):
+            assert agent_panel.with_default_model(args) == args
+
+    def test_the_cli_passes_sonnet_to_the_box(self, tmp_path, monkeypatch):
+        seen = {}
+        monkeypatch.setattr(agent_panel, "run", lambda cwd, args: seen.update(args=args) or 0)
+        assert agent_panel.main(["--cwd", str(tmp_path)]) == 0
+        assert seen["args"] == ["--model", "sonnet"]
+
     def test_home_is_shortened_in_the_subtitle(self):
         assert agent_panel.subtitle(Path.home() / "dev" / "x") == "~/dev/x"
 

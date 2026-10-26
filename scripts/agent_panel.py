@@ -5,7 +5,9 @@ running the `claude` CLI (docs/agents.md, "Ledger Agent").
 It is a real terminal, so it behaves like Claude Code anywhere: Ctrl-C stops a
 reply, Esc interrupts, `/model`, `/clear` (a clean session), `/resume`, slash
 commands and permission prompts all work. Claude starts in the folder the box was
-opened from (or `--cwd`); anything after `--` goes to `claude` as is.
+opened from (or `--cwd`); anything after `--` goes to `claude` as is. It always
+opens on Sonnet (`--model sonnet`, the same as typing `/model sonnet`) unless
+those arguments pick a model themselves.
 
 The box is a tiny AppKit app (agent_terminal.swift) compiled together with
 SwiftTerm's sources — a pinned commit, cloned once — into
@@ -35,6 +37,7 @@ HERE = Path(__file__).resolve().parent
 SRC = HERE / "agent_terminal.swift"
 ICON = HERE.parent / "frontend" / "public" / "favicon.svg"
 APP_NAME = "LedgerAgentTerminal"
+DEFAULT_MODEL = "sonnet"   # what the box opens on unless `-- --model …` says otherwise
 SWIFTTERM_URL = "https://github.com/migueldeicaza/SwiftTerm"
 SWIFTTERM_TAG = "v1.20.0"
 SWIFTTERM_COMMIT = "5d14406844143538cd8f8851d2d8a67c1fe443e5"   # what the tag pointed at when pinned
@@ -137,6 +140,13 @@ def claude_command(claude_args: list[str]) -> str:
     return " ".join(["exec", "claude", *map(shlex.quote, claude_args)])
 
 
+def with_default_model(claude_args: list[str]) -> list[str]:
+    """Open on DEFAULT_MODEL, unless the arguments already choose a model."""
+    if any(a == "--model" or a.startswith("--model=") for a in claude_args):
+        return claude_args
+    return ["--model", DEFAULT_MODEL, *claude_args]
+
+
 def subtitle(cwd: Path) -> str:
     home = str(Path.home())
     return "~" + str(cwd)[len(home):] if str(cwd).startswith(home) else str(cwd)
@@ -194,7 +204,7 @@ def main(argv: list[str] | None = None) -> int:
     if not cwd.is_dir():
         _say(f"No folder {cwd}")
         return 1
-    return run(cwd, rest)
+    return run(cwd, with_default_model(rest))
 
 
 if __name__ == "__main__":

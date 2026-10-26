@@ -274,7 +274,9 @@ same idea as Dora's note, but a real terminal, so Claude Code works exactly as i
 does anywhere: **Ctrl-C** stops a reply, **Esc** interrupts, `/model`, `/clear`
 (a clean session), `/resume` and every slash command and permission prompt.
 Open it from a terminal, in the folder Claude should work in, or with the
-pop-out button next to **＋ New** (Claude then starts in this repo):
+pop-out button next to **＋ New** (Claude then starts in this repo). It always
+opens on **Sonnet** (`claude --model sonnet`, the same as `/model sonnet`); pass
+your own `--model` after `--` to start on another one:
 
     python3 scripts/agent_panel.py                     # claude, in this folder
     python3 scripts/agent_panel.py --cwd ~/dev/x       # ...or in another one
