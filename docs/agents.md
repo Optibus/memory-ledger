@@ -291,6 +291,10 @@ keeps its full status line:
   remembered on its own (minimum 460×170). The top-left corner stays put on a
   switch, and the box stays on its screen. Sizes, mode and position survive a
   relaunch; a position on a monitor that is gone falls back to the main screen.
+- **Its icon is the brain's.** The header shows the icon set in Settings >
+  Preferences (the `agent_icon` setting, a file in `<home>`), the same one the
+  browser tab and sidebar show; with none set it shows `frontend/public/favicon.svg`.
+  `agent_panel.py` hands the box that file's path.
 - ⌘C / ⌘V copy and paste, ⌘+ / ⌘− change the font, ⌘W or ✕ closes (and hangs
   up claude). When claude exits (`/exit`), the box closes.
 - It is a tiny AppKit app (`scripts/agent_terminal.swift`) compiled together
