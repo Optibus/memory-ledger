@@ -104,6 +104,7 @@ class TestLaunch:
     def test_it_starts_detached_and_says_it_is_building(self, brain_home, monkeypatch):
         seen = {}
         monkeypatch.setattr(agent_panel.sys, "platform", "darwin")
+        monkeypatch.setattr(agent_panel, "running_box", lambda: None)
         monkeypatch.setattr(agent_panel.subprocess, "Popen", lambda argv, **kw: seen.update(argv=argv, **kw))
         res = agent_panel.launch(str(brain_home))
         assert res == {"ok": True, "cwd": str(brain_home), "building": True}
@@ -111,3 +112,39 @@ class TestLaunch:
 
     def test_the_cli_refuses_a_missing_folder(self, brain_home):
         assert agent_panel.main(["--cwd", str(brain_home / "nope")]) == 1
+
+
+class TestOneBox:
+    """Opening the box while it is open never starts a second one."""
+
+    BOX = "/Users/x/.memory-ledger/LedgerAgentTerminal.app/Contents/MacOS/LedgerAgentTerminal"
+
+    def _ps(self, lines):
+        return lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, "\n".join(lines) + "\n", "")
+
+    def test_the_open_box_is_found_by_its_bundle_path(self, monkeypatch):
+        # A build of the same app, and an unrelated process, are not the box.
+        monkeypatch.setattr(agent_panel, "_run", self._ps([
+            "  101 swift-driver -module-name LedgerAgentTerminal main.swift",
+            "  202 " + self.BOX + " /icon.svg ~/dev/x /Users/x/dev/x exec env claude",
+            "  303 /bin/zsh -l",
+        ]))
+        assert agent_panel.running_box() == 202
+
+    def test_no_box_means_none(self, monkeypatch):
+        monkeypatch.setattr(agent_panel, "_run", self._ps(["  101 swift-driver -module-name LedgerAgentTerminal"]))
+        assert agent_panel.running_box() is None
+
+    def test_launch_says_already_open_and_starts_nothing(self, brain_home, monkeypatch):
+        monkeypatch.setattr(agent_panel.sys, "platform", "darwin")
+        monkeypatch.setattr(agent_panel, "running_box", lambda: 202)
+        monkeypatch.setattr(agent_panel.subprocess, "Popen", lambda *a, **kw: pytest.fail("a second box was started"))
+        assert agent_panel.launch(str(brain_home)) == {
+            "ok": True, "cwd": str(brain_home), "building": False, "already_open": True}
+
+    def test_the_cli_says_already_open_and_exits_0(self, brain_home, monkeypatch, capsys):
+        monkeypatch.setattr(agent_panel.sys, "platform", "darwin")
+        monkeypatch.setattr(agent_panel, "running_box", lambda: 202)
+        monkeypatch.setattr(agent_panel, "panel_binary", lambda: pytest.fail("the box was built or opened"))
+        assert agent_panel.main(["--cwd", str(brain_home)]) == 0
+        assert "already open" in capsys.readouterr().err

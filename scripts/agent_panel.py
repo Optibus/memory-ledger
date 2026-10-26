@@ -3,6 +3,7 @@
 running the `claude` CLI (docs/agents.md, "Ledger Agent"). Its title follows
 the brain's name: a brain called Dora opens "Dora agent" (`agent_name()`).
 
+One box at a time: opening it while it is open says so and does nothing.
 It is a real terminal, so it behaves like Claude Code anywhere: Ctrl-C stops a
 reply, Esc interrupts, `/model`, `/clear` (a clean session), `/resume`, slash
 commands and permission prompts all work. Claude starts in the folder the box was
@@ -178,10 +179,26 @@ def box_argv(exe: Path, cwd: Path, claude_args: list[str]) -> list[str]:
             claude_command(claude_args), agent_name()]
 
 
+def running_box() -> int | None:
+    """The pid of an open box, or None. Read from `ps`, not `pgrep -f`: on macOS
+    pgrep cannot read this app's arguments and answers "not running" while the
+    box is right there, which is how a second box used to open on every call."""
+    needle = f"{APP_NAME}.app/Contents/MacOS/{APP_NAME}"
+    r = _run(["ps", "-axo", "pid=,command="])
+    for line in r.stdout.splitlines():
+        pid, _, cmd = line.strip().partition(" ")
+        if cmd.split(" ", 1)[0].endswith(needle) and pid.isdigit():   # the executable, not its arguments
+            return int(pid)
+    return None
+
+
 def run(cwd: Path, claude_args: list[str]) -> int:
     if sys.platform != "darwin":
         _say(f"The {agent_name()} box needs macOS.")
         return 1
+    if running_box():
+        _say(f"The {agent_name()} box is already open.")
+        return 0
     exe, err = panel_binary()
     if exe is None:
         _say(err)
@@ -201,6 +218,8 @@ def launch(cwd: str = "") -> dict[str, Any]:
     folder = Path(cwd).expanduser() if cwd else HERE.parent
     if not folder.is_dir():
         return {"ok": False, "error": f"no folder {folder}"}
+    if running_box():
+        return {"ok": True, "cwd": str(folder), "building": False, "already_open": True}
     graph.home_dir().mkdir(parents=True, exist_ok=True)
     log = graph.home_dir() / "agent-terminal.log"
     with open(log, "a", encoding="utf-8") as out:
