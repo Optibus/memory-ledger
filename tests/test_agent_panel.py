@@ -22,15 +22,22 @@ import agent_panel
 
 class TestCommand:
     def test_plain_claude(self):
-        assert agent_panel.claude_command([]) == "exec claude"
+        assert shlex.split(agent_panel.claude_command([]))[-1] == "claude"
+
+    def test_the_box_hides_the_ledger_and_dora_status_segments(self):
+        words = shlex.split(agent_panel.claude_command([]))
+        assert words[:2] == ["exec", "env"]
+        assert {"LEDGER_AGENT=1", "SHOW_LEDGER=0", "SHOW_DORA=0"} <= set(words[2:words.index("claude")])
 
     def test_arguments_reach_claude_quoted(self):
         cmd = agent_panel.claude_command(["--model", "claude-opus-5-5", "-p", "it's; rm -rf ~"])
-        assert shlex.split(cmd) == ["exec", "claude", "--model", "claude-opus-5-5", "-p", "it's; rm -rf ~"]
+        words = shlex.split(cmd)
+        assert words[words.index("claude") + 1:] == ["--model", "claude-opus-5-5", "-p", "it's; rm -rf ~"]
 
     def test_the_box_gets_icon_subtitle_folder_command(self, tmp_path):
         argv = agent_panel.box_argv(Path("/x/box"), tmp_path, ["--continue"])
-        assert argv[0] == "/x/box" and argv[3:] == [str(tmp_path), "exec claude --continue"]
+        assert argv[0] == "/x/box" and argv[3] == str(tmp_path)
+        assert argv[4] == agent_panel.claude_command(["--continue"])
 
     def test_it_opens_on_sonnet_by_default(self):
         assert agent_panel.with_default_model([]) == ["--model", "sonnet"]

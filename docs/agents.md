@@ -276,7 +276,11 @@ does anywhere: **Ctrl-C** stops a reply, **Esc** interrupts, `/model`, `/clear`
 Open it from a terminal, in the folder Claude should work in, or with the
 pop-out button next to **＋ New** (Claude then starts in this repo). It always
 opens on **Sonnet** (`claude --model sonnet`, the same as `/model sonnet`); pass
-your own `--model` after `--` to start on another one:
+your own `--model` after `--` to start on another one. Its status line leaves
+out the 🧬 ledger and 🐬 Dora segments: the box starts claude with
+`SHOW_LEDGER=0 SHOW_DORA=0` (read by the shared statusline script) and
+`LEDGER_AGENT=1` (for any other status line to check). Every other terminal
+keeps its full status line:
 
     python3 scripts/agent_panel.py                     # claude, in this folder
     python3 scripts/agent_panel.py --cwd ~/dev/x       # ...or in another one

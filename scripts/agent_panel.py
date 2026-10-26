@@ -135,9 +135,16 @@ def panel_binary() -> tuple[Path | None, str]:
 
 
 # ---------------------------------------------------------------- running
+# Only the box's claude sees these, so only its status line changes: the shared
+# statusline script drops its 🧬 ledger and 🐬 Dora segments, and any other
+# status line can check LEDGER_AGENT=1 to do the same.
+BOX_ENV = {"LEDGER_AGENT": "1", "SHOW_LEDGER": "0", "SHOW_DORA": "0"}
+
+
 def claude_command(claude_args: list[str]) -> str:
-    """What the box's login shell runs: `exec claude …`, every argument quoted."""
-    return " ".join(["exec", "claude", *map(shlex.quote, claude_args)])
+    """What the box's login shell runs: `exec env … claude …`, every argument quoted."""
+    env = [f"{k}={v}" for k, v in BOX_ENV.items()]
+    return " ".join(["exec", "env", *env, "claude", *map(shlex.quote, claude_args)])
 
 
 def with_default_model(claude_args: list[str]) -> list[str]:
