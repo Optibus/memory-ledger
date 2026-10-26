@@ -373,6 +373,52 @@ def save_settings(data: m.Settings = body(m.Settings)):
     return reply(payloads.settings_payload())
 
 
+def _icon_type(raw: bytes) -> str:
+    """The extension this image really is, from its bytes (never from a name the
+    browser sent), or "" when it is none of the four we take."""
+    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if raw.startswith(b"\xff\xd8\xff"):
+        return "jpg"
+    if raw.startswith(b"\x00\x00\x01\x00"):
+        return "ico"
+    head = raw[:2000].lstrip(b"\xef\xbb\xbf \t\r\n").lower()
+    if (head.startswith(b"<?xml") or head.startswith(b"<svg")) and b"<svg" in raw[:2000].lower():
+        return "svg"
+    return ""
+
+
+@router.post("/agent-icon", tags=["settings"], summary="Set or reset the brain's icon",
+             description="Stores the image as `<home>/agent-icon.<ext>` and records it in "
+                         "the `agent_icon` setting. The type is read from the bytes. An empty "
+                         "`data` removes it, back to the default favicon.")
+def save_agent_icon(data: m.AgentIcon = body(m.AgentIcon)):
+    if not data.data:
+        for old in graph.home_dir().glob("agent-icon.*"):
+            if old.suffix[1:] in graph.AGENT_ICON_TYPES:
+                old.unlink(missing_ok=True)
+        graph.save_settings({"agent_icon": ""})
+        return reply(payloads.settings_payload())
+    try:
+        raw = base64.b64decode(data.data, validate=True)
+    except (binascii.Error, ValueError):
+        return reply({"ok": False, "error": "the icon is not valid base64"})
+    if len(raw) > graph.AGENT_ICON_MAX_BYTES:
+        return reply({"ok": False, "error": f"the icon is over {graph.AGENT_ICON_MAX_BYTES // 1024} KB"})
+    ext = _icon_type(raw)
+    if not ext:
+        return reply({"ok": False, "error": "the icon must be a PNG, JPG, ICO or SVG image"})
+    if ext == "svg" and re.search(rb"<script|\son\w+\s*=|javascript:", raw, re.I):
+        return reply({"ok": False, "error": "an SVG icon may not contain scripts"})
+    name = f"agent-icon.{ext}"
+    for old in graph.home_dir().glob("agent-icon.*"):
+        if old.name != name and old.suffix[1:] in graph.AGENT_ICON_TYPES:
+            old.unlink(missing_ok=True)
+    (graph.home_dir() / name).write_bytes(raw)
+    graph.save_settings({"agent_icon": name})
+    return reply(payloads.settings_payload())
+
+
 @router.post("/neo4j-config", tags=["settings"], summary="Point the brain at a master",
              description="Writes `<home>/neo4j.json` mode 600 and probes it. A blank "
                          "password keeps the stored one; an empty url deletes the file "

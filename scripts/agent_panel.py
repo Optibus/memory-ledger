@@ -166,8 +166,15 @@ def subtitle(cwd: Path) -> str:
     return "~" + str(cwd)[len(home):] if str(cwd).startswith(home) else str(cwd)
 
 
+def icon_path() -> Path:
+    """The box's icon: the one uploaded in Settings (the `agent_icon` setting),
+    else the default favicon."""
+    return graph.agent_icon_path() or ICON
+
+
 def box_argv(exe: Path, cwd: Path, claude_args: list[str]) -> list[str]:
-    return [str(exe), str(ICON) if ICON.exists() else "", subtitle(cwd), str(cwd),
+    icon = icon_path()
+    return [str(exe), str(icon) if icon.exists() else "", subtitle(cwd), str(cwd),
             claude_command(claude_args), agent_name()]
 
 

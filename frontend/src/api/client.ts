@@ -216,6 +216,10 @@ export const api = {
   mergePerson: (canonical: string, duplicate: string) =>
     post("/api/merge-person", { canonical, duplicate }),
   addAlias: (id: string, alias: string) => post("/api/add-alias", { id, alias }),
+  /** The brain's icon; `v` busts the cache when a new one is uploaded. */
+  agentIconUrl: (v: number | string = 0) => `${BASE}/api/agent-icon${queryString({ v })}`,
+  /** `data` is the image, base64; an empty string resets to the default favicon. */
+  saveAgentIcon: (data: string) => post("/api/agent-icon", { data }),
   saveSettings: (body: Partial<import("./types").StoredSettings>) => post("/api/settings", body),
   saveNeo4j: (body: Record<string, unknown>) => post("/api/neo4j-config", body),
   testNeo4j: () => post("/api/neo4j-test", {}),

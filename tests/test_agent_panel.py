@@ -39,6 +39,23 @@ class TestCommand:
         assert argv[0] == "/x/box" and argv[3] == str(tmp_path)
         assert argv[4] == agent_panel.claude_command(["--continue"])
 
+    def test_the_box_gets_the_default_icon_when_none_is_set(self, brain_home, tmp_path):
+        assert agent_panel.box_argv(Path("/x/box"), tmp_path, [])[1] == str(agent_panel.ICON)
+
+    def test_the_box_gets_the_uploaded_icon_when_one_is_set(self, brain_home, tmp_path):
+        icon = brain_home / "agent-icon.png"
+        icon.write_bytes(b"\x89PNG")
+        agent_panel.graph.save_settings({"agent_icon": icon.name})
+        assert agent_panel.box_argv(Path("/x/box"), tmp_path, [])[1] == str(icon)
+
+    def test_a_missing_uploaded_icon_falls_back_to_the_default(self, brain_home, tmp_path):
+        agent_panel.graph.save_settings({"agent_icon": "agent-icon.png"})
+        assert agent_panel.box_argv(Path("/x/box"), tmp_path, [])[1] == str(agent_panel.ICON)
+
+    def test_a_setting_cannot_point_outside_the_brain_home(self, brain_home, tmp_path):
+        agent_panel.graph.save_settings({"agent_icon": "../../etc/x.png"})
+        assert agent_panel.icon_path() == agent_panel.ICON
+
     def test_the_title_follows_the_brain_name(self, tmp_path, monkeypatch):
         monkeypatch.setattr(agent_panel.graph, "brain_name", lambda: "Dora")
         assert agent_panel.box_argv(Path("/x/box"), tmp_path, [])[5] == "Dora agent"
