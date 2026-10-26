@@ -201,12 +201,14 @@ def launch(cwd: str = "") -> dict[str, Any]:
     folder = Path(cwd).expanduser() if cwd else HERE.parent
     if not folder.is_dir():
         return {"ok": False, "error": f"no folder {folder}"}
+    graph.home_dir().mkdir(parents=True, exist_ok=True)
     log = graph.home_dir() / "agent-terminal.log"
     with open(log, "a", encoding="utf-8") as out:
         subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--cwd", str(folder)],
                          stdin=subprocess.DEVNULL, stdout=out, stderr=out,
                          start_new_session=True, cwd=str(folder))
-    built = (app_dir() / "Contents" / "MacOS" / APP_NAME).exists()
+    exe = app_dir() / "Contents" / "MacOS" / APP_NAME
+    built = exe.exists() and exe.stat().st_mtime >= SRC.stat().st_mtime   # same test as panel_binary()
     return {"ok": True, "cwd": str(folder), "building": not built}
 
 
