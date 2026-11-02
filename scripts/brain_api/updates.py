@@ -22,9 +22,10 @@ import shutil
 import tempfile
 import threading
 import time
-import urllib.request
 import zipfile
 from pathlib import Path
+
+import _net
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 REPO = "gabriel-nori/memory-ledger"
@@ -54,13 +55,10 @@ def parse_version(v: str) -> tuple:
 
 
 def _get(url: str, limit: int = MAX_ZIP_BYTES) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": "memory-ledger-updater",
-                                               "Accept": "application/vnd.github+json"})
-    with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:
-        data = r.read(limit + 1)
-    if len(data) > limit:
-        raise ValueError(f"{url} is larger than {limit} bytes")
-    return data
+    # _net.get, not urlopen: a python.org Python on macOS has no CA bundle
+    return _net.get(url, timeout=TIMEOUT_S, limit=limit,
+                    headers={"User-Agent": "memory-ledger-updater",
+                             "Accept": "application/vnd.github+json"})
 
 
 def _release() -> dict:

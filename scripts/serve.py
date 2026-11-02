@@ -330,9 +330,7 @@ def _enter_server_env() -> None:
     py = server_python()
     if _in(venv_dir()):
         return
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os.execv(str(py), [str(py), str(Path(__file__).resolve()), *sys.argv[1:]])
+    _platform.reexec([str(py), str(Path(__file__).resolve()), *sys.argv[1:]])
 
 
 # ---------------------------------------------------------------------------
@@ -376,7 +374,7 @@ def _replies_running() -> bool:
         con = graph.connect()
         try:
             return con.execute("SELECT 1 FROM agent_msg WHERE status='running' "
-                               "AND role='agent' LIMIT 1").fetchone() is not None
+                               "AND role IN ('agent','subagent') LIMIT 1").fetchone() is not None
         finally:
             con.close()
     except Exception:
@@ -505,10 +503,7 @@ def main():
         print("\nstopped.")
         return
     os.environ[RESPAWN_ENV] = "1"
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()),
-                              *sys.argv[1:]])
+    _platform.reexec([sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]])
 
 
 if __name__ == "__main__":

@@ -56,6 +56,8 @@ class TestZip:
 class TestExtract:
     @pytest.mark.parametrize("name", ["../evil", "a/../../evil", "/abs", "C:/x", "a\\b", ""])
     def test_a_path_that_leaves_the_folder_is_refused_and_nothing_is_left(self, tmp_path, name):
+        if name == "a\\b" and os.sep == "\\":
+            pytest.skip("zipfile itself reads a backslash as a separator on Windows, so it is a plain a/b there")
         dest = tmp_path / "out"
         with pytest.raises(BadArchive):
             extract_zip(make_zip({"ok.txt": b"fine", name or "\x00": b"x"}), dest)
@@ -101,8 +103,18 @@ class TestExtract:
         with pytest.raises(BadArchive, match="not a zip"):
             extract_zip(b"not a zip at all", tmp_path / "out")
 
+    @pytest.mark.skipif(os.name == "nt", reason="Windows has no 0600: chmod only toggles read-only there")
     def test_files_are_private(self, tmp_path):
         out = tmp_path / "out"
         extract_zip(make_zip({"a.txt": b"x"}), out)
         assert stat.S_IMODE((out / "a.txt").stat().st_mode) == 0o600
         assert isinstance(out, Path)
+
+
+def test_the_zip_is_compressed_not_just_stored(tmp_path: Path) -> None:
+    big = tmp_path / "notes.txt"
+    big.write_bytes(b"the same line over and over\n" * 20_000)
+    blob, _ = zip_files([str(big)])
+    assert len(blob) < big.stat().st_size // 10
+    with zipfile.ZipFile(io.BytesIO(blob)) as z:
+        assert z.getinfo("notes.txt").compress_type == zipfile.ZIP_DEFLATED

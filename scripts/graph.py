@@ -4941,13 +4941,14 @@ HUB_FREE_DEGREE = 8
 # Associated rows scoring under this fraction of the top row are dropped.
 RECALL_TAIL_CUT = 0.15
 
-# Longest first. A stem is only taken when >= 4 chars remain, so short words and
+# Longest first, and a suffix that ends in another one ("ões" in "s", "oes" in
+# "es") must come BEFORE it, or it never matches. A stem is only taken when >= 4 chars remain, so short words and
 # acronyms are left alone. The stem feeds a PREFIX query (`"deploy"*`), so
 # `deploys`/`deploying`/`deployed` all land on `deploy…` — and it never has to
 # equal a real word, only to be a safe prefix of the inflections.
 _STEM_SUFFIXES = (
     "mente", "ções", "coes", "ção", "cao", "ando", "endo", "indo",
-    "ings", "ing", "ied", "ies", "ed", "es", "s", "ões", "oes", "ais", "eis", "is",
+    "ings", "ing", "ied", "ies", "ões", "oes", "ais", "eis", "ed", "es", "is", "s",
 )
 
 

@@ -17,6 +17,7 @@ import shutil
 import sys
 import tarfile
 import zipfile
+from pathlib import Path
 
 import _net
 import _platform
@@ -34,6 +35,32 @@ def _node_target() -> tuple[str, str, str]:
     if _platform.WINDOWS:
         return "win", arch, "zip"
     return ("darwin" if sys.platform == "darwin" else "linux"), arch, "tar.xz"
+
+
+_HAS_TAR_FILTER = hasattr(tarfile, "data_filter")
+
+
+def _extract_tar(t: tarfile.TarFile, dest: Path) -> None:
+    """`extractall(filter="data")` where the Python has it. Python 3.11.0-3
+    (which MIN_PY allows) predates `filter=` and raises TypeError, so there
+    the same refusals are made by hand: nothing outside `dest`, no device
+    nodes, and links only to somewhere inside `dest`."""
+    if _HAS_TAR_FILTER:
+        t.extractall(dest, filter="data")
+        return
+    root = dest.resolve()
+
+    def inside(p: Path) -> bool:
+        return p == root or root in p.parents
+
+    for m in t.getmembers():
+        if m.isdev() or not inside((root / m.name).resolve()):
+            raise tarfile.TarError(f"refusing to unpack {m.name!r}")
+        if m.islnk() and not inside((root / m.linkname).resolve()):
+            raise tarfile.TarError(f"refusing to unpack {m.name!r}: link leaves the folder")
+        if m.issym() and not inside((root / m.name).parent.joinpath(m.linkname).resolve()):
+            raise tarfile.TarError(f"refusing to unpack {m.name!r}: link leaves the folder")
+    t.extractall(dest)
 
 
 def portable_node() -> str:
@@ -65,7 +92,7 @@ def portable_node() -> str:
                     z.extractall(tmp)
             else:
                 with tarfile.open(archive) as t:
-                    t.extractall(tmp, filter="data")
+                    _extract_tar(t, tmp)
             archive.unlink()
             (tmp / name).rename(dest)
             shutil.rmtree(tmp, ignore_errors=True)

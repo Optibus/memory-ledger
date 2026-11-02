@@ -57,7 +57,11 @@ def zip_files(paths: list[str]) -> tuple[bytes, list[str]]:
         for p in files:
             name = _unique(p.name, names)
             names.append(name)
-            with p.open("rb") as src, z.open(zipfile.ZipInfo(name), "w") as dst:
+            # ZipInfo defaults to STORED, and z.open(info) honors that: without
+            # this the archive is as big as the files and never compresses.
+            info = zipfile.ZipInfo(name)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            with p.open("rb") as src, z.open(info, "w") as dst:
                 shutil.copyfileobj(src, dst, CHUNK)
             if buf.tell() > ARCHIVE_MAX:
                 raise BadArchive(f"the zip is over {ARCHIVE_MAX // (1024 * 1024)} MB; the "

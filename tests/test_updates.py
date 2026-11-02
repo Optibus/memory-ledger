@@ -107,3 +107,16 @@ def test_a_release_without_the_asset_is_refused(checkout):
     feed = checkout[1]
     feed["assets"] = False
     assert "no memory-ledger" in updates.apply()["error"]
+
+
+def test_the_release_is_fetched_through_net_so_a_missing_ca_bundle_is_handled(monkeypatch):
+    seen = {}
+
+    def fake_net_get(url, timeout=0, headers=None, limit=None):
+        seen.update(url=url, headers=headers, limit=limit)
+        return b"{}"
+
+    monkeypatch.setattr(updates._net, "get", fake_net_get)
+    assert updates._get(updates.API, 123) == b"{}"
+    assert seen["url"] == updates.API and seen["limit"] == 123
+    assert seen["headers"]["User-Agent"] == "memory-ledger-updater"

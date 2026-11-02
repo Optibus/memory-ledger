@@ -24,6 +24,9 @@ GRAPH_PY = ROOT / "scripts" / "graph.py"
 @pytest.mark.parametrize("word,stem", [
     ("deploys", "deploy"), ("deploying", "deploy"), ("deployed", "deploy"),
     ("configuração", "configura"), ("api", "api"), ("bus", "bus"),
+    # these suffixes sat behind "s"/"es" and never fired
+    ("configurações", "configura"), ("mensagens", "mensagen"), ("animais", "anim"),
+    ("papéis", "papé"), ("papeis", "pape"), ("analysis", "analys"),
 ])
 def test_stem(word, stem):
     assert graph._stem(word) == stem

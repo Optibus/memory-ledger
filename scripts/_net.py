@@ -46,15 +46,24 @@ def _contexts():
             yield ssl.create_default_context(cafile=path)
 
 
-def get(url: str, timeout: float = 120) -> bytes:
+def get(url: str, timeout: float = 120, headers: dict | None = None,
+        limit: int | None = None) -> bytes:
+    """The body of `url`. `limit` refuses anything larger (ValueError) rather
+    than reading it whole."""
     why = available()
     if why:
         raise OSError(why)
     last: Exception | None = None
     for ctx in _contexts():
         try:
-            with urllib.request.urlopen(url, timeout=timeout, context=ctx) as r:
-                return r.read()
+            req = urllib.request.Request(url, headers=headers or {})
+            with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
+                if limit is None:
+                    return r.read()
+                data = r.read(limit + 1)
+            if len(data) > limit:
+                raise ValueError(f"{url} is larger than {limit} bytes")
+            return data
         except urllib.error.URLError as e:
             if not isinstance(getattr(e, "reason", None), ssl.SSLError):
                 raise
