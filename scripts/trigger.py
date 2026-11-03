@@ -268,7 +268,7 @@ ALWAYS_ON = {("slack", "mention"), ("jira", "mention")}
 # The last two cost no model call.
 ACTIONS = ("claude", "http", "script")
 HTTP_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
-ACTION_DEFAULT = {"action": "claude",
+ACTION_DEFAULT = {"action": "claude", "agent": "",
                   "http": {"method": "POST", "url": "", "headers": {}, "body": ""},
                   "script": {"name": "", "args": []}}
 for _src, _cat in EVENTS.items():
@@ -1510,7 +1510,7 @@ def _action_of(row: dict) -> dict:
     h = row.get("http") if isinstance(row.get("http"), dict) else {}
     sc = row.get("script") if isinstance(row.get("script"), dict) else {}
     act = row.get("action") if row.get("action") in ACTIONS else "claude"
-    return {"action": act,
+    return {"action": act, "agent": str(row.get("agent") or "")[:80],
             "http": {"method": str(h.get("method") or "POST").upper(),
                      "url": str(h.get("url") or ""),
                      "headers": {str(k): str(v) for k, v in (h.get("headers") or {}).items()}
@@ -1526,6 +1526,8 @@ def _stamp(meta: dict, row: dict) -> dict:
     and its action, as they were when it fired."""
     meta["do"] = row.get("do", "")
     act = _action_of(row)
+    if act["action"] == "claude" and act["agent"]:
+        meta["agent"] = act["agent"]       # the connector to run on; none: the trigger's claude
     meta["action"] = {"type": act["action"], **({"http": act["http"]} if act["action"] == "http"
                                                else {"script": act["script"]}
                                                if act["action"] == "script" else {})}
@@ -1821,7 +1823,7 @@ def build_prompt(req: dict, cfg: dict) -> str:
              "b2b": ("none by default: this is a message from another brain, not a "
                      "conversation to post in. Answer it only if `instructions` say to, "
                      "and then only as a B2B message back: python3 "
-                     f"\"{Path(__file__).resolve().parent / 'b2b.py'}\" send --to "
+                     f"{_platform.shell_path(Path(__file__).resolve().parent / 'b2b.py')} send --to "
                      f"{req.get('requester_id') or '<peer id>'} --text \"<answer, then the "
                      "signature>\""),
              # Said out loud in a meeting: there is no thread to answer in.
@@ -1893,7 +1895,7 @@ MESSAGE>>>
 
 Open the permalink with your own {tools} to read the conversation
 around it before acting. Log every outward action against the request id:
-python3 "{Path(__file__).resolve()}" action --request {req['id']} --kind <kind> --target <url> --detail "<what>"
+python3 {_platform.shell_path(Path(__file__).resolve())} action --request {req['id']} --kind <kind> --target <url> --detail "<what>"
 
 Reply in the language the message above is written in, whatever language the
 rest of the conversation or this prompt is in. The signature line stays exactly
@@ -1905,7 +1907,7 @@ requester instead, with the permalink, and log it with --kind reply-dm.
 
 If the request breaks one of the brain's rules or guardrails, do not do it.
 Decline it instead, which records why and prints the notice to post:
-python3 "{Path(__file__).resolve()}" decline --request {req['id']} --rule <rule-id> --reason "<one short, non-sensitive line>"
+python3 {_platform.shell_path(Path(__file__).resolve())} decline --request {req['id']} --rule <rule-id> --reason "<one short, non-sensitive line>"
 Post its `notice`, in the message's language, then its `signature` exactly, as your
 only reply, and log it with --kind refusal-notice.
 """
@@ -1962,6 +1964,21 @@ def run_request(request_id: str, cfg: dict | None = None) -> dict:
         return run_http(con, req, act.get("http") or {}, cfg)
     if act.get("type") == "script":
         return run_script(con, req, act.get("script") or {}, cfg)
+    agent = (req.get("meta") or {}).get("agent") or ""
+    if agent:
+        conn, err = agent_connector(agent)
+        if err:
+            t0 = _started(con, req, f"agent {agent}")
+            if t0 is None:
+                return {"ok": False, "request_id": request_id, "status": "cancelled"}
+            return _finished(con, req, t0, False, None, err, reason=err[:300])
+        if conn["kind"] != "claude":
+            return run_agent(con, req, conn, cfg)
+        # a Claude connector: the same session, on its binary and model
+        cfg = {**cfg, "claude": {**(cfg.get("claude") or {}), "bin": conn.get("bin") or "claude",
+                                 "extra_args": [*((cfg.get("claude") or {}).get("extra_args")
+                                                  or []), *(["--model", conn["default_model"]]
+                                                            if conn.get("default_model") else [])]}}
     c = cfg.get("claude") or {}
     timeout = max(30, int(c.get("timeout_s") or 900))
     session_id = str(uuid.uuid4())
@@ -2200,6 +2217,54 @@ def run_script(con, req: dict, spec: dict, cfg: dict) -> dict:
     log_action(con, req["id"], "script", name,
                f"exit {pr.returncode}; argv {json.dumps(argv, ensure_ascii=False)[:1000]}")
     return _finished(con, req, t0, pr.returncode == 0, pr.returncode, out)
+
+
+def agent_connector(cid: str) -> tuple:
+    """(the connector a trigger can run on, why not). Ollama has no shell for the run
+    command to act through, so only the CLI providers qualify."""
+    import agents
+    c = agents.connector(agents.load_config(), cid)
+    if not c:
+        return None, f"no agent connector {cid!r}"
+    if not c.get("enabled"):
+        return None, f"agent connector {cid!r} is switched off"
+    if c["kind"] == "ollama":
+        return None, f"agent connector {cid!r} is Ollama, which cannot run a trigger"
+    return c, ""
+
+
+def run_agent(con, req: dict, conn: dict, cfg: dict) -> dict:
+    """One trigger run on a Gemini or Codex connector: the same prompt a `claude` run gets,
+    on stdin, its answer is the result. Runs with tools on, as the claude run does."""
+    import providers
+    t0 = _started(con, req, f"agent {conn['id']}")
+    if t0 is None:
+        return {"ok": False, "request_id": req["id"], "status": "cancelled"}
+    cmd, stdin = providers.cli_invocation(conn["kind"], conn, conn.get("default_model") or "", True,
+                                          build_prompt(req, cfg))
+    timeout = max(30, int(conn.get("timeout_s") or 900))
+    _set_request(con, req["id"], command=json.dumps(cmd, ensure_ascii=False),
+                 cwd=session_cwd(cfg))
+    env = providers.child_env(conn["kind"], {**os.environ, "MEMORY_LEDGER_REQUEST_ID": req["id"],
+                                             "MEMORY_LEDGER_TRIGGER_SOURCE": req["source"]})
+    try:
+        pr = run_watched(con, req["id"], cmd, timeout, input=stdin, env=env,
+                         cwd=session_cwd(cfg))
+    except Cancelled:
+        return {"ok": False, "request_id": req["id"], "status": "cancelled"}
+    except subprocess.TimeoutExpired:
+        _set_request(con, req["id"], status="timeout", finished_at=now_iso(),
+                     reason=f"killed after {timeout}s")
+        return {"ok": False, "request_id": req["id"], "status": "timeout"}
+    except OSError as e:
+        return _finished(con, req, t0, False, None, f"could not start {conn['kind']}: {e}",
+                         reason=f"could not start {conn['kind']}: {e}"[:300])
+    out = providers.redact((pr.stdout or "").strip(), conn["kind"])
+    err = providers.redact((pr.stderr or "").strip(), conn["kind"])
+    if err:
+        _set_request(con, req["id"], stderr=err[-8000:])
+    ok = pr.returncode == 0 and bool(out)
+    return _finished(con, req, t0, ok, pr.returncode, out or err)
 
 
 def http_raw(method: str, url: str, *, headers=None, data: bytes | None = None,
@@ -3550,6 +3615,11 @@ def _clean_action(v: dict, row: dict, field: str, extra=()) -> str:
         if v["action"] not in ACTIONS:
             return f"{field}.action must be one of {', '.join(ACTIONS)}"
         row["action"] = v["action"]
+    if "agent" in v:
+        agent = str(v["agent"] or "").strip()
+        if agent and not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,39}", agent):
+            return f"{field}.agent must be a connector id"
+        row["agent"] = agent
     if "http" in v:
         h = v["http"]
         if not isinstance(h, dict):
@@ -3621,6 +3691,10 @@ def _clean_action(v: dict, row: dict, field: str, extra=()) -> str:
 def _action_complete(row: dict, field: str) -> str:
     """An action that is switched on must be able to run."""
     act = _action_of(row)
+    if act["action"] == "claude" and act["agent"]:
+        _, err = agent_connector(act["agent"])
+        if err:
+            return f"{field}: {err}"
     if act["action"] == "http" and not act["http"]["url"]:
         return f"{field}: calling an API needs a URL"
     if act["action"] == "script":

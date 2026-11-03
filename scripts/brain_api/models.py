@@ -345,6 +345,8 @@ class B2BConfig(Body):
     do: Any = Field(None, description="The run command for a received message; "
                                       "`{variables}` as for triggers, plus `b2b_*`.")
     action: Any = Field(None, description="`claude`, `http` or `script`.")
+    agent: Any = Field(None, description="The agent connector id a `claude` action runs on "
+                                          "(`GET /api/agents`); empty is the default Claude.")
     http: _obj = Field(None, description="`method`, `url`, `headers`, `body`.")
     script: _obj = Field(None, description="`name`, `args`.")
     clear: Optional[list[LooseStr]] = Field(None, description="`[\"private_key\"]` removes it.")
@@ -475,6 +477,24 @@ class AgentSpawn(Body):
     prompt: Text = T("What the sub-agent should do.")
 
 
+class AgentProvider(Body):
+    kind: Text = T("The provider: `claude`, `gemini`, `antigravity` or `codex`.")
+
+
+class AgentProviderKey(Body):
+    kind: Text = T("The provider: `claude`, `gemini`, `antigravity` or `codex`.")
+    key: Text = T("The API key to save. Empty with `remove: true` deletes the saved one.")
+    remove: Any = Field(None, description="`true` deletes the saved key.")
+
+
+class AgentProviderInstall(Body):
+    kind: Text = T("The provider: `claude`, `gemini`, `antigravity` or `codex`.")
+    confirm: Any = Field(None, description="Must be `true`: this runs `npm install -g` on "
+                                           "this machine (or changes the CLI's setup).")
+    brain: Any = Field(None, description="`false` skips giving the CLI the brain after the "
+                                         "install; by default it is done in the same step.")
+
+
 class AgentPlugin(Body):
     key: Text = T("The plugin, as `name@marketplace`.")
     enabled: Any = Field(None, description="`true` turns it on, anything else off.")
@@ -490,6 +510,9 @@ class AgentConfig(Body):
     recall_limit: Any = Field(None, description="How many recalled nodes a turn gets, 0 to 30.")
     recall_budget: Any = Field(None, description="Their total size cap, in characters.")
     max_concurrent: Any = Field(None, description="Replies running at once, 1 to 8.")
+    delegation: Any = Field(None, description="`{enabled, targets[], rules, never, "
+                            "blocked_realms[], max_per_turn, timeout_s}`: agents handing tasks "
+                            "to another provider. Needs the `ai_providers` flag.")
 
 
 class FlagSet(Body):

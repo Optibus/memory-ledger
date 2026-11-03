@@ -170,7 +170,7 @@ export const api = {
   agentConversations: (signal?: AbortSignal) =>
     get<import("./types").AgentConversations>("/api/agent-conversations", undefined, signal),
   /** A document an agent wrote, by its path under <home>/exports. */
-  document: (path: string, area: "exports" | "attachments" = "exports", signal?: AbortSignal) =>
+  document: (path: string, area: "exports" | "attachments" | "images" = "exports", signal?: AbortSignal) =>
     get<import("./types").AgentDocument>("/api/document", area === "exports" ? { path } : { path, area }, signal),
   voice: (signal?: AbortSignal) => get<import("./types").VoiceStatus>("/api/voice", undefined, signal),
   customTriggers: (signal?: AbortSignal) =>
@@ -384,7 +384,24 @@ export const api = {
     recall_limit: number;
     recall_budget: number;
     max_concurrent: number;
+    delegation: import("./types").AgentDelegation;
   }>) => post<import("./types").AgentsStatus>("/api/agent-config", body),
+  agentProviders: (signal?: AbortSignal) =>
+    get<import("./types").AgentProviders>("/api/agent-providers", undefined, signal),
+  /** Save an API key (or delete the saved one); answers the refreshed list, never the key. */
+  saveProviderKey: (kind: string, key: string, remove = false) =>
+    post<import("./types").AgentProviders>("/api/agent-provider-key", { kind, key, remove }),
+  /** Runs `npm install -g` on this machine: only ever sent after the person confirmed. */
+  installProvider: (kind: string) =>
+    post<Envelope & { command: string; installed?: boolean; version?: string; brain?: boolean; brain_error?: string }>(
+      "/api/agent-provider-install", { kind, confirm: true }),
+  /** Gives a provider's CLI the brain (plugin or context block); only sent after the person confirmed. */
+  installProviderBrain: (kind: string) =>
+    post<Envelope & { brain?: boolean; note?: string; path?: string }>(
+      "/api/agent-provider-brain", { kind, confirm: true }),
+  /** One real call through the CLI. */
+  testProvider: (kind: string) =>
+    post<Envelope & { answer?: string }>("/api/agent-provider-test", { kind }),
   flush: () => post("/api/flush", {}),
   /**
    * Consolidate. Refused without `confirm`, by the server — the preview is not
@@ -446,5 +463,5 @@ export const api = {
 export type Api = typeof api;
 
 /** The raw bytes of a document, for an iframe. */
-export const documentFileUrl = (path: string, area: "exports" | "attachments" = "exports") =>
+export const documentFileUrl = (path: string, area: "exports" | "attachments" | "images" = "exports") =>
   `${BASE}/api/document-file${queryString(area === "exports" ? { path } : { path, area })}`;

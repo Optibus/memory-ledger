@@ -699,6 +699,8 @@ export interface TriggerEventSetting {
   /** The run command for a Claude action. Empty for a mention: the message is the request. */
   do: string;
   action: TriggerAction;
+  /** The agent connector a Claude action runs on. Empty: the trigger's own Claude. */
+  agent?: string;
   http: TriggerHttp;
   script: TriggerScriptRef;
 }
@@ -1153,6 +1155,7 @@ export interface B2BConfig {
   /** The run command for a received message, with `{variables}`. */
   do: string;
   action: TriggerAction;
+  agent?: string;
   http: TriggerHttp;
   script: TriggerScriptRef;
   variables: Record<string, string>;
@@ -1275,7 +1278,7 @@ export interface B2BSendResult extends Envelope {
 }
 
 // ------------------------------------------------------------------ agents
-export type AgentKind = "claude" | "ollama";
+export type AgentKind = "claude" | "ollama" | "gemini" | "antigravity" | "codex" | "huggingface" | "hfspace";
 
 export interface AgentConnector {
   id: string;
@@ -1316,6 +1319,40 @@ export interface AgentCommands extends Envelope {
   plugins: AgentPlugin[];
 }
 
+/** Agents handing a task to another provider (docs/agents.md#delegation). Off by default. */
+export interface AgentDelegation {
+  enabled: boolean;
+  /** Connector ids that may receive a delegated task. */
+  targets: string[];
+  rules: string;
+  never: string;
+  blocked_realms: string[];
+  max_per_turn: number;
+  timeout_s: number;
+}
+
+/** One row of the provider setup wizard. Never carries a key, only whether one is saved. */
+export interface AgentProvider {
+  kind: AgentKind;
+  title: string;
+  install: string;
+  key_env: string;
+  login: string;
+  models: string[];
+  has_key: boolean;
+  installed?: boolean;
+  path?: string;
+  version?: string;
+  /** The CLI can already read and write the brain (the plugin, or the context block). */
+  brain?: boolean;
+}
+
+export interface AgentProviders extends Envelope {
+  providers: AgentProvider[];
+  /** False while the `ai_providers` flag is off: Gemini and Codex are not listed. */
+  enabled: boolean;
+}
+
 export interface AgentsStatus extends Envelope {
   config: {
     default_connector: string;
@@ -1323,6 +1360,7 @@ export interface AgentsStatus extends Envelope {
     recall_limit: number;
     recall_budget: number;
     max_concurrent: number;
+    delegation: AgentDelegation;
     _problem?: string;
   };
   connectors: AgentConnector[];

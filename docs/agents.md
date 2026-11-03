@@ -1,7 +1,8 @@
 # Agents
 
 The **Agents** tab is a chat with a model from inside the brain UI: Claude
-through the `claude` CLI, or any model on an Ollama host. The code is
+through the `claude` CLI, any model on an Ollama host, or (behind the
+`ai_providers` flag) Gemini and ChatGPT through their own CLIs. The code is
 `scripts/agents.py`, the routes are `/api/agent*`, and the UI is
 `frontend/src/features/agents/`.
 
@@ -98,6 +99,15 @@ The system prompt gives Claude those commands with their absolute paths:
 things up, and `add-node` and `add-edge` to store what the turn produced. They
 must run as written, not after a `cd`, or the allow rule does not match.
 
+**Paths on Windows.** The commands go to a bash (Git Bash on Windows), which eats the
+backslashes of `C:\Users\...\graph.py`: the command fails, the agent retries and burns
+tokens, and the read-only allow rule (`Bash(python3 <path>:*)`) no longer matches what
+reaches the shell. So every script path put in a command an agent will run (this prompt,
+the Gemini and Codex brain block, the trigger and B2B prompts) goes through
+`_platform.shell_path()`: `/` instead of `\` on Windows (Git Bash and Windows Python accept
+it), quoted when the path has a space, unchanged on macOS and Linux. A new command that
+embeds a path must use it too. Not yet tried on a real Windows machine.
+
 The plugin's own hooks run in these sessions too, since the `claude` CLI loads them in
 `-p` mode: the prompt and answer captures, and the SessionStart bootstrap.
 
@@ -139,6 +149,95 @@ At the top right of a conversation:
 - **Hide**: moves the conversation to the folded **Hidden** group under the active
   list. **Unhide** brings it back. Nothing is deleted.
 
+## More providers: Gemini and ChatGPT (Codex)
+
+Behind the `ai_providers` flag (Settings > Flags), `kind` can also be `gemini` or
+`codex`. Each runs through its own CLI (`scripts/providers.py` holds the table:
+binary, npm package, models, key variable). Install with
+`npm install -g @google/gemini-cli` or `npm install -g @openai/codex`.
+
+- **Gemini has two modes** (the "Gemini account" selector in the wizard). **Individual**
+  runs on the Antigravity CLI (`kind: antigravity`, binary `agy`): Google closed the Gemini
+  CLI's "Code Assist for individuals" sign-in and moved it there. Install is Google's own
+  script (`curl -fsSL https://antigravity.google/cli/install.sh | bash`, or the PowerShell
+  one on Windows), run only after you confirm; sign in once by running `agy` in a terminal
+  (it opens the browser), headless runs then reuse the saved session. It takes no API key
+  here. **Organization** keeps the Gemini CLI (`kind: gemini`) with its sign-in or API key.
+  `agy` has no read-only mode: with tools off a tool that needs approval is refused, with tools
+  on the run passes `--dangerously-skip-permissions`. Flags checked against
+  antigravity.google/docs on 2026-11-02; the stdin prompt (`--input-format text`) is the
+  least documented part, so run **Test call** after installing.
+- **Sign-in is the CLI's own** (OAuth) by default. A provider may instead use an
+  API key (`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `CODEX_API_KEY`): it is read from
+  `<home>/secrets/<provider>.key` (one file per provider, mode 600, written by
+  `providers.save_key`, which the wizard below calls) and reaches the CLI only as an
+  environment variable. It is never in `agents.json`, the graph or a log, and it is masked
+  in any error shown.
+- **Tools**: read-only runs Gemini with `--approval-mode plan` and Codex with
+  `--sandbox read-only`; tools on runs `yolo` and `workspace-write`.
+- **Plain text**: these CLIs are not streamed, so the log holds the answer only and
+  tokens and cost are unknown. The prompt goes in on stdin; Cancel kills the process
+  tree like Claude's.
+- Flags were checked against each vendor's docs on 2026-11-02; they change often.
+- The brain commands in the system prompt (`graph.py`, ...) need a shell, which a
+  read-only Gemini or Codex does not have; they work with tools on.
+
+### Setup wizard
+
+Settings > **AI providers** walks one provider at a time: **install** (the official
+`npm install -g`, run on this machine only after you confirm in a dialog, or copy it
+and run it yourself), **sign in** (the CLI's own login, or an optional API key that is
+saved to the private file and never shown again, only "API key saved"), a **test call**
+(the CLI is asked to say ok, with the saved key; the answer or the error, key masked)
+and **Add connector**. Ollama stays in the Agents card above. Backend:
+`GET /api/agent-providers`, `POST /api/agent-provider-key`, `-install` (needs
+`confirm: true`), `-brain` (needs `confirm: true`) and `-test`; Gemini and Codex are listed
+only with `ai_providers` on.
+
+**Connect the brain.** A CLI only reads and writes the brain from its own sessions once it
+knows the commands. The install confirm covers this step too, and **Connect brain** does it for
+a CLI that is already there (the row says "brain connected" or "brain not connected"): Claude
+gets the `memory-ledger` plugin from this checkout (`claude plugin marketplace add <checkout>`,
+then `claude plugin install memory-ledger@memory-ledger`; restart open sessions to load it), and
+Gemini and Codex get a block between `<!-- memory-ledger:begin -->` and `<!-- memory-ledger:end -->`
+in `~/.gemini/GEMINI.md` or `~/.codex/AGENTS.md`, with the `match-rules`, `recall`, `search`,
+`open` and `add-node` commands. The rest of the file is left alone and a repeat rewrites only
+the block. Replies in the Agents tab never needed this: their system prompt carries the commands.
+
+### Choosing the agent
+
+Wherever a Claude run starts, you pick the connector it runs on. In **Settings > Triggers** and
+**B2B > Receiving**, a Claude action has an **Agent** field (`agent`, a connector id; empty is the
+trigger's own Claude, as before). The run gets the same prompt and its answer is the request's
+result. Claude connectors run the usual session on their binary and model; Gemini and Codex run
+with tools on, as the Claude session does. Ollama cannot be picked, and a connector that is gone
+or switched off fails the run with that reason. `b2b.py config --agent <id>` sets it from the CLI.
+
+### Delegation
+
+With `ai_providers` on and **Allow delegation** ticked, an agent may hand a
+self-contained task to a connector of another provider, for example long web research
+to Gemini or a code review to Codex. It runs
+`agents.py delegate <connector> --task "<brief>"` from its shell and gets the other
+agent's answer back as text. Gemini and Codex have no shell in read-only mode, so
+only a Claude agent, or one with tools on, can start it.
+
+The prompt tells the agent the rules (the **When to delegate** and **Never delegate**
+texts), and the code enforces them, because a prompt alone does not hold:
+
+- the target must be ticked as allowed to receive tasks, enabled, and not the
+  delegating agent's own provider;
+- depth is 1: a delegated agent cannot delegate again;
+- at most **Tasks per turn** (default 3) per reply, each with a **Timeout**;
+- the delegate runs **read-only**, gets only the brief (no brain commands, no
+  conversation, no files), and its answer is stored as a sub-agent row labelled
+  `delegated to <name>` under the delegating reply;
+- a brief that names the id of a node in a **blocked realm** (default `personal`) is
+  refused, since the provider is an external service. Free text that merely
+  describes private content is not caught by this check: write briefs without it.
+
+Not built: a per-conversation override of the global switch.
+
 ## Connectors
 
 `<home>/agents.json`, edited in **Settings → Agents**:
@@ -154,15 +253,20 @@ At the top right of a conversation:
     {"id": "claude", "name": "Claude", "kind": "claude", "enabled": true, "bin": "claude",
      "models": ["claude-opus-5-5", "claude-sonnet-5-5"], "default_model": "claude-sonnet-5-5", "timeout_s": 900},
     {"id": "ollama", "name": "Ollama", "kind": "ollama", "enabled": true,
-     "url": "http://127.0.0.1:11434", "default_model": "", "timeout_s": 600, "max_rounds": 8}
+     "url": "http://127.0.0.1:11434", "default_model": "", "timeout_s": 600, "max_rounds": 8},
+    {"id": "gemini", "name": "Gemini", "kind": "gemini", "enabled": true, "bin": "gemini",
+     "default_model": "auto", "timeout_s": 900}
   ]
 }
 ```
 
-A connector is one backend. Two Ollama hosts are two connectors. An Ollama
+A connector is one backend. Two Ollama hosts are two connectors. The `gemini` and
+`codex` kinds are refused while `ai_providers` is off (the example above shows a
+Gemini one for the on case; `models` is fixed by `providers.py`). An Ollama
 connector's models are whatever its host has pulled (`/api/tags`), asked for
 each time the tab loads. To add a new `kind` (an OpenAI-compatible API, say),
-add it to `KINDS`, give `_clean_connector` its fields, and register a
+add it to `KINDS` (a CLI one also goes in `providers.PROVIDERS`), give
+`_clean_connector` its fields, and register a
 `run_<kind>(con, reply, connector, turn)` in `RUNNERS` that returns
 `{text, events, tokens, cost_usd, cost_estimated}`.
 
@@ -417,3 +521,13 @@ language before it shows and before it is spoken (`POST /api/voice-translate`: o
 Haiku call per block, names, commands and identifiers kept; skipped when the block is
 already in the target). The original is behind an "original" expander. It is the only voice
 feature that calls a model, so it is off by default.
+
+## Hugging Face Space
+
+The `hfspace` connector makes one image on a Gradio Space (default
+`a-test-user-in-the-wrold/qwen-image-21-uncensored`) with the saved Hugging Face token, so a ZeroGPU Space
+spends the account's daily GPU quota, not Inference Providers credits. `scripts/hf_space.py` is the wrapper:
+`spaces` lists text-to-image Spaces running on free hardware (public metadata, no GPU job), and
+`generate --prompt ... [--aspect wide] [--quality draft]` asks for the smallest size the Space offers for the
+aspect and the fewest steps for the quality (draft 12, standard 20, final 28). Images land in `<home>/images/`.
+The Test call is free: it checks the token and that the Space is up. The prompt goes to a third party's server.

@@ -48,13 +48,15 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _platform  # noqa: E402
 import _textio  # noqa: E402
+import delegation  # noqa: E402
 import documents  # noqa: E402
 import flags  # noqa: E402
 import graph  # noqa: E402
+import providers  # noqa: E402
 import voice  # noqa: E402
 
 CONFIG_NAME = "agents.json"
-KINDS = ("claude", "ollama")
+KINDS = ("claude", "ollama", *providers.NEW_KINDS)
 STATUSES = ("queued", "running", "done", "question", "error")
 PENDING = ("queued", "running")
 # The line an agent ends with when it cannot go on without the owner. Hidden in
@@ -80,10 +82,11 @@ SCRIPT = Path(__file__).resolve()
 # These run in both tool modes: read-only limits what an agent does OUTSIDE the
 # brain, never its memory (the offload rule, CONVENTIONS §0). Read-only Claude
 # gets Bash for these commands and nothing else.
-THREAD_CMD = f"python3 {SCRIPT} thread"
-GRAPH_CMD = f"python3 {SCRIPT.parent / 'graph.py'}"
-QUERY_CMD = f"python3 {SCRIPT.parent / 'brain_query.py'}"
-BRAIN_CMDS = (THREAD_CMD, GRAPH_CMD, QUERY_CMD)
+THREAD_CMD = f"python3 {_platform.shell_path(SCRIPT)} thread"
+GRAPH_CMD = f"python3 {_platform.shell_path(SCRIPT.parent / 'graph.py')}"
+QUERY_CMD = f"python3 {_platform.shell_path(SCRIPT.parent / 'brain_query.py')}"
+DELEGATE_CMD = f"python3 {_platform.shell_path(SCRIPT)} delegate"
+BRAIN_CMDS = (THREAD_CMD, GRAPH_CMD, QUERY_CMD, DELEGATE_CMD)
 # Read-only Claude may also look things up through the person's connectors.
 # Only these, by exact name: anything that posts, edits, labels or deletes is
 # left out, and `dontAsk` denies it.
@@ -115,6 +118,7 @@ DEFAULTS: dict[str, Any] = {
     "recall_limit": 8,
     "recall_budget": 2600,
     "max_concurrent": 2,
+    "delegation": delegation.DEFAULTS,
     "connectors": [
         {"id": "claude", "name": "Claude", "kind": "claude", "enabled": True,
          "bin": "claude", "models": CLAUDE_MODELS, "default_model": "claude-sonnet-5-5",
@@ -211,6 +215,7 @@ def load_config() -> dict[str, Any]:
     for k, v in raw.items():
         if k in DEFAULTS:
             cfg[k] = v
+    cfg["delegation"] = delegation.clean(cfg.get("delegation"))
     if not isinstance(cfg.get("connectors"), list):
         cfg["connectors"] = json.loads(json.dumps(DEFAULTS["connectors"]))
     return cfg
@@ -220,8 +225,9 @@ def _clean_connector(c: Any, taken: set[str]) -> tuple[dict[str, Any] | None, st
     if not isinstance(c, dict):
         return None, "a connector must be an object"
     kind = str(c.get("kind") or "").strip()
-    if kind not in KINDS:
-        return None, f"connector kind must be one of {', '.join(KINDS)}"
+    if kind not in KINDS or (kind in providers.NEW_KINDS and not flags.enabled("ai_providers")):
+        kinds = [k for k in KINDS if k not in providers.NEW_KINDS or flags.enabled("ai_providers")]
+        return None, f"connector kind must be one of {', '.join(kinds)}"
     name = str(c.get("name") or kind.title()).strip()[:60]
     cid = graph.slugify(str(c.get("id") or name))[:40]
     base, n = cid, 2
@@ -239,6 +245,14 @@ def _clean_connector(c: Any, taken: set[str]) -> tuple[dict[str, Any] | None, st
         out["bin"] = str(c.get("bin") or "claude").strip()[:500]
         models = c.get("models") if isinstance(c.get("models"), list) else CLAUDE_MODELS
         out["models"] = [str(m).strip()[:120] for m in models if str(m).strip()][:20]
+    elif kind in providers.NEW_KINDS and providers.PROVIDERS[kind].get("http"):
+        out["models"] = []                    # listed live from the provider
+        out["default_model"] = out["default_model"] or providers.PROVIDERS[kind]["default_model"]
+    elif kind in providers.NEW_KINDS:
+        p = providers.PROVIDERS[kind]
+        out["bin"] = str(c.get("bin") or p["bin"]).strip()[:500]
+        out["models"] = list(p["models"])
+        out["default_model"] = out["default_model"] or p["default_model"]
     else:
         url = str(c.get("url") or "http://127.0.0.1:11434").strip().rstrip("/")[:500]
         if not re.match(r"^https?://", url):
@@ -274,6 +288,8 @@ def save_config(patch: dict[str, Any]) -> dict[str, Any]:
                 cfg[key] = max(lo, min(hi, int(patch[key])))
             except (TypeError, ValueError):
                 return {"ok": False, "error": f"{key} must be a number"}
+    if "delegation" in patch:
+        cfg["delegation"] = delegation.clean(patch["delegation"])
     if "default_connector" in patch:
         cfg["default_connector"] = str(patch["default_connector"] or "")[:40]
     if cfg["default_connector"] not in {c["id"] for c in cfg["connectors"]}:
@@ -301,6 +317,56 @@ def ollama_models(c: dict[str, Any], timeout: float = 2.0) -> tuple[list[str], s
         return [], f"could not reach {c['url']}: {e}"
 
 
+_CLI_MODELS: dict[str, tuple[float, list[str]]] = {}   # kind -> (fetched at, models)
+
+
+def cli_models(c: dict[str, Any]) -> list[str]:
+    """The models an Antigravity or Codex install offers, read from the CLI itself (cached
+    5 minutes). Empty when it cannot say: the CLI then picks its own default."""
+    kind = c.get("kind")
+    hit = _CLI_MODELS.get(kind)
+    if hit and time.time() - hit[0] < 300:
+        return hit[1]
+    models: list[str] = []
+    try:
+        if kind == "antigravity":
+            r = subprocess.run([providers._exe(kind, c.get("bin") or ""), "models"],
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
+            models = [ln.split("\t")[0].strip() for ln in r.stdout.splitlines() if "\t" in ln]
+        elif kind == "codex":
+            home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+            data = json.loads((home / "models_cache.json").read_text("utf-8"))
+            rows = [m for m in data.get("models") or [] if m.get("visibility") == "list" and m.get("slug")]
+            models = [m["slug"] for m in sorted(rows, key=lambda m: m.get("priority", 0))]
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    _CLI_MODELS[kind] = (time.time(), models)
+    return models
+
+
+def _http_models(kind: str) -> list[str]:
+    hit = _CLI_MODELS.get(kind)
+    if hit and time.time() - hit[0] < 300:
+        return hit[1]
+    models = providers.http_models(kind)
+    _CLI_MODELS[kind] = (time.time(), models)
+    return models
+
+
+def _free_spaces() -> list[str]:
+    """Image Spaces running on free hardware right now (public metadata, no GPU job), cached 5 minutes."""
+    import hf_space
+    hit = _CLI_MODELS.get("hfspace")
+    if hit and time.time() - hit[0] < 300:
+        return hit[1]
+    try:
+        models = [r["id"] for r in hf_space.list_spaces()]
+    except hf_space.SpaceError:
+        models = []
+    _CLI_MODELS["hfspace"] = (time.time(), models)
+    return models
+
+
 def connectors_payload(cfg: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Every connector with the models it offers right now."""
     cfg = cfg or load_config()
@@ -313,6 +379,16 @@ def connectors_payload(cfg: dict[str, Any] | None = None) -> list[dict[str, Any]
             row["available"] = not problem
             if not row.get("default_model") and models:
                 row["default_model"] = models[0]
+        elif c["kind"] in ("antigravity", "codex") and c.get("enabled") and not row.get("models"):
+            row["models"] = cli_models(c)
+        elif c["kind"] == "hfspace" and c.get("enabled"):
+            row["models"] = _free_spaces()
+            row["problem"] = "" if providers.load_key("huggingface") else "no HF_TOKEN saved"
+            row["available"] = not row["problem"]
+        elif c["kind"] == "huggingface" and c.get("enabled"):
+            row["models"] = _http_models(c["kind"])
+            row["problem"] = "" if providers.load_key("huggingface") else "no HF_TOKEN saved"
+            row["available"] = not row["problem"]
         out.append(row)
     return out
 
@@ -464,7 +540,7 @@ def _pick(cfg: dict[str, Any], connector_id: str, model: str) -> tuple[dict | No
         if problem:
             return None, "", problem
         model = models[0] if models else ""
-    if not model:
+    if not model and c["kind"] != "codex":     # Codex picks its own default
         return None, "", f"pick a model for {c['name']}"
     return c, model[:120], ""
 
@@ -766,7 +842,8 @@ def build_turn(con: sqlite3.Connection, reply: dict[str, Any]) -> dict[str, Any]
                  f"can go on, its last line is exactly {QUESTION_MARK}.)")
     cid = reply.get("connector") or (conv or {}).get("connector") or ""
     kind = (connector(cfg, cid) or {}).get("kind", "claude")
-    system = "\n".join(x for x in (system_prompt(conv, len(history), kind),
+    handoff = delegation.prompt_section(cfg, DELEGATE_CMD, cid) if kind not in ("ollama", "huggingface", "hfspace") else ""
+    system = "\n".join(x for x in (system_prompt(conv, len(history), kind), handoff,
                                     voice.reply_language_instruction(question)) if x)
     return {"system": system, "prompt": "\n".join(parts),
             "context": [r["id"] for r in recalled if r.get("id")], "question": question}
@@ -785,6 +862,7 @@ def system_prompt(conv: dict[str, Any] | None, carried: int, kind: str = "claude
     ]
     if conv:
         how = ("call the read_thread tool" if kind == "ollama" else
+               "ask the owner" if kind in ("huggingface", "hfspace") else
                f"run `{THREAD_CMD} {conv['id']}` (add `--limit N` for the last N messages)")
         lines.append(
             f"This conversation's id is {conv['id']}"
@@ -801,7 +879,10 @@ def system_prompt(conv: dict[str, Any] | None, carried: int, kind: str = "claude
         f"a question, suggest the answer you expect (before the {QUESTION_MARK} line, which "
         "stays last). Leave it out only when nothing obvious follows.",
     ]
-    if kind == "ollama":
+    if kind in ("huggingface", "hfspace"):
+        lines.append("You have no tools here: work from the owner's message and the recalled "
+                     "memory, and say so when that is not enough.")
+    elif kind == "ollama":
         lines.append("The brain is yours to read and write in every turn: look things up "
                      "with recall, search and get_node, and store what is worth keeping "
                      "(a fact, a decision, a to-do) with add_note and add_task, without "
@@ -1319,7 +1400,132 @@ def run_ollama(con: sqlite3.Connection, reply: dict[str, Any], c: dict[str, Any]
     raise AgentError(f"no answer after {c.get('max_rounds') or 8} tool rounds")
 
 
-RUNNERS = {"claude": run_claude, "ollama": run_ollama}
+# ---------------------------------------------------------------- gemini, codex
+def run_cli(con: sqlite3.Connection, reply: dict[str, Any], c: dict[str, Any],
+            turn: dict[str, Any]) -> dict[str, Any]:
+    """One turn on a plain-text CLI (Gemini, Codex): the system prompt and the
+    prompt go in on stdin, the answer comes back on stdout. These CLIs have no
+    stream the brain parses, so the log holds the answer only, and tokens and
+    cost are not known. The saved API key, if any, rides in the child's env."""
+    kind = c["kind"]
+    log = _Log(con, reply["id"])
+    cmd, stdin = providers.cli_invocation(kind, c, reply["model"], bool(reply["full_tools"]),
+                                          turn["system"] + "\n\n" + turn["prompt"])
+    env = _textio.child_env(providers.child_env(kind, {
+        **os.environ, "MEMORY_LEDGER_AGENT_REPLY": reply["id"],
+        "MEMORY_LEDGER_AGENT_CONV": reply["conv_id"]}))
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                stdin=subprocess.PIPE, text=True, encoding="utf-8",
+                                errors="replace", env=env,
+                                cwd=str(graph.home_dir()) if graph.home_dir().is_dir()
+                                else str(Path.home()), **_platform.group_kwargs())
+    except OSError as e:
+        raise AgentError(f"could not start {cmd[0]}: {e}") from None
+    _platform.track(proc)
+    with _lock:
+        _procs[reply["id"]] = proc
+    timer = threading.Timer(int(c.get("timeout_s") or 900), _platform.kill_tree, (proc,))
+    timer.start()
+    try:
+        out, err = proc.communicate(stdin)
+    finally:
+        timed_out = not timer.is_alive() and proc.returncode not in (0, None)
+        timer.cancel()
+        _platform.untrack(proc)
+        with _lock:
+            _procs.pop(reply["id"], None)
+    if timed_out:
+        raise AgentError(f"timed out after {c.get('timeout_s')}s")
+    text = (out or "").strip()
+    if proc.returncode != 0 or not text:
+        detail = providers.redact((err or "").strip()[-600:], kind)
+        raise AgentError(detail or f"{kind} exited {proc.returncode} without an answer")
+    log.add({"kind": "text", "name": "said", "output": _clip(text)})
+    log.flush(force=True)
+    return {"text": text, "events": log.events, "tokens": (0, 0),
+            "cost_usd": None, "cost_estimated": False}
+
+
+def run_huggingface(con: sqlite3.Connection, reply: dict[str, Any], c: dict[str, Any],
+                    turn: dict[str, Any]) -> dict[str, Any]:
+    """One text turn on Hugging Face Inference Providers (OpenAI-compatible chat). No tools:
+    the system prompt and the prompt go in as messages, the answer comes back whole."""
+    log = _Log(con, reply["id"])
+    if _is_cancelled(reply["id"]):
+        raise AgentError(CANCELLED)
+    try:
+        data = providers.http_chat("huggingface", reply["model"] or c.get("default_model") or "",
+                                   [{"role": "system", "content": turn["system"]},
+                                    {"role": "user", "content": turn["prompt"]}],
+                                   timeout=int(c.get("timeout_s") or 600))
+    except RuntimeError as e:
+        raise AgentError(str(e)) from None
+    text = re.sub(r"<think>.*?</think>", "", str(
+        ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""), flags=re.S).strip()
+    if not text:
+        raise AgentError("Hugging Face answered with nothing")
+    u = data.get("usage") or {}
+    tin, tout = int(u.get("prompt_tokens") or 0), int(u.get("completion_tokens") or 0)
+    log.add({"kind": "text", "name": "said", "output": _clip(text)})
+    log.extra = {"tokens_in": tin, "tokens_out": tout}
+    log.flush(force=True)
+    return {"text": text, "events": log.events, "tokens": (tin, tout),
+            "cost_usd": None, "cost_estimated": False}
+
+
+IMG_LINK = re.compile(r"^\[[^\]\n]+\]\(img:[^)\s]+\)[ \t]*$", re.M)
+
+
+def image_link(path: str) -> str:
+    """`[name](img:file)` for an image saved in <home>/images, else ''."""
+    try:
+        rel = Path(path).resolve().relative_to(documents.root("images"))
+    except ValueError:
+        return ""
+    name = re.sub(r"[\[\]()]", "", rel.name)
+    return f"[{name}](img:{rel.as_posix()})"
+
+
+def with_generated_images(con: sqlite3.Connection, msg_id: str, text: str) -> str:
+    """The reply, plus the image links of the sub-agents it handed a task to that it did not repeat."""
+    have = set(IMG_LINK.findall(text))
+    add = []
+    for r in con.execute("SELECT text FROM agent_msg WHERE reply_to=? AND role='subagent' ORDER BY at", (msg_id,)):
+        for link in IMG_LINK.findall(r["text"] or ""):
+            if link not in have:
+                have.add(link)
+                add.append(link)
+    return text.rstrip() + "\n\n" + "\n".join(add) if add else text
+
+
+def run_hfspace(con: sqlite3.Connection, reply: dict[str, Any], c: dict[str, Any],
+                turn: dict[str, Any]) -> dict[str, Any]:
+    """One image on a Hugging Face Space. The brief is the prompt; `aspect=` and `quality=` lines
+    at its top choose the size and steps, and the wrapper takes the minimum that fits."""
+    import hf_space
+    log = _Log(con, reply["id"])
+    if _is_cancelled(reply["id"]):
+        raise AgentError(CANCELLED)
+    prompt, opts = hf_space.brief_options(turn.get("question") or turn["prompt"])
+    try:
+        res = hf_space.generate(prompt, space=reply["model"] or c.get("default_model") or "",
+                                aspect=opts.get("aspect", "auto"),
+                                quality=opts.get("quality", hf_space.DEFAULT_QUALITY),
+                                timeout=float(c.get("timeout_s") or 300))
+    except hf_space.SpaceError as e:
+        raise AgentError(str(e)) from None
+    text = (f"Image saved at {res['path']} ({res['size']}, {res['steps']} steps, "
+            f"seed {res['seed']}, {res['space']}).")
+    link = image_link(res["path"])
+    if link:
+        text += "\n\n" + link
+    log.add({"kind": "text", "name": "said", "output": _clip(text)})
+    log.flush(force=True)
+    return {"text": text, "events": log.events, "tokens": (0, 0), "cost_usd": None, "cost_estimated": False}
+
+
+RUNNERS = {"hfspace": run_hfspace, "huggingface": run_huggingface, "claude": run_claude, "ollama": run_ollama, "gemini": run_cli, "antigravity": run_cli, "codex": run_cli}
 
 
 # ---------------------------------------------------------------- running
@@ -1388,6 +1594,8 @@ def _run_claimed(con: sqlite3.Connection, msg_id: str, reply: dict[str, Any]) ->
     text, nxt = strip_next(res["text"])
     text, asked = strip_mark(text)
     status = "question" if asked else "done"
+    if reply["role"] != "subagent":
+        text = with_generated_images(con, msg_id, text)
     extra: dict[str, Any] = {}
     if res.get("cut_off"):
         # the process has exited, so a sub-agent left in the background died with it
@@ -1526,12 +1734,19 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("status")
     r = sub.add_parser("run")
     r.add_argument("id")
+    d = sub.add_parser("delegate", help="hand a task to a connector of another provider")
+    d.add_argument("connector")
+    d.add_argument("--task", required=True)
     t = sub.add_parser("thread", help="print a conversation's messages, oldest first")
     t.add_argument("id")
     t.add_argument("--limit", type=int, default=0, help="only the last N messages")
     a = ap.parse_args(argv)
     if a.cmd == "status":
         graph.out(status_payload())
+    elif a.cmd == "delegate":
+        res = delegation.delegate(a.connector, a.task, os.environ.get("MEMORY_LEDGER_AGENT_REPLY", ""))
+        print(res["text"] if res["ok"] else f"delegation refused or failed: {res['error']}")
+        return 0 if res["ok"] else 1
     elif a.cmd == "thread":
         print(thread_text(db(), a.id, a.limit))
     else:

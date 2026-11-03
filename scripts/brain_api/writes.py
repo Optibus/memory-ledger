@@ -25,6 +25,7 @@ import agent_commands
 import agent_panel
 import agents
 import flags
+import providers
 import b2b
 import custom_trigger
 import documents
@@ -929,6 +930,79 @@ def agent_config(data: m.AgentConfig = body(m.AgentConfig)):
     if res.get("ok"):
         res = agents.status_payload()
     return reply(res)
+
+
+def _provider(kind: str, http_ok: bool = False):
+    kind = clip(kind, 40)
+    if kind not in providers.PROVIDERS or not (
+            providers.PROVIDERS[kind]["bin"] or (http_ok and providers.PROVIDERS[kind].get("http"))):
+        return kind, {"ok": False, "error": f"{kind!r} is not a CLI provider"}
+    if kind in providers.NEW_KINDS and not flags.enabled("ai_providers"):
+        return kind, {"ok": False, "error": "turn on the ai_providers flag (Settings > Flags)"}
+    return kind, None
+
+
+@router.post("/agent-provider-key", tags=["agents"], summary="Save or delete a provider's API key",
+             description="Written to `<home>/secrets/<provider>.key`, mode 600, and handed to the "
+                         "CLI only as an environment variable. Never read back: the listing says "
+                         "only whether one is saved.")
+def agent_provider_key(data: m.AgentProviderKey = body(m.AgentProviderKey)):
+    kind, bad = _provider(data.kind, http_ok=True)
+    if bad:
+        return reply(bad)
+    try:
+        if data.remove is True:
+            providers.delete_key(kind)
+        else:
+            providers.save_key(kind, data.key)
+    except ValueError as e:
+        return reply({"ok": False, "error": str(e)})
+    return reply({"ok": True, "providers": providers.listing()})
+
+
+@router.post("/agent-provider-install", tags=["agents"], summary="Install a provider's CLI",
+             description="Runs `npm install -g <package>` on this machine, so the body must carry "
+                         "`confirm: true`. Takes up to five minutes.")
+def agent_provider_install(data: m.AgentProviderInstall = body(m.AgentProviderInstall)):
+    kind, bad = _provider(data.kind)
+    if bad:
+        return reply(bad)
+    if data.confirm is not True:
+        return reply({"ok": False, "error": "installing runs a command here: send confirm: true",
+                      "command": providers.install_command(kind)})
+    res = providers.install(kind)
+    if res.get("ok") and data.brain is not False:
+        # the same yes covers the brain step, so a new CLI can read and write it at once
+        b = providers.install_brain(kind)
+        res = {**res, "brain": b.get("brain", False),
+               **({"brain_error": b["error"]} if not b.get("ok") else {})}
+    return reply(res)
+
+
+@router.post("/agent-provider-brain", tags=["agents"], summary="Give a provider's CLI the brain",
+             description="Claude: installs the memory-ledger plugin from this checkout. Gemini and "
+                         "Codex: writes a marked block to `~/.gemini/GEMINI.md` or "
+                         "`~/.codex/AGENTS.md`. Safe to repeat. Writes under the home folder, so "
+                         "the body must carry `confirm: true`.")
+def agent_provider_brain(data: m.AgentProviderInstall = body(m.AgentProviderInstall)):
+    kind, bad = _provider(data.kind)
+    if bad:
+        return reply(bad)
+    if data.confirm is not True:
+        return reply({"ok": False, "error": "this changes the CLI's own setup: send confirm: true"})
+    c = agents.connector(agents.load_config(), kind) or {}
+    return reply(providers.install_brain(kind, str(c.get("bin") or "")))
+
+
+@router.post("/agent-provider-test", tags=["agents"], summary="Ask a provider to say ok",
+             description="One real call through the CLI with the saved key, if any. "
+                         "**Starts a model call.**")
+def agent_provider_test(data: m.AgentProvider = body(m.AgentProvider)):
+    kind, bad = _provider(data.kind, http_ok=True)
+    if bad:
+        return reply(bad)
+    c = agents.connector(agents.load_config(), kind) or {}
+    return reply(providers.ping(kind, str(c.get("bin") or "")))
 
 
 @router.post("/flag", tags=["settings"], summary="Turn a feature flag on or off")
