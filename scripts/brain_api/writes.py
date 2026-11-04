@@ -30,6 +30,7 @@ import b2b
 import custom_trigger
 import documents
 import graph
+import inbound_http_trigger
 import trigger
 import voice
 
@@ -682,6 +683,43 @@ def trigger_reprocess(data: m.TriggerReprocess = body(m.TriggerReprocess)):
     if ran:
         res["runs_on"] = ran["on"]
     return reply(res)
+
+
+@router.post("/inbound-http-action", tags=["trigger"],
+             summary="Regenerate or revoke an inbound HTTP trigger's token, or delete the trigger",
+             description="`regenerate` kills the old token at once and returns the new one, "
+                         "shown this once. `revoke` kills it without a new one. `delete` removes "
+                         "the file and the token; the call log stays.")
+def inbound_action(data: m.InboundHttpAction = body(m.InboundHttpAction)):
+    act = clip(data.action, 20)
+    if act not in ("regenerate", "revoke", "delete"):
+        return reply({"ok": False, "error": "action must be regenerate, revoke or delete"})
+    return reply(trigger.inbound_cli(act, clip(data.id, 64)))
+
+
+@router.post("/inbound-http-trigger", tags=["trigger"], summary="Save an inbound HTTP trigger",
+             description="Writes `<home>/triggers/<id>.yaml` as given, only when it validates; "
+                         "refuses a port another way in has. A new one answers its token, shown "
+                         "this once. With `check_only` nothing is written and the verdict is in "
+                         "`valid`.")
+def inbound_trigger_save(data: m.InboundHttpTrigger = body(m.InboundHttpTrigger)):
+    tid, text = clip(data.id, 64), data.text or ""
+    if data.check_only is True:
+        v = inbound_http_trigger.check_text(tid, text)
+        return reply({"ok": True, "id": tid, "valid": v["ok"], "errors": v["errors"],
+                      "warnings": v["warnings"]})
+    return reply(inbound_http_trigger.save_text(tid, text))
+
+
+@router.post("/inbound-http-trigger-enable", tags=["trigger"],
+             summary="Switch an inbound HTTP trigger on or off",
+             description="Rewrites only the `enabled:` line of its file. Switching on refuses a "
+                         "trigger that does not validate. The listener opens or closes on the "
+                         "server's next pass.")
+def inbound_trigger_enable(data: m.InboundHttpEnable = body(m.InboundHttpEnable)):
+    if not isinstance(data.enabled, bool):
+        return reply({"ok": False, "error": "enabled must be true or false"})
+    return reply(trigger.inbound_cli("enable" if data.enabled else "disable", clip(data.id, 64)))
 
 
 @router.post("/trigger-cancel", tags=["trigger"], summary="Stop a queued or running request",

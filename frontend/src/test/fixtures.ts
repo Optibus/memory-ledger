@@ -465,6 +465,7 @@ export const triggerFixture: import("@/api/types").TriggerStatus = {
     },
     refuse_without_model: true,
     translate_notices: true,
+    inbound_http: { enabled: true, active: true },
     claude: {
       bin: "claude", notice_model: "haiku", mcp_config: "", strict_mcp_config: false, timeout_s: 900,
       max_concurrent: 3, extra_args: [], cwd: "",
@@ -1092,4 +1093,30 @@ export const providersFixture: import("@/api/types").AgentProviders = {
     { kind: "antigravity", title: "Gemini (individual, Antigravity)", install: "curl -fsSL https://antigravity.google/cli/install.sh | bash",
       key_env: "", login: "agy", models: [], has_key: false, installed: false },
   ],
+};
+
+export const inboundHttpTriggersFixture: import("@/api/types").InboundHttpTriggersPayload = {
+  ok: true,
+  dir: "/home/alex/.second_brain/triggers",
+  enabled: true,
+  master: true,
+  active: true,
+  port_range: [8801, 8899],
+  template: "id: my-way-in\ntype: inbound-http\nenabled: false\nport: 8802\n",
+  defaults: { ...{ name: "site-chat", enabled: false, port: 8801, bind_ips: ["10.0.0.0/24"], per_minute: 300, daily_budget_usd: 5, tz: "America/Sao_Paulo", max_mb: 10, types: ["application/pdf", "image/png"], joke_min: 6, joke_max: 12, skill: "inbound-http-respond" }, name: "my-way-in", port: 8802, bind_ips: ["*"] },
+  triggers: [
+    { id: "site-chat", ok: true, enabled: false, port: 8801, token: "set", bind_ips: ["10.0.0.0/24"], per_minute: 300, quota: { available: true }, users: 4 },
+    { id: "broken", ok: false, error: "broken.yaml: not valid YAML" },
+  ],
+};
+
+export const inboundHttpDetailFixture: import("@/api/types").InboundHttpDetail = {
+  ok: true,
+  id: "site-chat",
+  text: "id: site-chat\ntype: inbound-http\nenabled: false\nport: 8801\n",
+  errors: [],
+  warnings: [],
+  fields: { name: "site-chat", enabled: false, port: 8801, bind_ips: ["10.0.0.0/24"], per_minute: 300, daily_budget_usd: 5, tz: "America/Sao_Paulo", max_mb: 10, types: ["application/pdf", "image/png"], joke_min: 6, joke_max: 12, skill: "inbound-http-respond" },
+  summary: inboundHttpTriggersFixture.triggers[0],
+  calls: [{ id: 1, at: "2026-11-03T15:00:00+00:00", method: "POST", path: "/v1/messages", peer: "10.0.0.5", status: 202, user_id: "11111111-2222" }],
 };

@@ -537,6 +537,83 @@ trigger still loads, since JSON is YAML. Each run is a row in
 `custom_trigger_run` (status, attempts, events found, tasks created, the
 per-block log); `custom_trigger_state` keeps the last one per trigger.
 
+## Inbound HTTP triggers
+
+The HTTP door of the brain, so other services can connect. The calling service
+is the only client: its end users never reach the brain. The brain takes a message, an
+attachment and the visitor's `user_id`, and gives back the answer with the
+skill's verdict. Everything about the end user (bans, strikes, appeals, limits
+per chat, IP) lives in the calling service. The contract is
+[`docs/inbound-http-contract.md`](inbound-http-contract.md); this is the ledger's half.
+
+One file per way in, `<home>/triggers/<id>.yaml`, saved switched off. A second
+way in (another token, port or set of IPs) is a second file:
+
+```yaml
+id: site-chat
+type: inbound-http
+enabled: false
+port: 8801                 # 8801-8899, one per trigger, unique
+bind_ips: ["*"]            # or IPs and CIDRs, checked against the TCP peer
+throttle: {per_minute: 300}   # calls a minute on this way in
+rate: {daily_budget_usd: 5, tz: America/Sao_Paulo}   # resets at local midnight
+attachments: {max_mb: 10, types: [application/pdf, image/png, image/jpeg, image/webp]}
+jokes: {every_n_min: 6, every_n_max: 12}
+skill: inbound-http-respond
+```
+
+`inbound_http.enabled` in `trigger.json` (with `enabled`) lets the server run
+them; it also holds `inbound_http.clamav` (`socket`, or `host` and `port`, else
+the `clamscan` binary) and `inbound_http.ollama` (`url`, `model`). With both on, the
+server opens one listener per enabled file (`_inbound_loop`, every 15 s, so an
+edit counts without a restart). TLS and the port forwarding are outside.
+
+```bash
+python3 scripts/trigger.py inbound-http new site-chat           # file + token, shown once
+python3 scripts/trigger.py inbound-http regenerate site-chat    # the old token dies at once
+python3 scripts/trigger.py inbound-http revoke site-chat        # every call is 401 until regenerate
+python3 scripts/trigger.py inbound-http enable|disable|validate|show|list [<id>]
+python3 scripts/trigger.py inbound-http calls|purge-calls|delete site-chat [--user U]
+```
+
+- **Settings.** The same things are in Settings, in the *Inbound HTTP* card:
+  the switch that opens the listeners (`inbound_http.enabled`), each way in with
+  its port, IPs, throttle and token state, on/off, the file as an editor (validate,
+  save; a port another way in has is refused), regenerate or revoke the token,
+  delete, and the newest calls. A token is shown once, there, and never read back.
+  The routes are `/api/inbound-http-triggers`, `-trigger`, `-trigger-enable` and
+  `-action`.
+- **Token.** `inb_...`, kept as sha256 only. No expiry; revoking is manual.
+- **API.** `POST|GET /v1/messages`, `POST /v1/attachments`, `GET /v1/health`;
+  JSON, `Authorization: Bearer`, errors `{"error": {"code", "message"}}`. The
+  visitor is the `user_id` the calling service minted (8-128 of `[A-Za-z0-9_-]`), made on
+  its first message. Checks run in order: peer in `bind_ips` (403
+  `ip_not_allowed`), token (401), throttle (429 `rate_limited` with
+  `error.retry_after` seconds), then the route. A text is at most 4000
+  characters; a message carries at most 5 attachments, all of its own user (404
+  otherwise). `GET messages?user_id=&after=<id>` returns every later message
+  with its current status; an answer carries `verdict`: `in_scope`, `silly`,
+  `recruiter`, `forbidden` or `abuse`.
+- **Throttle.** `throttle.per_minute` calls a minute on the trigger, counted in
+  memory. A peer that sends wrong tokens is held to 20 a minute.
+- **Messages are tasks.** Each one is a request on `inbound-http:<id>`, shown in the
+  Tasks tab; the session (skill `inbound-http-respond`) answers with
+  `trigger.py inbound-http reply`. The prompt fences the visitor's text, history and
+  files as data; the skill reads only nodes with `props.public = true`
+  (`inbound-http public`).
+- **Attachments** are checked for size, type (magic bytes too) and scanned by
+  ClamAV; an infected file is 422 and never stored, a scanner that is down is 503.
+- **Quota.** At the daily budget, or after a session hit the plan's limit,
+  messages get `429 quota_exhausted` with `error.resume_at`; the visitor also gets
+  the "back at HH:MM" line as an assistant message. For a session limit,
+  `resume_at` is read from the session's output by ollama and falls back to the
+  next local midnight.
+- **Verdict, not ban.** The skill classifies each message and says so; it keeps
+  no count and bans nobody. The calling service reads `verdict: forbidden` and decides.
+- **Call log.** Every call and its response (headers minus `Authorization`) is in
+  `inbound_call` (`inbound-http calls`), and on the message's task as a `inbound-call`
+  action. No tokens, headers or addresses reach `trigger.log`.
+
 ## Loops
 
 The brain answers as you, and on Jira the mention *is* your own account. So its

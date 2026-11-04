@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 
 import b2b
 import custom_trigger
+import inbound_http_trigger
 import trigger
 
 log = trigger.log
@@ -45,7 +46,8 @@ _pool: ThreadPoolExecutor | None = None
 _slack_client = None
 STATE: dict = {"running": False, "reason": "not started", "started_at": "",
                "slack": {"state": "off"}, "jira": {"state": "off"}, "github": {"state": "off"},
-               "b2b": {"state": "off"}, "custom": {"state": "off"}, "recovered": {}}
+               "b2b": {"state": "off"}, "custom": {"state": "off"}, "inbound_http": {"state": "off"},
+               "recovered": {}}
 
 
 def _now() -> str:
@@ -75,6 +77,8 @@ def _summary(cfg: dict, workers: int) -> str:
         on.append(f"{src} (poll {every}s)" if src != "slack" and every else src)
     if trigger.source_enabled(cfg, "custom"):
         on.append("custom triggers")
+    if trigger.source_enabled(cfg, "inbound_http"):
+        on.append("inbound HTTP triggers")
     return (f"sources: {', '.join(on) or 'none'}; up to {workers} sessions at once; "
             f"log: {trigger.log_path()}")
 
@@ -134,7 +138,7 @@ def _start(recovering: bool) -> None:
     trigger.setup_logging()
     cfg = trigger.load_config()
     STATE.update(slack={"state": "off"}, jira={"state": "off"}, github={"state": "off"},
-                 b2b={"state": "off"}, custom={"state": "off"})
+                 b2b={"state": "off"}, custom={"state": "off"}, inbound_http={"state": "off"})
     if not cfg.get("enabled") or cfg.get("_problem"):
         STATE.update(running=False, reason=cfg.get("_problem") or "triggers are switched off")
         log.info("triggers not running: %s", STATE["reason"])
@@ -157,6 +161,9 @@ def _start(recovering: bool) -> None:
     if trigger.source_enabled(cfg, "custom"):
         threading.Thread(target=_custom_loop, args=(cfg, _stop), daemon=True,
                          name="trigger-custom").start()
+    if trigger.source_enabled(cfg, "inbound_http"):
+        threading.Thread(target=_inbound_loop, args=(cfg, _stop), daemon=True,
+                         name="trigger-inbound-http").start()
     b2b_cfg = b2b.load_config()
     if b2b.active(b2b_cfg):
         # Its own file and switch, under the same master switch: a message
@@ -258,6 +265,25 @@ def _custom_loop(cfg: dict, stop_event: threading.Event, tick: float = CUSTOM_TI
         except Exception as e:
             _note("custom", state="erroring", last_error=str(e)[:300])
         stop_event.wait(tick)
+
+
+# ---------------------------------------------------------------- inbound http
+def _inbound_loop(cfg: dict, stop_event: threading.Event, tick: float = CUSTOM_TICK_S) -> None:
+    """Keep one listener open per enabled inbound-http trigger: a file switched on, off
+    or moved to another port counts within a tick. Closed when the triggers stop."""
+    mgr = inbound_http_trigger.Manager(_dispatch)
+    _note("inbound_http", state="listening", every_s=tick)
+    try:
+        while not stop_event.is_set():
+            try:
+                res = mgr.sync()
+                _note("inbound_http", state="listening", last_ok=_now(), listening=res["listening"],
+                      last_error="; ".join(f"{k}: {v}" for k, v in res["errors"].items())[:300])
+            except Exception as e:
+                _note("inbound_http", state="erroring", last_error=str(e)[:300])
+            stop_event.wait(tick)
+    finally:
+        mgr.stop()
 
 
 # ---------------------------------------------------------------- b2b
