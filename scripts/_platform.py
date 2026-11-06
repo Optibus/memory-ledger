@@ -22,9 +22,27 @@ from pathlib import Path
 WINDOWS = os.name == "nt"
 
 
+def extra_bin_dirs() -> list[Path]:
+    """Where a CLI lands that a server's PATH often lacks: the user-level bin dirs, every
+    nvm / fnm Node version, and npm's global prefix. A server started by systemd, Docker
+    or before the install does not see what the owner's login shell does."""
+    home = Path.home()
+    dirs = [home / ".local" / "bin", home / ".npm-global" / "bin", home / ".volta" / "bin",
+            Path("/usr/local/bin"), Path("/opt/homebrew/bin")]
+    nvm = Path(os.environ.get("NVM_DIR") or home / ".nvm") / "versions" / "node"
+    fnm = home / ".local" / "share" / "fnm" / "node-versions"
+    try:
+        for root, sub in ((nvm, "bin"), (fnm, "installation/bin")):
+            if root.is_dir():
+                dirs += [v / sub for v in sorted(root.iterdir(), reverse=True)]
+    except OSError:
+        pass
+    return [d for d in dirs if d.is_dir()]
+
+
 def resolve_bin(name: str) -> str:
     """The program to run for `name`: a path as given (with `~` expanded), or
-    the first match on PATH. On Windows `shutil.which` follows PATHEXT, so
+    the first match on PATH, else in the usual user-level install dirs. On Windows `shutil.which` follows PATHEXT, so
     `claude` finds `claude.cmd` or `claude.exe`. Falls back to `name` itself,
     so the error a caller reports names what was asked for."""
     name = str(name or "").strip()
@@ -32,7 +50,15 @@ def resolve_bin(name: str) -> str:
         return name
     if os.sep in name or (os.altsep and os.altsep in name) or name.startswith("~"):
         return str(Path(name).expanduser())
-    return shutil.which(name) or name
+    found = shutil.which(name)
+    if found:
+        return found
+    for d in extra_bin_dirs():
+        for ext in (("", ".cmd", ".exe") if WINDOWS else ("",)):
+            cand = d / (name + ext)
+            if cand.is_file() and os.access(cand, os.X_OK):
+                return str(cand)
+    return name
 
 
 def shell_path(path) -> str:

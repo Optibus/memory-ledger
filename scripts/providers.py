@@ -81,15 +81,9 @@ NEW_KINDS = ("gemini", "antigravity", "codex", "huggingface", "hfspace")        
 
 
 def _exe(kind: str, name: str = "") -> str:
-    """The program for `kind`. The Antigravity script installs to ~/.local/bin, which a
-    server started before the install may not have on PATH."""
+    """The program for `kind`: PATH first, then the usual install dirs (see `_platform.resolve_bin`)."""
     p = PROVIDERS.get(kind) or {}
-    exe = _platform.resolve_bin(name or p.get("bin") or "")
-    if p.get("script") and not os.path.isfile(exe):
-        alt = Path.home() / ".local" / "bin" / (p["bin"] + (".exe" if os.name == "nt" else ""))
-        if alt.is_file():
-            return str(alt)
-    return exe
+    return _platform.resolve_bin(name or p.get("bin") or "")
 
 
 def install_command(kind: str) -> str:
@@ -359,7 +353,9 @@ def install(kind: str, timeout: int = 300) -> dict[str, Any]:
         return {"ok": False, "error": "npm is not installed (it ships with Node.js)",
                 "command": cmd}
     try:
-        r = _textio.run_text([npm, "install", "-g", PROVIDERS[kind]["npm"]], timeout=timeout)
+        # npm is a `#!/usr/bin/env node` script: node must be on PATH, so put npm's dir there
+        env = {**os.environ, "PATH": str(Path(npm).parent) + os.pathsep + os.environ.get("PATH", "")}
+        r = _textio.run_text([npm, "install", "-g", PROVIDERS[kind]["npm"]], timeout=timeout, env=env)
     except Exception as e:
         return {"ok": False, "error": f"npm did not finish: {e}", "command": cmd}
     tail = ((r.stderr or "") + (r.stdout or "")).strip()[-600:]
