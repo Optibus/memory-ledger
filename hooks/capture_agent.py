@@ -54,7 +54,7 @@ def main():
         data = json.load(sys.stdin)
     except Exception:
         return
-    if not C.brain_enabled():
+    if not C.brain_enabled() or C.quest_session():
         return
     if (data.get("tool_name") or "") != "Task":
         return

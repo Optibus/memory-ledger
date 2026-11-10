@@ -26,7 +26,7 @@ def main():
         data = json.load(sys.stdin)
     except Exception:
         data = {}
-    if not C.brain_enabled():
+    if not C.brain_enabled() or C.quest_session():
         return
     phase = sys.argv[1] if len(sys.argv) > 1 else "end"
     sid = data.get("session_id") or ""
