@@ -10,6 +10,10 @@
 //   The command runs as `/bin/zsh -lc <command>` in <folder> (a login shell, so PATH is
 //   the person's own). When it exits, the box closes. Closing the box hangs it up.
 //
+// Tabs: each is its own terminal view with its own `claude`. ⌘T or + opens one in the active
+// tab's folder (up to 8); ⌘1…⌘8, ⇧⌘[ / ⇧⌘] switch; ⌘W or a tab's ✕ closes it. The last tab
+// closing (or its claude exiting) closes the box; ⇧⌘W or the header ✕ closes the box at once.
+//
 // Two sizes, each remembered on its own: thin (the default) and expanded. ⌘E (or ⤢)
 // switches; dragging any edge or corner resizes whichever size is showing, and that is
 // the size it comes back to. The top-left corner stays put on every switch, the window
@@ -26,6 +30,7 @@ let GLOW: CGFloat = 24, RADIUS: CGFloat = 18, HEADER: CGFloat = 40, INSET: CGFlo
 let THIN = NSSize(width: 720, height: 250)
 let BIG = NSSize(width: 960, height: 660)
 let MIN_CARD = NSSize(width: 460, height: 170)
+let MAX_TABS = 8
 
 let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
 
@@ -123,6 +128,61 @@ final class RoundButton: NSView {
     }
 }
 
+// One tab: its own terminal view and its own `claude` process, in a folder.
+final class Session {
+    let term: LocalProcessTerminalView
+    let folder: String
+    let subtitle: String
+    init(term: LocalProcessTerminalView, folder: String, subtitle: String) {
+        self.term = term; self.folder = folder; self.subtitle = subtitle
+    }
+}
+
+// A tab in the header: "1 · folder" and a small ✕. A click on the ✕ closes the tab, a click
+// anywhere else selects it. Narrow chips show only the number; the ✕ shows on the selected
+// chip (⌘W closes any tab the same way).
+final class TabChip: NSView {
+    var onSelect: (() -> Void)?
+    var onClose: (() -> Void)?
+    let text = NSTextField(labelWithString: "")
+    let cross = NSTextField(labelWithString: "\u{2715}")
+    var selected = false { didSet { restyle() } }
+    var showsCross: Bool { selected && bounds.width >= 44 }
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 8
+        for l in [text, cross] {
+            l.font = .systemFont(ofSize: 11.5, weight: .semibold)
+            l.lineBreakMode = .byTruncatingTail
+            addSubview(l)
+        }
+        cross.font = .systemFont(ofSize: 9.5, weight: .bold)
+        restyle()
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    func restyle() {
+        layer?.backgroundColor = NSColor(white: selected ? 0.02 : 1, alpha: selected ? 0.5 : 0.14).cgColor
+        text.textColor = NSColor(white: 1, alpha: selected ? 0.98 : 0.75)
+        cross.textColor = NSColor(white: 1, alpha: 0.8)
+        cross.isHidden = !showsCross
+    }
+    override func layout() {
+        super.layout()
+        let crossW: CGFloat = showsCross ? 18 : 0
+        text.frame = NSRect(x: 8, y: (bounds.height - 15)/2, width: max(0, bounds.width - 16 - crossW), height: 15)
+        cross.frame = NSRect(x: bounds.width - 20, y: (bounds.height - 13)/2, width: 14, height: 13)
+        cross.isHidden = !showsCross
+    }
+    override func mouseDown(with event: NSEvent) { alphaValue = 0.7 }
+    override func mouseUp(with event: NSEvent) {
+        alphaValue = 1
+        let p = convert(event.locationInWindow, from: nil)
+        guard bounds.insetBy(dx: -4, dy: -4).contains(p) else { return }
+        if showsCross && p.x >= bounds.width - 22 { onClose?() } else { onSelect?() }
+    }
+}
+
 final class GradientView: NSView {
     let gradient = CAGradientLayer()
     override init(frame: NSRect) {
@@ -144,7 +204,14 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, LocalProcess
     var expandButton: RoundButton!
     var closeButton: RoundButton!
     var well: NSView!
-    var term: LocalProcessTerminalView!
+    var plusButton: RoundButton!
+    var sessions: [Session] = []
+    var chips: [TabChip] = []
+    var active: Session!
+    var term: LocalProcessTerminalView { active.term }
+    var termFont = NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular)
+    var command = "claude"
+    var env: [String] = []
     var grip: GripView!
     var handles: [EdgeHandle] = []
     let defaults = UserDefaults.standard
@@ -161,7 +228,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, LocalProcess
         let iconPath = args.count > 1 ? args[1] : ""
         let subtitle = args.count > 2 ? args[2] : ""
         let folder = args.count > 3 && !args[3].isEmpty ? args[3] : FileManager.default.currentDirectoryPath
-        let command = args.count > 4 && !args[4].isEmpty ? args[4] : "claude"
+        command = args.count > 4 && !args[4].isEmpty ? args[4] : "claude"
         let titleText = args.count > 5 && !args[5].isEmpty ? args[5] : "Ledger Agent"
 
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
@@ -219,9 +286,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, LocalProcess
         expandButton = RoundButton(symbol: "\u{2922}", tip: "Expand (⌘E)")
         expandButton.onClick = { [weak self] in self?.toggle() }
         header.addSubview(expandButton)
-        closeButton = RoundButton(symbol: "\u{2715}", tip: "Close (⌘W) — ends the session")
+        closeButton = RoundButton(symbol: "\u{2715}", tip: "Close the box (⇧⌘W) — ends every session")
         closeButton.onClick = { [weak self] in self?.finish() }
         header.addSubview(closeButton)
+        plusButton = RoundButton(symbol: "+", tip: "New tab (⌘T)")
+        plusButton.onClick = { [weak self] in self?.newTab() }
+        header.addSubview(plusButton)
 
         // The terminal sits in a dark, rounded well under the header.
         well = NSView()
@@ -232,15 +302,6 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, LocalProcess
         well.layer?.borderWidth = 1
         well.layer?.borderColor = NSColor(white: 1, alpha: 0.18).cgColor
         card.addSubview(well)
-
-        term = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
-        term.processDelegate = self
-        term.font = NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular)
-        term.nativeBackgroundColor = INK
-        term.nativeForegroundColor = NSColor(white: 0.93, alpha: 1)
-        term.caretColor = BLUE
-        term.optionAsMetaKey = true
-        well.addSubview(term)
 
         grip = GripView()
         card.addSubview(grip)
@@ -254,18 +315,20 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, LocalProcess
             handles.append(h)
         }
 
+        // The person's own environment (PATH included), plus what a terminal advertises.
+        var environment = ProcessInfo.processInfo.environment
+        environment["TERM"] = "xterm-256color"
+        environment["COLORTERM"] = "truecolor"
+        environment["TERM_PROGRAM"] = "LedgerAgent"
+        if environment["LANG"] == nil { environment["LANG"] = "en_US.UTF-8" }
+        env = environment.map { "\($0.key)=\($0.value)" }
+
+        let first = makeSession(folder: folder, subtitle: subtitle.isEmpty ? shortPath(folder) : subtitle)
+        sessions = [first]
+        active = first
         restore()
         relayout()
-
-        // The person's own environment (PATH included), plus what a terminal advertises.
-        var env = ProcessInfo.processInfo.environment
-        env["TERM"] = "xterm-256color"
-        env["COLORTERM"] = "truecolor"
-        env["TERM_PROGRAM"] = "LedgerAgent"
-        if env["LANG"] == nil { env["LANG"] = "en_US.UTF-8" }
-        term.startProcess(executable: "/bin/zsh", args: ["-lc", command],
-                          environment: env.map { "\($0.key)=\($0.value)" },
-                          execName: "zsh", currentDirectory: folder)
+        start(first)
 
         win.alphaValue = 0
         win.makeKeyAndOrderFront(nil)
@@ -283,6 +346,88 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, LocalProcess
             else { NSApp.activate(ignoringOtherApps: true); self.win.makeKeyAndOrderFront(nil) }
         }
         if ProcessInfo.processInfo.environment["LEDGER_AGENT_SELFTEST"] != nil { selfTest() }
+    }
+
+    // ------------------------------------------------------------ tabs
+    func shortPath(_ p: String) -> String {
+        let home = NSHomeDirectory()
+        return p.hasPrefix(home) ? "~" + p.dropFirst(home.count) : p
+    }
+
+    // The terminal view for a new tab, in the well and hidden. The process starts in start(),
+    // once the view has its final size.
+    func makeSession(folder: String, subtitle: String) -> Session {
+        let t = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
+        t.processDelegate = self
+        t.font = termFont
+        t.nativeBackgroundColor = INK
+        t.nativeForegroundColor = NSColor(white: 0.93, alpha: 1)
+        t.caretColor = BLUE
+        t.optionAsMetaKey = true
+        t.isHidden = true
+        well.addSubview(t)
+        return Session(term: t, folder: folder, subtitle: subtitle)
+    }
+
+    func start(_ s: Session) {
+        s.term.startProcess(executable: "/bin/zsh", args: ["-lc", command], environment: env,
+                            execName: "zsh", currentDirectory: s.folder)
+    }
+
+    // A new tab starts in the active tab's folder, with the same command, and takes focus.
+    @objc func newTab(_ s: Any? = nil) {
+        if sessions.count >= MAX_TABS || finishing { NSSound.beep(); return }
+        let n = makeSession(folder: active.folder, subtitle: active.subtitle)
+        sessions.append(n)
+        select(n)
+        start(n)
+    }
+
+    func select(_ s: Session) {
+        active = s
+        for x in sessions { x.term.isHidden = x !== s }
+        relayout()
+        win.makeFirstResponder(s.term)
+    }
+
+    func selectIndex(_ i: Int) { if i >= 0 && i < sessions.count { select(sessions[i]) } }
+    @objc func selectNumber(_ item: NSMenuItem) { selectIndex(item.tag - 1) }
+    @objc func nextTab(_ s: Any?) {
+        guard let i = sessions.firstIndex(where: { $0 === active }) else { return }
+        selectIndex((i + 1) % sessions.count)
+    }
+    @objc func previousTab(_ s: Any?) {
+        guard let i = sessions.firstIndex(where: { $0 === active }) else { return }
+        selectIndex((i - 1 + sessions.count) % sessions.count)
+    }
+
+    // Closing a tab hangs up its claude (unless it already exited). The last tab closing
+    // closes the box. The neighbour, to the right if there is one, takes over.
+    func closeTab(_ s: Session, hangUp: Bool = true) {
+        guard let i = sessions.firstIndex(where: { $0 === s }), !finishing else { return }
+        if sessions.count == 1 { finish(hangUp: hangUp); return }
+        sessions.remove(at: i)
+        if hangUp { s.term.terminate() }
+        s.term.removeFromSuperview()
+        if active === s { select(sessions[min(i, sessions.count - 1)]) } else { relayout() }
+    }
+    @objc func closeActiveTab(_ s: Any?) { closeTab(active) }
+    @objc func closeBox(_ s: Any?) { finish() }
+
+    func rebuildChips() {
+        while chips.count > sessions.count { chips.removeLast().removeFromSuperview() }
+        while chips.count < sessions.count {
+            let c = TabChip()
+            header.addSubview(c)
+            chips.append(c)
+        }
+        for (i, s) in sessions.enumerated() {
+            let c = chips[i]
+            c.onSelect = { [weak self, weak s] in if let s = s { self?.select(s) } }
+            c.onClose = { [weak self, weak s] in if let s = s { self?.closeTab(s) } }
+            c.selected = s === active
+            c.toolTip = "\(i + 1) · \(s.subtitle) (⌘\(i + 1))"
+        }
     }
 
     // ------------------------------------------------------------ sizes
@@ -416,10 +561,28 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, LocalProcess
         title.frame.origin = NSPoint(x: x, y: (HEADER - title.frame.height)/2)
         closeButton.frame.origin = NSPoint(x: W - 12 - 24, y: (HEADER - 24)/2)
         expandButton.frame.origin = NSPoint(x: W - 12 - 24 - 30, y: (HEADER - 24)/2)
-        let subX = title.frame.maxX + 10
-        sub.frame = NSRect(x: subX, y: (HEADER - 16)/2 - 1, width: max(0, expandButton.frame.minX - 10 - subX), height: 16)
+        // Tabs, then "+", then (if there is room) the folder of the active tab.
+        let tabsX = title.frame.maxX + 12
+        let avail = max(0, expandButton.frame.minX - 10 - 30 - tabsX)
+        let gap: CGFloat = 4
+        let chipW = min(150, max(24, (avail - gap * CGFloat(sessions.count - 1)) / CGFloat(sessions.count)))
+        rebuildChips()
+        for (i, c) in chips.enumerated() {
+            c.frame = NSRect(x: tabsX + CGFloat(i) * (chipW + gap), y: (HEADER - 24)/2, width: chipW, height: 24)
+            c.text.stringValue = chipW >= 70 ? "\(i + 1) · \((sessions[i].folder as NSString).lastPathComponent)" : "\(i + 1)"
+            c.restyle()
+            c.needsLayout = true
+        }
+        let tabsEnd = tabsX + CGFloat(sessions.count) * (chipW + gap) - gap
+        plusButton.frame.origin = NSPoint(x: tabsEnd + 6, y: (HEADER - 24)/2)
+        plusButton.isHidden = sessions.count >= MAX_TABS
+        sub.stringValue = active.subtitle
+        let subX = plusButton.frame.maxX + 10
+        let subW = expandButton.frame.minX - 10 - subX
+        sub.isHidden = subW < 80
+        sub.frame = NSRect(x: subX, y: (HEADER - 16)/2 - 1, width: max(0, subW), height: 16)
         well.frame = NSRect(x: INSET, y: INSET, width: W - 2*INSET, height: max(40, H - HEADER - INSET))
-        term.frame = well.bounds.insetBy(dx: 6, dy: 4)
+        for s in sessions { s.term.frame = well.bounds.insetBy(dx: 6, dy: 4) }
         grip.frame = NSRect(x: W - 16, y: 2, width: 14, height: 14)
         grip.needsDisplay = true
         // Edge strips: the glow margin plus a few points into the card; corners a bit bigger.
@@ -445,18 +608,25 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, LocalProcess
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {}
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
     func processTerminated(source: TerminalView, exitCode: Int32?) {
-        DispatchQueue.main.async { [weak self] in self?.finish(hangUp: false) }
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, let s = self.sessions.first(where: { $0.term === source }) else { return }
+            self.closeTab(s, hangUp: false)
+        }
     }
 
-    @objc func close(_ s: Any?) { finish() }
     @objc func expand(_ s: Any?) { toggle() }
-    @objc func bigger(_ s: Any?) { term.font = NSFont.monospacedSystemFont(ofSize: min(24, term.font.pointSize + 1), weight: .regular) }
-    @objc func smaller(_ s: Any?) { term.font = NSFont.monospacedSystemFont(ofSize: max(9, term.font.pointSize - 1), weight: .regular) }
+    // The font size is the box's: every tab follows it, and a new tab starts with it.
+    func setFontSize(_ size: CGFloat) {
+        termFont = NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+        for s in sessions { s.term.font = termFont }
+    }
+    @objc func bigger(_ s: Any?) { setFontSize(min(24, termFont.pointSize + 1)) }
+    @objc func smaller(_ s: Any?) { setFontSize(max(9, termFont.pointSize - 1)) }
 
     func finish(hangUp: Bool = true) {
         if finishing { return }
         finishing = true
-        if hangUp { term.terminate() }      // SIGHUP to claude, as closing any terminal does
+        if hangUp { for s in sessions { s.term.terminate() } }      // SIGHUP to claude, as closing any terminal does
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = reduceMotion ? 0.08 : 0.14
             self.win.animator().alphaValue = 0
@@ -478,7 +648,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, LocalProcess
         func card() -> NSSize { NSSize(width: win.frame.width - 2*GLOW, height: win.frame.height - 2*GLOW) }
         func line(_ what: String) {
             let f = win.frame
-            print("\(what)\texpanded=\(expanded)\tcard=\(Int(card().width))x\(Int(card().height))\ttopLeft=\(Int(f.minX)),\(Int(f.maxY))\tterm=\(Int(term.frame.width))x\(Int(term.frame.height))")
+            print("\(what)\texpanded=\(expanded)\tcard=\(Int(card().width))x\(Int(card().height))\ttopLeft=\(Int(f.minX)),\(Int(f.maxY))\tterm=\(Int(term.frame.width))x\(Int(term.frame.height))\ttabs=\(sessions.count)\tactive=\((sessions.firstIndex(where: { $0 === active }) ?? -1) + 1)\tchips=\(chips.count)")
             fflush(stdout)
         }
         var steps: [(String, () -> Void)] = [
@@ -503,6 +673,17 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, LocalProcess
             ("drag-bottom-right-out", { self.drag([.bottom, .right], 120, -150) }),
             ("expand-after-drags", { self.setExpanded(true) }),
             ("shrink-back-to-dragged-thin", { self.setExpanded(false) }),
+            ("new-tab", { self.newTab() }),
+            ("new-tab-2", { self.newTab() }),
+            ("select-1", { self.selectIndex(0) }),
+            ("next", { self.nextTab(nil) }),
+            ("previous-twice-wraps", { self.previousTab(nil); self.previousTab(nil) }),
+            ("close-active-last-tab", { self.closeActiveTab(nil) }),
+            ("exit-closes-only-that-tab", { self.sessions.last?.term.send(txt: "\u{04}") }),
+            ("fill-to-max", { for _ in 0..<10 { self.newTab() } }),
+            ("close-middle", { self.closeTab(self.sessions[3]) }),
+            ("narrow-with-many-tabs", { self.resizeTo(MIN_CARD) }),
+            ("close-down-to-one", { while self.sessions.count > 1 { self.closeTab(self.sessions[0]) } }),
         ]
         func next() {
             guard !steps.isEmpty else { finish(); return }
@@ -532,10 +713,31 @@ let editMenu = NSMenu(title: "Edit")
 editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
 editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
 editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
-for (t, sel, key) in [("Expand", #selector(App.expand(_:)), "e"), ("Close", #selector(App.close(_:)), "w"),
+for (t, sel, key) in [("Expand", #selector(App.expand(_:)), "e"), ("New Tab", #selector(App.newTab(_:)), "t"),
+                      ("Close Tab", #selector(App.closeActiveTab(_:)), "w"),
                       ("Bigger", #selector(App.bigger(_:)), "+"), ("Bigger", #selector(App.bigger(_:)), "="),
                       ("Smaller", #selector(App.smaller(_:)), "-")] {
     let item = editMenu.addItem(withTitle: t, action: sel, keyEquivalent: key)
+    item.target = delegate
+}
+// Tab switching: ⌘1…⌘8, ⇧⌘[ and ⇧⌘] (both spellings of the bracket), ⌘⌥←/→. Close the box: ⇧⌘W.
+let closeBox = editMenu.addItem(withTitle: "Close Box", action: #selector(App.closeBox(_:)), keyEquivalent: "w")
+closeBox.keyEquivalentModifierMask = [.command, .shift]
+closeBox.target = delegate
+for n in 1...MAX_TABS {
+    let item = editMenu.addItem(withTitle: "Tab \(n)", action: #selector(App.selectNumber(_:)), keyEquivalent: "\(n)")
+    item.tag = n
+    item.target = delegate
+}
+let left = String(UnicodeScalar(NSLeftArrowFunctionKey)!), right = String(UnicodeScalar(NSRightArrowFunctionKey)!)
+for (t, sel, key, mods) in [("Previous Tab", #selector(App.previousTab(_:)), "[", NSEvent.ModifierFlags([.command, .shift])),
+                            ("Previous Tab", #selector(App.previousTab(_:)), "{", [.command, .shift]),
+                            ("Previous Tab", #selector(App.previousTab(_:)), left, [.command, .option]),
+                            ("Next Tab", #selector(App.nextTab(_:)), "]", [.command, .shift]),
+                            ("Next Tab", #selector(App.nextTab(_:)), "}", [.command, .shift]),
+                            ("Next Tab", #selector(App.nextTab(_:)), right, [.command, .option])] {
+    let item = editMenu.addItem(withTitle: t, action: sel, keyEquivalent: key)
+    item.keyEquivalentModifierMask = mods
     item.target = delegate
 }
 editItem.submenu = editMenu
