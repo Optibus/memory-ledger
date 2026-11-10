@@ -295,8 +295,14 @@ keeps its full status line:
   Preferences (the `agent_icon` setting, a file in `<home>`), the same one the
   browser tab and sidebar show; with none set it shows `frontend/public/favicon.svg`.
   `agent_panel.py` hands the box that file's path.
-- ⌘C / ⌘V copy and paste, ⌘+ / ⌘− change the font, ⌘W or ✕ closes (and hangs
-  up claude). When claude exits (`/exit`), the box closes.
+- **Tabs.** Each tab is its own terminal with its own `claude` session, so you
+  can run several at once. **⌘T** or **+** opens a new tab in the active tab's
+  folder (up to 8). Click a tab, or **⌘1**–**⌘8**, **⇧⌘[** / **⇧⌘]** or
+  **⌘⌥←/→**, to switch. **⌘W** or a tab's ✕ closes that tab and hangs up its
+  claude, with no confirm. `/exit` in a tab closes only that tab. Closing the
+  last tab (or `/exit` in it) closes the box. The header ✕ or **⇧⌘W** closes the
+  whole box and every tab. Tabs are not remembered: a relaunch starts one tab.
+- ⌘C / ⌘V copy and paste, ⌘+ / ⌘− change the font (all tabs).
 - It is a tiny AppKit app (`scripts/agent_terminal.swift`) compiled together
   with SwiftTerm's sources (a pinned commit, cloned once into `<home>/build/`)
   into `<home>/LedgerAgentTerminal.app`. The first run builds it (~1-2 min,
