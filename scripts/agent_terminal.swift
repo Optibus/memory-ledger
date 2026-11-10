@@ -170,7 +170,11 @@ final class TabChip: NSView {
     override func layout() {
         super.layout()
         let crossW: CGFloat = showsCross ? 18 : 0
-        text.frame = NSRect(x: 8, y: (bounds.height - 15)/2, width: max(0, bounds.width - 16 - crossW), height: 15)
+        let narrow = bounds.width < 44
+        text.alignment = narrow ? .center : .left
+        text.lineBreakMode = narrow ? .byClipping : .byTruncatingTail
+        text.frame = narrow ? NSRect(x: 0, y: (bounds.height - 15)/2, width: bounds.width, height: 15)
+                            : NSRect(x: 8, y: (bounds.height - 15)/2, width: max(0, bounds.width - 16 - crossW), height: 15)
         cross.frame = NSRect(x: bounds.width - 20, y: (bounds.height - 13)/2, width: 14, height: 13)
         cross.isHidden = !showsCross
     }
@@ -326,6 +330,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, LocalProcess
         let first = makeSession(folder: folder, subtitle: subtitle.isEmpty ? shortPath(folder) : subtitle)
         sessions = [first]
         active = first
+        first.term.isHidden = false
         restore()
         relayout()
         start(first)
@@ -558,6 +563,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, LocalProcess
         var x: CGFloat = 14
         if let iv = icon { iv.frame = NSRect(x: x, y: (HEADER - 20)/2, width: 20, height: 20); x += 28 }
         title.sizeToFit()
+        title.lineBreakMode = .byTruncatingTail
+        title.frame.size.width = min(title.frame.width, 150)   // a long title must not squeeze out the tabs
         title.frame.origin = NSPoint(x: x, y: (HEADER - title.frame.height)/2)
         closeButton.frame.origin = NSPoint(x: W - 12 - 24, y: (HEADER - 24)/2)
         expandButton.frame.origin = NSPoint(x: W - 12 - 24 - 30, y: (HEADER - 24)/2)
@@ -565,7 +572,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, LocalProcess
         let tabsX = title.frame.maxX + 12
         let avail = max(0, expandButton.frame.minX - 10 - 30 - tabsX)
         let gap: CGFloat = 4
-        let chipW = min(150, max(24, (avail - gap * CGFloat(sessions.count - 1)) / CGFloat(sessions.count)))
+        let chipW = min(150, max(30, (avail - gap * CGFloat(sessions.count - 1)) / CGFloat(sessions.count)))
         rebuildChips()
         for (i, c) in chips.enumerated() {
             c.frame = NSRect(x: tabsX + CGFloat(i) * (chipW + gap), y: (HEADER - 24)/2, width: chipW, height: 24)
@@ -648,7 +655,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, LocalProcess
         func card() -> NSSize { NSSize(width: win.frame.width - 2*GLOW, height: win.frame.height - 2*GLOW) }
         func line(_ what: String) {
             let f = win.frame
-            print("\(what)\texpanded=\(expanded)\tcard=\(Int(card().width))x\(Int(card().height))\ttopLeft=\(Int(f.minX)),\(Int(f.maxY))\tterm=\(Int(term.frame.width))x\(Int(term.frame.height))\ttabs=\(sessions.count)\tactive=\((sessions.firstIndex(where: { $0 === active }) ?? -1) + 1)\tchips=\(chips.count)")
+            print("\(what)\texpanded=\(expanded)\tcard=\(Int(card().width))x\(Int(card().height))\ttopLeft=\(Int(f.minX)),\(Int(f.maxY))\tterm=\(Int(term.frame.width))x\(Int(term.frame.height))\ttabs=\(sessions.count)\tactive=\((sessions.firstIndex(where: { $0 === active }) ?? -1) + 1)\tchips=\(chips.count)\tshown=\(sessions.filter { !$0.term.isHidden }.count)")
             fflush(stdout)
         }
         var steps: [(String, () -> Void)] = [
@@ -679,7 +686,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, LocalProcess
             ("next", { self.nextTab(nil) }),
             ("previous-twice-wraps", { self.previousTab(nil); self.previousTab(nil) }),
             ("close-active-last-tab", { self.closeActiveTab(nil) }),
-            ("exit-closes-only-that-tab", { self.sessions.last?.term.send(txt: "\u{04}") }),
+            ("exit-closes-only-that-tab", { self.sessions.last?.term.send(txt: "x\u{04}\u{04}") }),
             ("fill-to-max", { for _ in 0..<10 { self.newTab() } }),
             ("close-middle", { self.closeTab(self.sessions[3]) }),
             ("narrow-with-many-tabs", { self.resizeTo(MIN_CARD) }),
