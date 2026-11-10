@@ -6,7 +6,8 @@ on, and the server's detached launch.
     python -m pytest tests/test_agent_panel.py
 
 The box's own size handling has a self-test in the app itself:
-LEDGER_AGENT_SELFTEST=1 <home>/LedgerAgentTerminal.app/Contents/MacOS/LedgerAgentTerminal "" t /tmp "sleep 30"
+LEDGER_AGENT_SELFTEST=1 <home>/LedgerAgentTerminal.app/Contents/MacOS/LedgerAgentTerminal "" t /tmp "cat"
+(walks sizes and tabs; "cat" so Ctrl-D ends a tab)
 """
 
 from __future__ import annotations
