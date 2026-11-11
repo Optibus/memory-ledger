@@ -615,16 +615,18 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, LocalProcess
 
     // ------------------------------------------------------------ the session
     func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
-    // claude sets the terminal title to its session name (with a status glyph in front, and plain
+    // claude sets the terminal title to its session name (with a status glyph (a symbol, stripped here) in front, and plain
     // "Claude Code" when the session has no name). The tab shows that name.
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
         var name = title.trimmingCharacters(in: .whitespaces)
-        while let f = name.unicodeScalars.first, !CharacterSet.alphanumerics.contains(f) {
+        while let f = name.unicodeScalars.first, (CharacterSet.symbols.contains(f) || CharacterSet.whitespaces.contains(f)) {
             name = String(name.unicodeScalars.dropFirst()).trimmingCharacters(in: .whitespaces)
         }
         DispatchQueue.main.async { [weak self] in
             guard let self = self, let s = self.sessions.first(where: { $0.term === source }) else { return }
-            s.name = name == "Claude Code" ? "" : name
+            let new = name == "Claude Code" ? "" : name
+            if new == s.name { return }   // the status glyph animates; the name rarely changes
+            s.name = new
             self.relayout()
         }
     }
