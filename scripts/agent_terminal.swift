@@ -133,6 +133,7 @@ final class Session {
     let term: LocalProcessTerminalView
     let folder: String
     let subtitle: String
+    var name = ""   // the session name `claude` puts in the terminal title; empty until it has one
     init(term: LocalProcessTerminalView, folder: String, subtitle: String) {
         self.term = term; self.folder = folder; self.subtitle = subtitle
     }
@@ -204,6 +205,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, LocalProcess
     var header: DragView!
     var icon: NSImageView?
     var title: NSTextField!
+    var defaultTabName = "Ledger Agent"   // a tab with no session name shows the box title
     var sub: NSTextField!
     var expandButton: RoundButton!
     var closeButton: RoundButton!
@@ -234,6 +236,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, LocalProcess
         let folder = args.count > 3 && !args[3].isEmpty ? args[3] : FileManager.default.currentDirectoryPath
         command = args.count > 4 && !args[4].isEmpty ? args[4] : "claude"
         let titleText = args.count > 5 && !args[5].isEmpty ? args[5] : "Ledger Agent"
+        defaultTabName = titleText
 
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let size = windowSize(THIN)
@@ -431,7 +434,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, LocalProcess
             c.onSelect = { [weak self, weak s] in if let s = s { self?.select(s) } }
             c.onClose = { [weak self, weak s] in if let s = s { self?.closeTab(s) } }
             c.selected = s === active
-            c.toolTip = "\(i + 1) · \(s.subtitle) (⌘\(i + 1))"
+            c.toolTip = "\(i + 1) · \(s.name.isEmpty ? defaultTabName : s.name) · \(s.subtitle) (⌘\(i + 1))"
         }
     }
 
@@ -576,7 +579,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, LocalProcess
         rebuildChips()
         for (i, c) in chips.enumerated() {
             c.frame = NSRect(x: tabsX + CGFloat(i) * (chipW + gap), y: (HEADER - 24)/2, width: chipW, height: 24)
-            c.text.stringValue = chipW >= 70 ? "\(i + 1) · \((sessions[i].folder as NSString).lastPathComponent)" : "\(i + 1)"
+            c.text.stringValue = chipW >= 70 ? "\(i + 1) · \(sessions[i].name.isEmpty ? defaultTabName : sessions[i].name)" : "\(i + 1)"
             c.restyle()
             c.needsLayout = true
         }
@@ -612,7 +615,19 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, LocalProcess
 
     // ------------------------------------------------------------ the session
     func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
-    func setTerminalTitle(source: LocalProcessTerminalView, title: String) {}
+    // claude sets the terminal title to its session name (with a status glyph in front, and plain
+    // "Claude Code" when the session has no name). The tab shows that name.
+    func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
+        var name = title.trimmingCharacters(in: .whitespaces)
+        while let f = name.unicodeScalars.first, !CharacterSet.alphanumerics.contains(f) {
+            name = String(name.unicodeScalars.dropFirst()).trimmingCharacters(in: .whitespaces)
+        }
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, let s = self.sessions.first(where: { $0.term === source }) else { return }
+            s.name = name == "Claude Code" ? "" : name
+            self.relayout()
+        }
+    }
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
     func processTerminated(source: TerminalView, exitCode: Int32?) {
         DispatchQueue.main.async { [weak self] in

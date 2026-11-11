@@ -296,7 +296,9 @@ keeps its full status line:
   browser tab and sidebar show; with none set it shows `frontend/public/favicon.svg`.
   `agent_panel.py` hands the box that file's path.
 - **Tabs.** Each tab is its own terminal with its own `claude` session, so you
-  can run several at once. **⌘T** or **+** opens a new tab in the active tab's
+  can run several at once. A tab is named after its `claude` session (the name
+  you give it with `/rename`); with no name it shows the box's title ("Dora
+  agent" for a brain called Dora). **⌘T** or **+** opens a new tab in the active tab's
   folder (up to 8). Click a tab, or **⌘1**–**⌘8**, **⇧⌘[** / **⇧⌘]** or
   **⌘⌥←/→**, to switch. **⌘W** or a tab's ✕ closes that tab and hangs up its
   claude, with no confirm. `/exit` in a tab closes only that tab. Closing the
