@@ -34,6 +34,13 @@ Code and is silently dropped. Measured 2026-07-27, revised 2026-10-02:
 SessionStart brief, not on every prompt: the same message on every prompt was
 ~52 tokens a prompt that taught the model nothing new after the first.
 
+**Agent Quest quests are not captured** (`skip_quest_capture`, on by default). Agent
+Quest sets a non-empty `AQ_QUEST_ID` on every quest spawn; when it is present the
+capture hooks (prompt, answer, subagent, conversation close) do nothing, so the
+nightly Biographer never grooms the ledger's own copy of its quests. Turn off with
+`"skip_quest_capture": false` in `<home>/settings.json` or
+`MEMORY_LEDGER_NO_SKIP_QUEST_CAPTURE=1`.
+
 **Gated per-prompt recall** (`prompt_recall`, off by default; turn on with the
 Prompt recall switch on the Settings page or `"prompt_recall": true` in
 `<home>/settings.json`, force off with

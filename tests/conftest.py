@@ -66,6 +66,8 @@ SCRUB_PREFIXES = (
 SCRUB_NAMES = (
     "SECOND_BRAIN_DB", "MEMORY_LEDGER_DB", "MEMORY_LEDGER_HOME",
     "SECOND_BRAIN_OFF", "MEMORY_LEDGER_OFF",
+    # set when the suite itself runs inside an Agent Quest quest; the capture hooks skip those
+    "AQ_QUEST_ID", "MEMORY_LEDGER_NO_SKIP_QUEST_CAPTURE",
 )
 
 # how long a server may take to come up: a first start builds its own venv

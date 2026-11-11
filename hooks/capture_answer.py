@@ -22,7 +22,7 @@ def main():
         data = json.load(sys.stdin)
     except Exception:
         data = {}
-    if not C.brain_enabled():
+    if not C.brain_enabled() or C.quest_session():
         return
     sid = data.get("session_id") or ""
     # Newer Claude Code hands the final answer directly on stdin; older versions

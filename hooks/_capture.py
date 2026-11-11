@@ -61,6 +61,23 @@ def brain_enabled() -> bool:
         return False
 
 
+def quest_session() -> bool:
+    """True when this session is an Agent Quest quest, which capture must skip.
+
+    Agent Quest exports AQ_QUEST_ID (non-empty) on every quest spawn; it exports
+    it empty for sessions that are not quests, so only a non-empty value counts.
+    Without the guard the nightly Biographer would groom the ledger's capture of
+    its own quests (the capture-side twin of ledgerLoop.js keeping quest loops
+    out of the Backlog import). Turn it off with `"skip_quest_capture": false`
+    in settings.json or $MEMORY_LEDGER_NO_SKIP_QUEST_CAPTURE=1."""
+    if not os.environ.get("AQ_QUEST_ID", "").strip():
+        return False
+    try:
+        return graph.flag("skip_quest_capture")
+    except Exception:
+        return True
+
+
 def connect():
     return graph.connect()
 

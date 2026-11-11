@@ -225,7 +225,10 @@ BOOL_SETTINGS = {"autosync": True, "consolidate": True, "ui_sync": False,
                  "learned_rules": False,
                  # gated per-prompt recall (hooks/capture_prompt.py): opt-in, it
                  # spends context tokens on every prompt it fires on
-                 "prompt_recall": False}
+                 "prompt_recall": False,
+                 # hooks/_capture.py: do not capture Agent Quest quest sessions
+                 # (AQ_QUEST_ID set), so its Biographer never grooms its own residue
+                 "skip_quest_capture": True}
 
 _BOOL_TRUE = {"1", "true", "yes", "on"}
 _BOOL_FALSE = {"0", "false", "no", "off"}

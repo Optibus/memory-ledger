@@ -35,7 +35,7 @@ def main():
         data = json.load(sys.stdin)
     except Exception:
         data = {}
-    if not C.brain_enabled():
+    if not C.brain_enabled() or C.quest_session():
         return
     # field name varies by Claude Code version: prompt | user_input
     prompt = (data.get("prompt") or data.get("user_input") or "").strip()
