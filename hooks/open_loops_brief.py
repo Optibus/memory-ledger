@@ -45,8 +45,37 @@ CAPTURE_ON = ("[memory-ledger] Capture is on: every turn is stored without a mod
               "graph.py search / brain_query.py.")
 
 
-def emit(note):
-    print(_switch.hook_context("SessionStart", CAPTURE_ON + "\n" + note))
+# Ids of the stored nodes the brief names, so `recall-report` can say whether a
+# session went on to use them. Filled as each block is built.
+RECENT_IDS = []
+FOCUS_IDS = []
+
+
+def log_brief(ids, text):
+    """Record which notes this brief injected, and its size, on the session's
+    conversation node (`props.brief_injected`, `brief_chars`, `brief_tokens_est`).
+    Best-effort: logging must never cost the brief."""
+    sid = _stdin.get("session_id") or ""
+    if not sid or not ids:
+        return
+    try:
+        sys.path.insert(0, os.path.join(root, "hooks"))
+        import _capture as C
+        con = C.connect()
+        conv = C.conversation_for(con, sid, _stdin.get("cwd") or "")
+        if conv:
+            C.graph.api_update_node(con, conv, props_patch={
+                "brief_injected": list(dict.fromkeys(ids)), "brief_chars": len(text),
+                "brief_tokens_est": C.est_tokens(text)})
+    except Exception:
+        pass
+
+
+def emit(note, ids=()):
+    text = CAPTURE_ON + "\n" + note
+    print(_switch.hook_context("SessionStart", text))
+    # The recent-sessions block is cut at RECENT_MAX_CHARS: log only ids still shown.
+    log_brief([i for i in ids if i not in RECENT_IDS or f"[n:{i}]" in text], text)
 
 
 try:
@@ -96,6 +125,7 @@ def recent_sessions_block():
                             if ln.startswith("Outcome:")), "")
             title = (r["title"] or "").split(": ", 1)[-1]
             out.append(f"- {title[:70]} \u2192 {outcome[:140]} [n:{r['id']}]")
+            RECENT_IDS.append(r["id"])
             if len(out) >= 3:
                 break
         if not out:
@@ -276,7 +306,7 @@ if not n:
     if rev:
         note += ("\nBecame possible again (the condition that blocked these no "
                  "longer holds — offer them, don't resume them):\n" + "\n".join(rev))
-    emit(note)
+    emit(note, RECENT_IDS)
     sys.exit(0)
 
 def loop_line(r):
@@ -297,6 +327,7 @@ all_stale = not shown
 if all_stale:
     shown = sorted(results, key=lambda r: r.get("updated") or "", reverse=True)[:STALE_SHOWN]
 lines = [loop_line(r) for r in shown]
+loop_ids = [r.get("id") for r in shown]
 
 
 def hidden_note():
@@ -314,6 +345,8 @@ try:
                         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=8).stdout
     for f in (json.loads(rr).get("focus") or [])[:3]:
         focus_lines.append(f"- {f.get('title', '')[:70]}")
+        if f.get("id"):
+            FOCUS_IDS.append(f["id"])
 except Exception:
     pass
 
@@ -347,4 +380,5 @@ def build_msg(loop_lines):
 while (len(CAPTURE_ON) + 1 + len(build_msg(lines + hidden_note())) > BRIEF_MAX_CHARS
        and lines):
     lines.pop()
-emit(build_msg(lines + hidden_note()))
+emit(build_msg(lines + hidden_note()),
+     [i for i in loop_ids[:len(lines)] if i] + FOCUS_IDS + RECENT_IDS)

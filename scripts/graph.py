@@ -1436,41 +1436,145 @@ def cmd_neighbors(args):
     out({"ok": True, "center": args.id, "nodes": nodes, "edges": edges})
 
 
+# A word counts as distinctive for the "used" check when it is this long and not
+# a function word (`_CUE_STOP`). Sharing OVERLAP_MIN of them, none taken from the
+# prompt itself, is what "the answer used this note" means.
+_USED_MIN_LEN = 4
+_USED_OVERLAP_MIN = 2
+_USED_BODY_CHARS = 600
+
+
+def _distinct_words(text: str) -> set:
+    return {w for w in re.findall(r"\w+", (text or "").lower())
+            if len(w) >= _USED_MIN_LEN and w not in _CUE_STOP and not w.isdigit()}
+
+
+def _used_by_words(node_words: set, answer_words: set, prompt_words: set) -> bool:
+    """The answer shares distinctive words with the note that the prompt did not
+    already hold (an answer that only echoes the question proves nothing). A note
+    with a single distinctive word needs only that one."""
+    if not node_words:
+        return False
+    shared = (node_words & answer_words) - prompt_words
+    return len(shared) >= min(_USED_OVERLAP_MIN, len(node_words))
+
+
 def cmd_recall_report(args):
-    """How often gated per-prompt recall injected context, and how often the
-    answer then used it. Pure SQL over what the hooks already log: the user
-    capture carries `props.recalled` (the injected ids), the answer capture is
-    linked to it by a `follows-up` edge. "Used" = that answer's text holds an
-    injected id (as `[n:<id>]` or bare). Only the stored answer summary is read,
-    so a cite cut off by the summary is not counted."""
+    """How often injected context shows up in the answer, per source.
+
+    Pure SQL + Python over what the hooks already log. Per-prompt recall: the user
+    capture carries `props.recalled` (injected ids) and `props.recalled_tokens_est`;
+    the answer capture is linked to it by a `follows-up` edge. SessionStart brief:
+    the conversation node carries `props.brief_injected` / `brief_chars`; the
+    session's answers are checked against it.
+
+    "Used" is measured two ways. `used_by_id`: the answer text holds the id (as
+    `[n:<id>]` or bare); Claude almost never writes ids, so this undercounts.
+    `used_by_words`: the answer shares distinctive words with the note's title and
+    start of body, other than words the prompt already had. `used` and `rate_used`
+    follow the word match (a bare id counts too). Only the stored answer summary
+    is read, so text cut off by the summary is not seen."""
     con = connect()
     cutoff = (datetime.now(timezone.utc) - timedelta(days=args.days)).isoformat(timespec="seconds")
     prompts = con.execute(
         "SELECT COUNT(*) c FROM nodes WHERE type='capture'"
         " AND json_extract(props,'$.role')='user' AND created >= ?", (cutoff,)).fetchone()["c"]
-    # one row per (prompt, injected id); `used` = a linked answer mentions that id
-    pairs = con.execute(
-        "SELECT u.id AS uid, j.value AS nid, EXISTS("
-        "  SELECT 1 FROM edges e JOIN nodes a ON a.id = e.src"
-        "  WHERE e.dst = u.id AND e.rel = 'follows-up' AND instr(COALESCE(a.body,'') || ' ' || a.title, j.value) > 0"
-        ") AS used"
-        " FROM nodes u, json_each(json_extract(u.props,'$.recalled')) j"
-        " WHERE u.type='capture' AND json_extract(u.props,'$.role')='user' AND u.created >= ?"
-        " AND json_valid(u.props) AND json_type(u.props,'$.recalled') = 'array'", (cutoff,)).fetchall()
-    injected, used, per = set(), set(), {}
-    for r in pairs:
-        injected.add(r["uid"])
-        t = per.setdefault(r["nid"], {"id": r["nid"], "injected": 0, "used": 0})
-        t["injected"] += 1
-        if r["used"]:
-            used.add(r["uid"])
-            t["used"] += 1
+    rows = con.execute(
+        "SELECT id, title, body, props FROM nodes WHERE type='capture'"
+        " AND json_extract(props,'$.role')='user' AND created >= ?"
+        " AND json_valid(props) AND json_type(props,'$.recalled') = 'array'", (cutoff,)).fetchall()
+    answers_cache = {}
+
+    def answer_text(uid):
+        if uid not in answers_cache:
+            answers_cache[uid] = " ".join(
+                f"{a['title']} {a['body'] or ''}" for a in con.execute(
+                    "SELECT a.title, a.body FROM edges e JOIN nodes a ON a.id = e.src"
+                    " WHERE e.dst = ? AND e.rel = 'follows-up'", (uid,)))
+        return answers_cache[uid]
+
+    node_cache = {}
+
+    def node_words(nid):
+        if nid not in node_cache:
+            r = con.execute("SELECT title, body FROM nodes WHERE id=?", (nid,)).fetchone()
+            node_cache[nid] = _distinct_words(
+                f"{r['title']} {(r['body'] or '')[:_USED_BODY_CHARS]}") if r else set()
+        return node_cache[nid]
+
+    injected, used_id, used_words, per, tokens = set(), set(), set(), {}, 0
+    for u in rows:
+        try:
+            ids = json.loads(u["props"]).get("recalled") or []
+            tok = int(json.loads(u["props"]).get("recalled_tokens_est") or 0)
+        except Exception:
+            continue
+        injected.add(u["id"]); tokens += tok
+        text = answer_text(u["id"])
+        awords = _distinct_words(text)
+        pwords = _distinct_words(f"{u['title']} {u['body'] or ''}")
+        for nid in ids:
+            t = per.setdefault(nid, {"id": nid, "injected": 0, "used": 0, "used_by_id": 0,
+                                     "used_by_words": 0})
+            t["injected"] += 1
+            by_id = bool(text) and nid in text
+            by_words = bool(text) and _used_by_words(node_words(nid), awords, pwords)
+            if by_id:
+                t["used_by_id"] += 1; used_id.add(u["id"])
+            if by_words:
+                t["used_by_words"] += 1; used_words.add(u["id"])
+            if by_id or by_words:
+                t["used"] += 1
+    used = {uid for uid in injected if uid in used_id or uid in used_words}
     top = sorted(per.values(), key=lambda t: (-t["injected"], -t["used"], t["id"]))[:10]
+    never = sorted((t for t in per.values() if t["used"] == 0),
+                   key=lambda t: (-t["injected"], t["id"]))[:10]
+    never = [{"id": t["id"], "injected": t["injected"],
+              "title": (lambda r: r["title"][:80] if r else "")(
+                  con.execute("SELECT title FROM nodes WHERE id=?", (t["id"],)).fetchone())}
+             for t in never]
+
+    # SessionStart brief: one row per conversation that logged what it injected.
+    b_sessions = b_used = b_ids = b_used_ids = b_tokens = 0
+    for c in con.execute(
+            "SELECT props FROM nodes WHERE type='conversation' AND created >= ?"
+            " AND json_valid(props) AND json_type(props,'$.brief_injected') = 'array'", (cutoff,)):
+        p = json.loads(c["props"])
+        sid, ids = p.get("session_id") or "", p.get("brief_injected") or []
+        if not ids:
+            continue
+        b_sessions += 1; b_ids += len(ids); b_tokens += int(p.get("brief_tokens_est") or 0)
+        texts, firsts = [], []
+        for a in con.execute(
+                "SELECT title, body FROM nodes WHERE type='capture'"
+                " AND json_extract(props,'$.role')='assistant'"
+                " AND json_extract(props,'$.session_id')=?", (sid,)):
+            texts.append(f"{a['title']} {a['body'] or ''}")
+        text = " ".join(texts)
+        awords = _distinct_words(text)
+        hit = [nid for nid in ids if text and (nid in text or _used_by_words(
+            node_words(nid), awords, set()))]
+        b_used_ids += len(hit); b_used += bool(hit)
+
+    def rate(n, d):
+        return round(n / d, 3) if d else 0.0
+
+    n_used_tokens = tokens + b_tokens
+    n_used = len(used) + b_used
     out({"ok": True, "days": args.days, "prompts": prompts, "injected": len(injected),
-         "used": len(used),
-         "rate_injected": round(len(injected) / prompts, 3) if prompts else 0.0,
-         "rate_used": round(len(used) / len(injected), 3) if injected else 0.0,
-         "top_nodes": top})
+         "used": len(used), "used_by_id": len(used_id), "used_by_words": len(used_words),
+         "rate_injected": rate(len(injected), prompts),
+         "rate_used": rate(len(used_words), len(injected)),
+         "rate_used_by_id": rate(len(used_id), len(injected)),
+         "top_nodes": top, "never_matched": never,
+         "sources": {
+             "prompt_recall": {"injections": len(injected), "used_by_words": len(used_words),
+                               "rate_used": rate(len(used_words), len(injected)),
+                               "tokens_est": tokens},
+             "brief": {"sessions": b_sessions, "notes_injected": b_ids,
+                       "sessions_used": b_used, "notes_used": b_used_ids,
+                       "rate_used": rate(b_used, b_sessions), "tokens_est": b_tokens}},
+         "tokens_per_used_injection": round(n_used_tokens / n_used, 1) if n_used else 0.0})
 
 
 def cmd_stats(args):

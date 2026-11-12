@@ -75,6 +75,7 @@ def main():
         if recalled:
             # the log the hit rate is measured from, and the session's dedupe
             props["recalled"] = [n["id"] for n in recalled]
+            props["recalled_tokens_est"] = C.est_tokens(C.recall_note(recalled))
         if cold:
             props["noise_reason"] = why
         turn = C.insert_node(

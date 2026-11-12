@@ -442,7 +442,7 @@ Local-tz buckets via `--tz`, `$SECOND_BRAIN_TZ`, or Settings › Time zone.
 default `sqlite`) — so the CLI, the hooks and any cron share one default, set
 once in Settings › Database connection or by `neo4j_local.py up`.
 Recall stays free — reach for this (or `graph.py search` / `open-loops`) instead
-of asking the model to remember. `graph.py recall-report` shows how often injected recall was used in the answer.
+of asking the model to remember. `graph.py recall-report` shows how often injected recall (per prompt and in the session brief) was used in the answer, and at what token cost.
 
 **Another app can be the task board.** `graph.py track --id <task> --system
 <name> --ref <id>` hands a task to an external board (a kanban, a desk, a team

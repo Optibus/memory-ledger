@@ -101,7 +101,7 @@ python3 scripts/graph.py list --type task --tracked-by kanban         # what tha
 python3 scripts/graph.py due
 python3 scripts/graph.py open-loops --stale-days 7
 python3 scripts/graph.py open-loops --include-tracked  # also what external boards hold
-python3 scripts/graph.py recall-report --days 14      # how often injected recall is used in the answer
+python3 scripts/graph.py recall-report --days 14      # injected recall and brief: used by id / by words, never-matched nodes, tokens per use
 python3 scripts/graph.py stats
 python3 scripts/graph.py export
 ```
