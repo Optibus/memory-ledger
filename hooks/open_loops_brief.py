@@ -47,7 +47,63 @@ CAPTURE_ON = ("[memory-ledger] Capture is on: every turn is stored without a mod
 
 def emit(note):
     print(_switch.hook_context("SessionStart", CAPTURE_ON + "\n" + note))
+
+
+try:
+    _stdin = json.load(sys.stdin)
+    if not isinstance(_stdin, dict):
+        _stdin = {}
+except Exception:
+    _stdin = {}
 graph = os.path.join(root, "scripts", "graph.py")
+
+
+RECENT_MAX_CHARS = 700
+# The whole additionalContext this hook emits. The loops list is what gives way
+# first; the "In play" and "Recent sessions" blocks are never cut.
+BRIEF_MAX_CHARS = 1500
+STALE_SHOWN = 3     # when every loop is stale, the most recently updated few
+
+
+def recent_sessions_block():
+    """The last three session summaries for THIS repo: what was done, where it
+    stopped. Plain SQL over notes the close hook wrote; empty when there is no
+    repo, no summary, or anything goes wrong."""
+    try:
+        cwd = _stdin.get("cwd") or ""
+        sid = _stdin.get("session_id") or ""
+        if not cwd:
+            return ""
+        sys.path.insert(0, os.path.join(root, "hooks"))
+        import _capture as C
+        repo = C.repo_of(cwd)
+        if not repo:
+            return ""
+        con = C.connect()
+        out = []
+        for r in con.execute(
+                "SELECT id, title, body, props FROM nodes WHERE id LIKE 'note_session_%'"
+                " AND json_extract(props,'$.kind')='session-summary' AND realm != 'personal'"
+                " ORDER BY updated DESC LIMIT 50"):
+            p = json.loads(r["props"] or "{}")
+            if sid and p.get("session_id") == sid:
+                continue
+            here = (p.get("repo") == repo) if p.get("repo") else (
+                bool(p.get("cwd")) and cwd.startswith(p["cwd"]))
+            if not here:
+                continue
+            outcome = next((ln[len("Outcome:"):].strip() for ln in (r["body"] or "").splitlines()
+                            if ln.startswith("Outcome:")), "")
+            title = (r["title"] or "").split(": ", 1)[-1]
+            out.append(f"- {title[:70]} \u2192 {outcome[:140]} [n:{r['id']}]")
+            if len(out) >= 3:
+                break
+        if not out:
+            return ""
+        head = f"\nRecent sessions in {repo} (what was done, where it stopped):\n"
+        return (head + "\n".join(out))[:RECENT_MAX_CHARS]
+    except Exception:
+        return ""
 
 
 def revived_lines():
@@ -197,7 +253,7 @@ def mirror_sync():
 mirror_sync()
 
 try:
-    raw = subprocess.run([sys.executable, graph, "open-loops", "--limit", "6"],
+    raw = subprocess.run([sys.executable, graph, "open-loops", "--limit", "50"],
                          capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=8).stdout
     d = json.loads(raw)
 except Exception:
@@ -216,14 +272,14 @@ if tracked:
 if not n:
     rev = revived_lines()
     note = "[memory-ledger] State: no open loops — all clear." + tracked_line
+    note += recent_sessions_block()
     if rev:
         note += ("\nBecame possible again (the condition that blocked these no "
                  "longer holds — offer them, don't resume them):\n" + "\n".join(rev))
     emit(note)
     sys.exit(0)
 
-lines = []
-for r in d.get("results", [])[:6]:
+def loop_line(r):
     p = r.get("props", {})
     flag = "OVERDUE" if r.get("overdue") else (
         f"{r.get('age_days', 0)}d" if r.get("stale") else "")
@@ -231,7 +287,23 @@ for r in d.get("results", [])[:6]:
     tag = f"[{tag}] " if tag else ""
     w = r.get("waiting_on") or ""
     w = f" (waiting on {w})" if w else ""
-    lines.append(f"- {tag}{r.get('title', '')[:72]}{w}")
+    return f"- {tag}{r.get('title', '')[:72]}{w}"
+
+
+# Overdue or not stale; stale loops stay in `open-loops`, not in every session.
+results = d.get("results", [])
+shown = [r for r in results if r.get("overdue") or not r.get("stale")][:6]
+all_stale = not shown
+if all_stale:
+    shown = sorted(results, key=lambda r: r.get("updated") or "", reverse=True)[:STALE_SHOWN]
+lines = [loop_line(r) for r in shown]
+
+
+def hidden_note():
+    hidden = n - len(lines)
+    if all_stale and hidden > 0:
+        return [f"(+{hidden} stale loops hidden; open-loops lists them)"]
+    return []
 
 # The thread that was in play — what makes a /clear recoverable. Best-effort:
 # a slow or failed call must never block the brief.
@@ -253,15 +325,26 @@ revived_block = ("\nBecame possible again (a condition that blocked these no lon
                  "holds — offer them, don't resume them):\n" + "\n".join(revived)
                  if revived else "")
 
-msg = (
-    f"[memory-ledger] STATE — {n} open loops "
-    f"({d.get('overdue', 0)} overdue, {d.get('stale', 0)} stale). They stay open "
-    f"until closed; surface these and nudge the user to close the top ones ASAP "
-    f"(open tasks, PRs to move, emails/messages to answer):\n"
-    + "\n".join(lines)
-    + tracked_line
-    + focus_block
-    + revived_block
-    + "\n(full list: open-loops · thread + parked: resume · park to offload context)"
-)
-emit(msg)
+recent_block = recent_sessions_block()
+
+
+def build_msg(loop_lines):
+    return (
+        f"[memory-ledger] STATE \u2014 {n} open loops "
+        f"({d.get('overdue', 0)} overdue, {d.get('stale', 0)} stale). They stay open "
+        f"until closed; surface these and nudge the user to close the top ones ASAP "
+        f"(open tasks, PRs to move, emails/messages to answer):\n"
+        + "\n".join(loop_lines)
+        + tracked_line
+        + focus_block
+        + revived_block
+        + recent_block
+        + "\n(full list: open-loops \u00b7 thread + parked: resume \u00b7 park to offload context)"
+    )
+
+
+# Cut the loops list first (the note about hidden loops goes last of all).
+while (len(CAPTURE_ON) + 1 + len(build_msg(lines + hidden_note())) > BRIEF_MAX_CHARS
+       and lines):
+    lines.pop()
+emit(build_msg(lines + hidden_note()))

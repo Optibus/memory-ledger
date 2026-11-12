@@ -9,6 +9,9 @@ moment Claude Code tells us the context changed wholesale, and the delta is what
 later answers "why was this in the window?" without storing the window itself
 fifty times over (§2k).
 
+Both phases also write (or refresh) the session's summary note, built from its
+own captures with no model call (`_capture.session_summary`).
+
 stdin: Claude Code JSON incl. `session_id`; `trigger` on PreCompact.
 stdout: none.
 """
@@ -44,6 +47,11 @@ def main():
             # one implementation for both paths — the CLI's conversation-end
             # and this hook must never disagree about what an outcome means
             C.graph.api_conversation_end(con, sid, data.get("reason") or "")
+        try:
+            # one summary note per session, rewritten in place at each phase
+            C.session_summary(con, sid, data.get("cwd") or "")
+        except Exception:
+            pass
         C.flush_async()
     except Exception:
         return  # never break the session

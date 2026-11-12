@@ -27,7 +27,7 @@ Code and is silently dropped. Measured 2026-07-27, revised 2026-10-02:
 | Hook | Injected into context | Latency |
 |---|---|---|
 | `UserPromptSubmit` | **nothing** by default. With the opt-in `prompt_recall` setting, at most 2 snippets of ≤200 chars (~110 tokens), only on prompts that clearly match a node | 64 ms |
-| `SessionStart` | **~1.1 KB** (~290 tokens; "capture is on" once, plus the open-loops brief, capped at 6 loops so it does not grow with the graph). Sits in the cached prefix | 185 ms |
+| `SessionStart` | **~1.1 KB** (~290 tokens; "capture is on" once, plus the open-loops brief, capped at 6 loops, only overdue or not stale ones, and at 1,500 chars in all so it does not grow with the graph). Sits in the cached prefix | 185 ms |
 | `Stop` | **nothing** (writes only) | 57 ms |
 
 "Capture is on, don't re-store the turn" is said once per session, in the
@@ -60,11 +60,11 @@ Say "no model call" when you mean it. Re-measure with the recipe in
 **Capture noise filter.** `UserPromptSubmit` runs every prompt through
 `scripts/noise.py` BEFORE any write — regex only, no model. Dropped: bare acks
 ("continue", "ok", "yes", "go"), a slash command with no real arguments, a pasted
-`<system-reminder>` / task-notification / JSON blob, an image-only paste
+`<system-reminder>` / task-notification / subagent `<agent-message>` hand-back / JSON blob, an image-only paste
 (`[Image #n]`), and a prompt under `capture_min_chars` (default 40) with no verb.
 Always kept: an error string, a decision word (decided / always / never / from now
 on), a URL, a file path, a config/git change, a ticket key, and any prompt
-`detect_tasks` would turn into a to-do. Nothing is lost silently: the count per
+`detect_tasks` would turn into a to-do (never a review finding such as `[nit]`/`[blocker]`, nor a `Next steps` heading). Nothing is lost silently: the count per
 session is on the conversation node (`props.noise_dropped`, per rule in
 `props.noise_reasons`). `capture_filter` setting (or
 `MEMORY_LEDGER_CAPTURE_FILTER`): `drop` (default), `cold` (store the raw prompt in
@@ -873,6 +873,20 @@ clear it, and ask for it back if it turns out to matter.
    still open, inside a `--budget` (default 1,800 chars). Pure SQL and full-text,
    **no model call**. `SessionStart` fires on `/clear`, so the brief hands most of
    this back automatically — `resume` is the fuller, on-demand version.
+
+**Session summaries make a fresh session cheap.** At session end and at compaction
+the close hook writes one `note` per session (`note_session_<id>`,
+`props.kind = session-summary`), built from the session's own captures with no
+model call: every prompt asked (clipped, so the session's own words are searchable),
+the last answer's summary, ticket and PR references,
+decisions made meanwhile, turn counts. It is rewritten in place, so compaction
+then end leaves one note. The SessionStart brief lists the last three for the
+current repo (`repo_of(cwd)`, the origin remote as `owner/name`), so a new
+session opens knowing where the last ones stopped. `resume` leaves them out of
+its focus list, so a session note is shown once, in the recent-sessions block. Per-prompt recall searches
+the summaries in a pool of their own beside the shared one, and a prompt that
+names the current repo in plain words ("memory ledger") counts as asking about
+past work in it.
 
 **Answer from a query, not from memory of the window.** When a question is about
 something already in the brain, look it up (`recall`, `search`, `brain_query.py`,

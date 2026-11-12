@@ -41,6 +41,7 @@ NOISY = {
     "/clear": "slash-command", "/memory-ledger:recall": "slash-command",
     "<system-reminder>\nthe task tools...\n</system-reminder>": "system-tag",
     "<task-notification><id>abc</id></task-notification>": "system-tag",
+    "<agent-message>done: the sub-task finished and wrote the report</agent-message>": "agent-message",
     '{"type":"result","ok":true}': "json-blob",
     "[Image #1]": "image-only", "[Image #1] [Image #2]": "image-only",
     "Digest": "short-no-verb", "the second one": "short-no-verb",
