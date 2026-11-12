@@ -280,7 +280,9 @@ your own `--model` after `--` to start on another one. Its status line leaves
 out the 🧬 ledger and 🐬 Dora segments: the box starts claude with
 `SHOW_LEDGER=0 SHOW_DORA=0` (read by the shared statusline script) and
 `LEDGER_AGENT=1` (for any other status line to check). Every other terminal
-keeps its full status line:
+keeps its full status line. It also unsets `CLAUDE_CODE_CHILD_SESSION`, which the
+box inherits when opened from inside a Claude session and which would turn the
+box's transcript saving off, so its session is a regular one with a saved transcript:
 
     python3 scripts/agent_panel.py                     # claude, in this folder
     python3 scripts/agent_panel.py --cwd ~/dev/x       # ...or in another one

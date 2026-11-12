@@ -141,11 +141,14 @@ def panel_binary() -> tuple[Path | None, str]:
 # statusline script drops its 🧬 ledger and 🐬 Dora segments, and any other
 # status line can check LEDGER_AGENT=1 to do the same.
 BOX_ENV = {"LEDGER_AGENT": "1", "SHOW_LEDGER": "0", "SHOW_DORA": "0"}
+# Set when the box was opened from inside a Claude session; left in, the box's
+# claude would turn transcript saving off ("inherited CLAUDE_CODE_CHILD_SESSION").
+BOX_UNSET = ["CLAUDE_CODE_CHILD_SESSION"]
 
 
 def claude_command(claude_args: list[str]) -> str:
     """What the box's login shell runs: `exec env … claude …`, every argument quoted."""
-    env = [f"{k}={v}" for k, v in BOX_ENV.items()]
+    env = [*(f"-u {k}" for k in BOX_UNSET), *(f"{k}={v}" for k, v in BOX_ENV.items())]
     return " ".join(["exec", "env", *env, "claude", *map(shlex.quote, claude_args)])
 
 

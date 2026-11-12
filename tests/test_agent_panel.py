@@ -30,6 +30,10 @@ class TestCommand:
         assert words[:2] == ["exec", "env"]
         assert {"LEDGER_AGENT=1", "SHOW_LEDGER=0", "SHOW_DORA=0"} <= set(words[2:words.index("claude")])
 
+    def test_the_box_drops_the_child_session_marker_so_transcripts_are_saved(self):
+        words = shlex.split(agent_panel.claude_command([]))
+        assert words[words.index("-u") + 1] == "CLAUDE_CODE_CHILD_SESSION"
+
     def test_arguments_reach_claude_quoted(self):
         cmd = agent_panel.claude_command(["--model", "claude-opus-5-5", "-p", "it's; rm -rf ~"])
         words = shlex.split(cmd)
