@@ -1436,6 +1436,43 @@ def cmd_neighbors(args):
     out({"ok": True, "center": args.id, "nodes": nodes, "edges": edges})
 
 
+def cmd_recall_report(args):
+    """How often gated per-prompt recall injected context, and how often the
+    answer then used it. Pure SQL over what the hooks already log: the user
+    capture carries `props.recalled` (the injected ids), the answer capture is
+    linked to it by a `follows-up` edge. "Used" = that answer's text holds an
+    injected id (as `[n:<id>]` or bare). Only the stored answer summary is read,
+    so a cite cut off by the summary is not counted."""
+    con = connect()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=args.days)).isoformat(timespec="seconds")
+    prompts = con.execute(
+        "SELECT COUNT(*) c FROM nodes WHERE type='capture'"
+        " AND json_extract(props,'$.role')='user' AND created >= ?", (cutoff,)).fetchone()["c"]
+    # one row per (prompt, injected id); `used` = a linked answer mentions that id
+    pairs = con.execute(
+        "SELECT u.id AS uid, j.value AS nid, EXISTS("
+        "  SELECT 1 FROM edges e JOIN nodes a ON a.id = e.src"
+        "  WHERE e.dst = u.id AND e.rel = 'follows-up' AND instr(COALESCE(a.body,'') || ' ' || a.title, j.value) > 0"
+        ") AS used"
+        " FROM nodes u, json_each(json_extract(u.props,'$.recalled')) j"
+        " WHERE u.type='capture' AND json_extract(u.props,'$.role')='user' AND u.created >= ?"
+        " AND json_valid(u.props) AND json_type(u.props,'$.recalled') = 'array'", (cutoff,)).fetchall()
+    injected, used, per = set(), set(), {}
+    for r in pairs:
+        injected.add(r["uid"])
+        t = per.setdefault(r["nid"], {"id": r["nid"], "injected": 0, "used": 0})
+        t["injected"] += 1
+        if r["used"]:
+            used.add(r["uid"])
+            t["used"] += 1
+    top = sorted(per.values(), key=lambda t: (-t["injected"], -t["used"], t["id"]))[:10]
+    out({"ok": True, "days": args.days, "prompts": prompts, "injected": len(injected),
+         "used": len(used),
+         "rate_injected": round(len(injected) / prompts, 3) if prompts else 0.0,
+         "rate_used": round(len(used) / len(injected), 3) if injected else 0.0,
+         "top_nodes": top})
+
+
 def cmd_stats(args):
     con = connect()
     by_type = {r["type"]: r["c"] for r in con.execute(
@@ -7431,6 +7468,11 @@ def build_parser():
 
     a = sub.add_parser("use-skill"); a.set_defaults(func=cmd_use_skill)
     a.add_argument("--id", required=True)
+
+    a = sub.add_parser("recall-report", description=(
+        "How often per-prompt recall injected context and how often the answer used it."))
+    a.set_defaults(func=cmd_recall_report)
+    a.add_argument("--days", type=int, default=14)
 
     a = sub.add_parser("open-loops"); a.set_defaults(func=cmd_open_loops)
     a.add_argument("--stale-days", dest="stale_days", type=int, default=2)
