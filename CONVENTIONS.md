@@ -877,11 +877,15 @@ clear it, and ask for it back if it turns out to matter.
 **Session summaries make a fresh session cheap.** At session end and at compaction
 the close hook writes one `note` per session (`note_session_<id>`,
 `props.kind = session-summary`), built from the session's own captures with no
-model call: what was asked, the last answer's summary, ticket and PR references,
+model call: every prompt asked (clipped, so the session's own words are searchable),
+the last answer's summary, ticket and PR references,
 decisions made meanwhile, turn counts. It is rewritten in place, so compaction
 then end leaves one note. The SessionStart brief lists the last three for the
 current repo (`repo_of(cwd)`, the origin remote as `owner/name`), so a new
-session opens knowing where the last ones stopped.
+session opens knowing where the last ones stopped. Per-prompt recall searches
+the summaries in a pool of their own beside the shared one, and a prompt that
+names the current repo in plain words ("memory ledger") counts as asking about
+past work in it.
 
 **Answer from a query, not from memory of the window.** When a question is about
 something already in the brain, look it up (`recall`, `search`, `brain_query.py`,

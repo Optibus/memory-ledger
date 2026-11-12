@@ -463,8 +463,10 @@ _REF_TICKET = re.compile(r"\b[A-Z][A-Z0-9]{1,9}-\d+\b")
 _REF_NOT_TICKET = ("UTF-", "SHA-", "ISO-", "MD-")
 _REF_PR = re.compile(
     r"https://github\.com/[\w.-]+/[\w.-]+/(?:pull|issues)/\d+|\b[\w.-]+/[\w.-]+#\d+\b")
-SUMMARY_BODY_MAX = 900
+SUMMARY_BODY_MAX = 1400
 SUMMARY_OUTCOME_MAX = 300
+SUMMARY_ASKED_MAX = 8        # user prompts listed, each clipped ...
+SUMMARY_ASKED_CHARS = 90     # ... to this many chars: the session's own vocabulary
 
 
 def _git(cwd: str, *args: str) -> str:
@@ -526,9 +528,14 @@ def session_summary(con, session_id: str, cwd: str = "") -> str | None:
     cwd = cwd or users[0]["p"].get("cwd") or ""
     repo = repo_of(cwd)
     started, ended = caps[0]["created"], caps[-1]["created"]
-    lines = [_line("Asked:", users[0]["title"], 120)]
-    if len(users) > 3:
-        lines[0] += " … " + " ".join((users[-1]["title"] or "").split())[:120]
+    # Every prompt, clipped, not just the first: the words the person used are
+    # what a later prompt about the same work will share, so they must be in the
+    # text full-text search reads. First prompts, then the last one if clipped.
+    asked = users[:SUMMARY_ASKED_MAX]
+    if len(users) > SUMMARY_ASKED_MAX:
+        asked = users[:SUMMARY_ASKED_MAX - 1] + [users[-1]]
+    lines = ["Asked: " + " | ".join(
+        " ".join((u["title"] or "").split())[:SUMMARY_ASKED_CHARS] for u in asked)]
     if asst:
         lines.append(_line("Outcome:", asst[-1]["body"] or asst[-1]["title"], SUMMARY_OUTCOME_MAX))
     refs: list[str] = []
@@ -631,6 +638,7 @@ _GENERIC = {
 _REPO_MENTION = re.compile(r"(?<![\w./-])([\w.-]+/[\w.-]+)(?![\w/-])")
 RECALL_MIN_TERMS = 2         # "ok", "yes": too little to match on
 RECALL_MAX_SUMMARIES = 1     # one session summary per injection; the rest is for other nodes
+RECALL_SUMMARY_CANDIDATES = 8  # the summaries' own FTS pool, beside the shared one
 RECALL_SUMMARY_SNIPPET = 260
 
 
@@ -656,6 +664,12 @@ def _names_a_repo(con, prompt: str, repo: str) -> bool:
     for, or the current repo by its last segment."""
     known = None
     mine = repo.rsplit("/", 1)[-1].lower() if repo else ""
+    # The repo's name in plain words ("memory ledger" for memory-ledger) is how
+    # people say it; the hyphenated form is how git says it.
+    if mine and len(mine) >= 4 and re.search(
+            r"\b" + r"[\s_-]*".join(map(re.escape, re.split(r"[-_]", mine))) + r"\b",
+            prompt, re.I):
+        return True
     for m in _REPO_MENTION.finditer(prompt):
         ref = m.group(1).lower()
         if mine and ref.rsplit("/", 1)[-1] == mine:
@@ -679,15 +693,26 @@ def gated_recall(con, prompt: str, session_id: str, cwd: str = "") -> list[dict]
     need = 1 if past else min(RECALL_MIN_HITS, len(terms))
     seen = _recalled_in_session(con, session_id)
     marks = ",".join("?" * len(RECALL_TYPES))
+    match = " OR ".join(f'"{t}"*' for t in terms)
     rows = con.execute(
         "SELECT n.id, n.type, n.title, n.body, n.props, n.updated FROM nodes_fts f"
         " JOIN nodes n ON n.rowid=f.rowid WHERE nodes_fts MATCH ?"
         f" AND n.type IN ({marks}) AND n.realm != 'personal'"
         " AND n.status != 'cancelled' ORDER BY rank LIMIT ?",
-        (" OR ".join(f'"{t}"*' for t in terms), *RECALL_TYPES,
-         RECALL_CANDIDATES)).fetchall()
-    cands = []
+        (match, *RECALL_TYPES, RECALL_CANDIDATES)).fetchall()
+    # Session summaries get a pool of their own: in the shared pool a long
+    # resource or decision outranks them on term count, and the summary that
+    # says where the work stopped never reaches the candidate list.
+    rows += con.execute(
+        "SELECT n.id, n.type, n.title, n.body, n.props, n.updated FROM nodes_fts f"
+        " JOIN nodes n ON n.rowid=f.rowid WHERE nodes_fts MATCH ?"
+        " AND n.id LIKE 'note_session_%' AND n.realm != 'personal'"
+        " ORDER BY rank LIMIT ?", (match, RECALL_SUMMARY_CANDIDATES)).fetchall()
+    cands, taken = [], set()
     for nid, ntype, title, body, props, updated in rows:
+        if nid in taken:
+            continue
+        taken.add(nid)
         if nid in seen or (title or "").startswith("Digest —"):
             continue
         # Whole words, prefix-matched the way FTS `"t"*` matches: "use" must not
