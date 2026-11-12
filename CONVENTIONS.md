@@ -27,7 +27,7 @@ Code and is silently dropped. Measured 2026-07-27, revised 2026-10-02:
 | Hook | Injected into context | Latency |
 |---|---|---|
 | `UserPromptSubmit` | **nothing** by default. With the opt-in `prompt_recall` setting, at most 2 snippets of ≤200 chars (~110 tokens), only on prompts that clearly match a node | 64 ms |
-| `SessionStart` | **~1.1 KB** (~290 tokens; "capture is on" once, plus the open-loops brief, capped at 6 loops so it does not grow with the graph). Sits in the cached prefix | 185 ms |
+| `SessionStart` | **~1.1 KB** (~290 tokens; "capture is on" once, plus the open-loops brief, capped at 6 loops, only overdue or not stale ones, and at 1,500 chars in all so it does not grow with the graph). Sits in the cached prefix | 185 ms |
 | `Stop` | **nothing** (writes only) | 57 ms |
 
 "Capture is on, don't re-store the turn" is said once per session, in the
@@ -60,11 +60,11 @@ Say "no model call" when you mean it. Re-measure with the recipe in
 **Capture noise filter.** `UserPromptSubmit` runs every prompt through
 `scripts/noise.py` BEFORE any write — regex only, no model. Dropped: bare acks
 ("continue", "ok", "yes", "go"), a slash command with no real arguments, a pasted
-`<system-reminder>` / task-notification / JSON blob, an image-only paste
+`<system-reminder>` / task-notification / subagent `<agent-message>` hand-back / JSON blob, an image-only paste
 (`[Image #n]`), and a prompt under `capture_min_chars` (default 40) with no verb.
 Always kept: an error string, a decision word (decided / always / never / from now
 on), a URL, a file path, a config/git change, a ticket key, and any prompt
-`detect_tasks` would turn into a to-do. Nothing is lost silently: the count per
+`detect_tasks` would turn into a to-do (never a review finding such as `[nit]`/`[blocker]`, nor a `Next steps` heading). Nothing is lost silently: the count per
 session is on the conversation node (`props.noise_dropped`, per rule in
 `props.noise_reasons`). `capture_filter` setting (or
 `MEMORY_LEDGER_CAPTURE_FILTER`): `drop` (default), `cold` (store the raw prompt in

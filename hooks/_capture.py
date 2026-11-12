@@ -257,6 +257,11 @@ _TASK_CUES = re.compile(
     """)
 
 
+# Review findings and plan headings are not to-dos, even when they say "need to".
+_NOT_A_TASK = re.compile(
+    r"(?i)^\s*(?:\[(?:nit|blocker|minor|major|suggestion)\]|draft next steps\b|next steps\s*:)")
+
+
 def detect_tasks(text: str) -> list[str]:
     """Conservatively pull explicit personal to-dos out of a prompt. Only fires on
     clear intent cues (not every imperative the user gives the assistant), so the
@@ -264,7 +269,7 @@ def detect_tasks(text: str) -> list[str]:
     out, seen = [], set()
     for raw in re.split(r"(?<=[.!?\n])\s+", text or ""):
         s = raw.strip(" -*•\t")
-        if not s or not _TASK_CUES.search(s):
+        if not s or _NOT_A_TASK.match(s) or not _TASK_CUES.search(s):
             continue
         if s.rstrip("\"')] ").endswith("?"):          # "what do I need to check?" asks; it does not commit
             continue

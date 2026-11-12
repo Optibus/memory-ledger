@@ -30,6 +30,8 @@ _SYSTEM_TAGS = re.compile(
     r"^\s*<(?:pasted_content|system-reminder|task-notification|command-name|command-message|"
     r"command-args|local-command-stdout|local-command-stderr|"
     r"user-prompt-submit-hook|bash-input|bash-stdout|bash-stderr)\b", re.I)
+# a subagent hand-back pasted into the main thread
+_AGENT_MESSAGE = re.compile(r"^\s*<agent-message\b", re.I)
 _IMAGE_REF = re.compile(r"\[Image(?:\s*#\d+|:[^\]]*)?\]", re.I)
 _SLASH_ONLY = re.compile(r"^/[\w:.-]+(?:\s+\S.{0,19})?$")
 
@@ -130,6 +132,8 @@ def classify(text: str, min_chars: int = DEFAULT_MIN_CHARS) -> tuple[bool, str]:
         return False, "empty"
     if _SYSTEM_TAGS.match(t):
         return False, "system-tag"
+    if _AGENT_MESSAGE.match(t):
+        return False, "agent-message"
     if is_json_blob(t):
         return False, "json-blob"
     if image_only(t):

@@ -374,7 +374,7 @@ longer the only place identity gets tidied.
 
 Not every prompt deserves a node. The `UserPromptSubmit` hook runs a regex filter
 (`scripts/noise.py`, no model) before it writes: bare "continue"/"ok", slash
-commands, pasted system-reminders and JSON, image-only pastes and short no-verb
+commands, pasted system-reminders, subagent hand-backs and JSON, image-only pastes and short no-verb
 fragments are dropped — and counted on the session's conversation node. An error,
 a decision word, a URL, a file path or a config/git change is always kept. Set
 `capture_filter` to `cold` to park the raw prompts in a `cold` realm instead.
