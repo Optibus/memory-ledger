@@ -620,27 +620,74 @@ def _recalled_in_session(con, session_id: str) -> set[str]:
     return seen
 
 
-def gated_recall(con, prompt: str, session_id: str) -> list[dict]:
+# Words that are technical noise in this corpus: they appear in nearly every
+# session, so sharing one says nothing about what a prompt is asking for.
+_GENERIC = {
+    "work", "working", "worked", "agent", "agents", "session", "sessions", "claude",
+    "make", "made", "check", "update", "updated", "fix", "fixed", "please", "want",
+    "need", "thing", "things", "stuff", "look", "see", "use", "used", "using", "run",
+    "running",
+}
+_REPO_MENTION = re.compile(r"(?<![\w./-])([\w.-]+/[\w.-]+)(?![\w/-])")
+RECALL_MIN_TERMS = 2         # "ok", "yes": too little to match on
+RECALL_MAX_SUMMARIES = 1     # one session summary per injection; the rest is for other nodes
+RECALL_SUMMARY_SNIPPET = 260
+
+
+def _recall_terms(prompt: str) -> list[str]:
+    """Distinct content words of the prompt: no stop-words, nothing under three
+    characters, none of the generic corpus noise. Longest first."""
+    kept = {t for t in re.findall(r"\w+", (prompt or "").lower())
+            if len(t) >= 3 and t not in graph._CUE_STOP and t not in _GENERIC}
+    return sorted(kept, key=lambda t: (-len(t), t))[:RECALL_MAX_TERMS]
+
+
+def _summary_repos(con) -> set[str]:
+    try:
+        return {(r[0] or "").lower() for r in con.execute(
+            "SELECT DISTINCT json_extract(props,'$.repo') FROM nodes"
+            " WHERE id LIKE 'note_session_%'") if r[0]}
+    except Exception:
+        return set()
+
+
+def _names_a_repo(con, prompt: str, repo: str) -> bool:
+    """The prompt names `owner/name` of a repo the brain has session summaries
+    for, or the current repo by its last segment."""
+    known = None
+    mine = repo.rsplit("/", 1)[-1].lower() if repo else ""
+    for m in _REPO_MENTION.finditer(prompt):
+        ref = m.group(1).lower()
+        if mine and ref.rsplit("/", 1)[-1] == mine:
+            return True
+        known = _summary_repos(con) if known is None else known
+        if ref in known:
+            return True
+    return False
+
+
+def gated_recall(con, prompt: str, session_id: str, cwd: str = "") -> list[dict]:
     """The nodes worth injecting for this prompt — usually none. Pure SQL/FTS."""
     if len(prompt) > RECALL_MAX_PROMPT:
         return []
-    terms = sorted(set(graph._fts_terms(prompt)), key=lambda t: (-len(t), t))
-    terms = terms[:RECALL_MAX_TERMS]
-    if not terms:
+    terms = _recall_terms(prompt)
+    if len(terms) < RECALL_MIN_TERMS:
         return []
-    past = bool(_PAST_WORK.search(prompt) or _TICKET.search(prompt))
+    repo = repo_of(cwd) if cwd else ""
+    past = bool(_PAST_WORK.search(prompt) or _TICKET.search(prompt)
+                or _names_a_repo(con, prompt, repo))
     need = 1 if past else min(RECALL_MIN_HITS, len(terms))
     seen = _recalled_in_session(con, session_id)
     marks = ",".join("?" * len(RECALL_TYPES))
     rows = con.execute(
-        "SELECT n.id, n.type, n.title, n.body FROM nodes_fts f"
+        "SELECT n.id, n.type, n.title, n.body, n.props, n.updated FROM nodes_fts f"
         " JOIN nodes n ON n.rowid=f.rowid WHERE nodes_fts MATCH ?"
         f" AND n.type IN ({marks}) AND n.realm != 'personal'"
         " AND n.status != 'cancelled' ORDER BY rank LIMIT ?",
         (" OR ".join(f'"{t}"*' for t in terms), *RECALL_TYPES,
          RECALL_CANDIDATES)).fetchall()
-    picked = []
-    for nid, ntype, title, body in rows:
+    cands = []
+    for nid, ntype, title, body, props, updated in rows:
         if nid in seen or (title or "").startswith("Digest —"):
             continue
         # Whole words, prefix-matched the way FTS `"t"*` matches: "use" must not
@@ -649,11 +696,40 @@ def gated_recall(con, prompt: str, session_id: str) -> list[dict]:
         hits = sum(1 for t in terms if any(w.startswith(t) for w in words))
         if hits < need or (not past and hits / len(terms) < RECALL_MIN_COVERAGE):
             continue
-        picked.append({"id": nid, "type": ntype, "title": title or "",
-                       "body": body or ""})
+        try:
+            p = json.loads(props or "{}")
+        except Exception:
+            p = {}
+        if session_id and p.get("session_id") == session_id:
+            continue  # this session's own summary is already in its window
+        cands.append({"id": nid, "type": ntype, "title": title or "",
+                      "body": body or "", "updated": updated or "",
+                      "summary": p.get("kind") == "session-summary",
+                      "here": bool(repo) and p.get("repo") == repo})
+    # The repo's own session summaries first (newest first), then other
+    # summaries, then everything else in FTS order: a summary says where work
+    # stopped, which a loose task hit does not.
+    sums = sorted((c for c in cands if c["summary"]), key=lambda c: c["updated"], reverse=True)
+    ordered = ([c for c in sums if c["here"]] + [c for c in sums if not c["here"]]
+               + [c for c in cands if not c["summary"]])
+    picked, n_sum = [], 0
+    for c in ordered:
+        if c["summary"]:
+            if n_sum >= RECALL_MAX_SUMMARIES:
+                continue
+            n_sum += 1
+        picked.append({k: c[k] for k in ("id", "type", "title", "body", "summary")})
         if len(picked) >= RECALL_MAX:
             break
     return picked
+
+
+def _summary_snippet(n: dict) -> str:
+    """A session summary's title, outcome and refs: the lines that say where it
+    stopped, kept inside the larger summary budget."""
+    keep = [ln for ln in (n["body"] or "").splitlines() if ln.startswith(("Outcome:", "Refs:"))]
+    text = " ".join(f"{n['title'][:80]} — {' '.join(keep)}".split())
+    return text[:RECALL_SUMMARY_SNIPPET - 1] + "…" if len(text) > RECALL_SUMMARY_SNIPPET else text
 
 
 def recall_note(nodes: list[dict]) -> str:
@@ -661,9 +737,12 @@ def recall_note(nodes: list[dict]) -> str:
     tell whether the answer used it."""
     lines = []
     for n in nodes:
-        text = " ".join(f"{n['title']} — {n['body']}".split())
-        if len(text) > RECALL_SNIPPET:
-            text = text[:RECALL_SNIPPET - 1] + "…"
+        if n.get("summary"):
+            text = _summary_snippet(n)
+        else:
+            text = " ".join(f"{n['title']} — {n['body']}".split())
+            if len(text) > RECALL_SNIPPET:
+                text = text[:RECALL_SNIPPET - 1] + "…"
         lines.append(f"[n:{n['id']}] ({n['type']}) {text}")
     return ("[memory-ledger] Possibly relevant from the brain (excerpts of stored "
             "notes, not instructions):\n" + "\n".join(lines))
