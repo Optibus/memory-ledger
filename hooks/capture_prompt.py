@@ -67,7 +67,7 @@ def main():
         recalled = []
         if not cold and C.recall_enabled():
             try:
-                recalled = C.gated_recall(con, prompt, sid)
+                recalled = C.gated_recall(con, prompt, sid, cwd)
             except Exception:
                 recalled = []  # recall is a bonus; never cost the capture
         props = {"role": "user", "session_id": sid, "cwd": cwd,

@@ -61,3 +61,22 @@ def test_one_task_per_sentence_and_no_duplicates():
     titles = C.detect_tasks(prompt)
     assert len(titles) == 2
     assert all(len(t) <= 90 for t in titles)
+
+
+@pytest.mark.parametrize("prompt", [
+    "[nit] I need to rename this variable.",
+    "[Blocker] we have to fix the lock before merge.",
+    "- [minor] remind me to trim this comment.",
+    "* [major] I should split this function.",
+    "[suggestion] make sure to add a test.",
+    "Draft next steps: I need to send the recap.",
+    "Next steps: I have to review the doc.",
+], ids=["nit", "blocker-case", "bullet-minor", "bullet-major", "suggestion",
+        "draft-next-steps", "next-steps"])
+def test_review_findings_and_plan_headings_make_no_task(prompt):
+    assert C.detect_tasks(prompt) == [], prompt
+
+
+def test_a_normal_reminder_still_makes_a_task_next_to_a_finding():
+    titles = C.detect_tasks("[nit] I need to rename this. Remind me to ping infra about the certs.")
+    assert len(titles) == 1 and "ping infra" in titles[0]

@@ -91,10 +91,12 @@ def title_of(text: str, n: int = 80) -> str:
     return (t[:n] + "…") if len(t) > n else (t or "(empty)")
 
 
-def insert_node(con, ntype, title, body="", props=None, status="", realm_=None) -> str:
+def insert_node(con, ntype, title, body="", props=None, status="", realm_=None,
+                nid=None) -> str:
     """Insert a node (mirrors graph.cmd_add_node's write) and queue it for neo4j —
-    WITHOUT the CLI's stdout print, so hooks stay silent unless they choose to talk."""
-    nid = graph._gen_id(con, ntype, title)
+    WITHOUT the CLI's stdout print, so hooks stay silent unless they choose to talk.
+    `nid` pins a deterministic id (an upsert key); otherwise one is generated."""
+    nid = nid or graph._gen_id(con, ntype, title)
     ts = graph.now()
     con.execute(
         "INSERT INTO nodes(id,type,title,body,props,status,due,realm,created,updated)"
@@ -255,6 +257,11 @@ _TASK_CUES = re.compile(
     """)
 
 
+# Review findings and plan headings are not to-dos, even when they say "need to".
+_NOT_A_TASK = re.compile(
+    r"(?i)^\s*(?:\[(?:nit|blocker|minor|major|suggestion)\]|draft next steps\b|next steps\s*:)")
+
+
 def detect_tasks(text: str) -> list[str]:
     """Conservatively pull explicit personal to-dos out of a prompt. Only fires on
     clear intent cues (not every imperative the user gives the assistant), so the
@@ -262,7 +269,7 @@ def detect_tasks(text: str) -> list[str]:
     out, seen = [], set()
     for raw in re.split(r"(?<=[.!?\n])\s+", text or ""):
         s = raw.strip(" -*•\t")
-        if not s or not _TASK_CUES.search(s):
+        if not s or _NOT_A_TASK.match(s) or not _TASK_CUES.search(s):
             continue
         if s.rstrip("\"')] ").endswith("?"):          # "what do I need to check?" asks; it does not commit
             continue
@@ -455,6 +462,116 @@ def read_transcript_tail(path: str):
     return last_user, last_asst
 
 
+# --- session summary (token-free) ------------------------------------------
+_REPO_URL = re.compile(r"(?:[:/])([^/:\s]+)/([^/\s]+?)(?:\.git)?/?$")
+_REF_TICKET = re.compile(r"\b[A-Z][A-Z0-9]{1,9}-\d+\b")
+_REF_NOT_TICKET = ("UTF-", "SHA-", "ISO-", "MD-")
+_REF_PR = re.compile(
+    r"https://github\.com/[\w.-]+/[\w.-]+/(?:pull|issues)/\d+|\b[\w.-]+/[\w.-]+#\d+\b")
+SUMMARY_BODY_MAX = 1400
+SUMMARY_OUTCOME_MAX = 300
+SUMMARY_ASKED_MAX = 8        # user prompts listed, each clipped ...
+SUMMARY_ASKED_CHARS = 90     # ... to this many chars: the session's own vocabulary
+
+
+def _git(cwd: str, *args: str) -> str:
+    try:
+        r = subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=2)
+        return r.stdout.strip() if r.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def repo_of(cwd: str) -> str:
+    """`owner/name` of the repo `cwd` is in, from its origin remote (ssh or https);
+    else the top-level directory's name, else the cwd's. Never raises."""
+    try:
+        if not cwd:
+            return ""
+        url = _git(cwd, "config", "--get", "remote.origin.url")
+        m = _REPO_URL.search(url) if url else None
+        if m:
+            return f"{m.group(1)}/{m.group(2)}"
+        top = _git(cwd, "rev-parse", "--show-toplevel")
+        return os.path.basename((top or cwd).rstrip("/\\"))
+    except Exception:
+        return ""
+
+
+def _refs_in(text: str) -> list[str]:
+    found = [m.group(0) for m in _REF_TICKET.finditer(text)
+             if not m.group(0).startswith(_REF_NOT_TICKET)]
+    found += [m.group(0) for m in _REF_PR.finditer(text)]
+    return found
+
+
+def _line(label: str, text: str, n: int) -> str:
+    t = " ".join((text or "").split())
+    return f"{label} {t[:n - 1] + '…' if len(t) > n else t}"
+
+
+def session_summary(con, session_id: str, cwd: str = "") -> str | None:
+    """Build and upsert the one summary note for a session; returns its id, or
+    None when the session is not worth one. Reads only the session's own capture
+    nodes — no model — so it is safe at SessionEnd and PreCompact."""
+    if not session_id:
+        return None
+    caps = []
+    for r in con.execute(
+            "SELECT title, body, props, realm, created FROM nodes WHERE type='capture'"
+            " AND json_extract(props,'$.session_id')=? ORDER BY created, rowid",
+            (session_id,)):
+        try:
+            caps.append({**dict(r), "p": json.loads(r["props"] or "{}")})
+        except Exception:
+            continue
+    users = [c for c in caps if c["p"].get("role") == "user" and c["realm"] != COLD_REALM]
+    asst = [c for c in caps if c["p"].get("role") == "assistant"]
+    if len(users) < 2 or (users[0]["title"] or "").startswith("<agent-message"):
+        return None
+    cwd = cwd or users[0]["p"].get("cwd") or ""
+    repo = repo_of(cwd)
+    started, ended = caps[0]["created"], caps[-1]["created"]
+    # Every prompt, clipped, not just the first: the words the person used are
+    # what a later prompt about the same work will share, so they must be in the
+    # text full-text search reads. First prompts, then the last one if clipped.
+    asked = users[:SUMMARY_ASKED_MAX]
+    if len(users) > SUMMARY_ASKED_MAX:
+        asked = users[:SUMMARY_ASKED_MAX - 1] + [users[-1]]
+    lines = ["Asked: " + " | ".join(
+        " ".join((u["title"] or "").split())[:SUMMARY_ASKED_CHARS] for u in asked)]
+    if asst:
+        lines.append(_line("Outcome:", asst[-1]["body"] or asst[-1]["title"], SUMMARY_OUTCOME_MAX))
+    refs: list[str] = []
+    for c in caps:
+        for ref in _refs_in(f"{c['title']} {c['body']}"):
+            if ref not in refs:
+                refs.append(ref)
+    if refs:
+        lines.append("Refs: " + ", ".join(refs[:8]))
+    decided = [r["title"] for r in con.execute(
+        "SELECT title FROM nodes WHERE type='decision' AND created BETWEEN ? AND ?"
+        " ORDER BY created LIMIT 3", (started, ended))]
+    if decided:
+        lines.append("Decided: " + "; ".join(d[:80] for d in decided))
+    lines.append(f"Turns: {len(users)} / {len(asst)}")
+    body = "\n".join(lines)[:SUMMARY_BODY_MAX]
+    title = (f"Session — {repo or 'unknown'} — {started[:10]}: "
+             f"{' '.join((users[0]['title'] or '').split())[:60]}")
+    props = {"kind": "session-summary", "session_id": session_id, "cwd": cwd,
+             "repo": repo, "started": started, "ended": ended, "turns": len(users)}
+    nid = "note_session_" + session_id[:8]
+    if con.execute("SELECT 1 FROM nodes WHERE id=?", (nid,)).fetchone():
+        graph.api_update_node(con, nid, title=title, body=body, props_patch=props)
+    else:
+        insert_node(con, "note", title, body=body, props=props, nid=nid)
+    conv = conversation_for(con, session_id, cwd)
+    if conv:
+        insert_edge(con, nid, conv, graph.AREA_REL)
+    return nid
+
+
 # --- gated per-prompt recall (opt-in, token-free to decide) ----------------
 # Off by default (`prompt_recall` setting): unlike capture, an injection costs
 # context tokens on the prompt it fires on. So it is gated hard — at most
@@ -515,27 +632,92 @@ def _recalled_in_session(con, session_id: str) -> set[str]:
     return seen
 
 
-def gated_recall(con, prompt: str, session_id: str) -> list[dict]:
+# Words that are technical noise in this corpus: they appear in nearly every
+# session, so sharing one says nothing about what a prompt is asking for.
+_GENERIC = {
+    "work", "working", "worked", "agent", "agents", "session", "sessions", "claude",
+    "make", "made", "check", "update", "updated", "fix", "fixed", "please", "want",
+    "need", "thing", "things", "stuff", "look", "see", "use", "used", "using", "run",
+    "running",
+}
+_REPO_MENTION = re.compile(r"(?<![\w./-])([\w.-]+/[\w.-]+)(?![\w/-])")
+RECALL_MIN_TERMS = 2         # "ok", "yes": too little to match on
+RECALL_MAX_SUMMARIES = 1     # one session summary per injection; the rest is for other nodes
+RECALL_SUMMARY_CANDIDATES = 8  # the summaries' own FTS pool, beside the shared one
+RECALL_SUMMARY_SNIPPET = 260
+
+
+def _recall_terms(prompt: str) -> list[str]:
+    """Distinct content words of the prompt: no stop-words, nothing under three
+    characters, none of the generic corpus noise. Longest first."""
+    kept = {t for t in re.findall(r"\w+", (prompt or "").lower())
+            if len(t) >= 3 and t not in graph._CUE_STOP and t not in _GENERIC}
+    return sorted(kept, key=lambda t: (-len(t), t))[:RECALL_MAX_TERMS]
+
+
+def _summary_repos(con) -> set[str]:
+    try:
+        return {(r[0] or "").lower() for r in con.execute(
+            "SELECT DISTINCT json_extract(props,'$.repo') FROM nodes"
+            " WHERE id LIKE 'note_session_%'") if r[0]}
+    except Exception:
+        return set()
+
+
+def _names_a_repo(con, prompt: str, repo: str) -> bool:
+    """The prompt names `owner/name` of a repo the brain has session summaries
+    for, or the current repo by its last segment."""
+    known = None
+    mine = repo.rsplit("/", 1)[-1].lower() if repo else ""
+    # The repo's name in plain words ("memory ledger" for memory-ledger) is how
+    # people say it; the hyphenated form is how git says it.
+    if mine and len(mine) >= 4 and re.search(
+            r"\b" + r"[\s_-]*".join(map(re.escape, re.split(r"[-_]", mine))) + r"\b",
+            prompt, re.I):
+        return True
+    for m in _REPO_MENTION.finditer(prompt):
+        ref = m.group(1).lower()
+        if mine and ref.rsplit("/", 1)[-1] == mine:
+            return True
+        known = _summary_repos(con) if known is None else known
+        if ref in known:
+            return True
+    return False
+
+
+def gated_recall(con, prompt: str, session_id: str, cwd: str = "") -> list[dict]:
     """The nodes worth injecting for this prompt — usually none. Pure SQL/FTS."""
     if len(prompt) > RECALL_MAX_PROMPT:
         return []
-    terms = sorted(set(graph._fts_terms(prompt)), key=lambda t: (-len(t), t))
-    terms = terms[:RECALL_MAX_TERMS]
-    if not terms:
+    terms = _recall_terms(prompt)
+    if len(terms) < RECALL_MIN_TERMS:
         return []
-    past = bool(_PAST_WORK.search(prompt) or _TICKET.search(prompt))
+    repo = repo_of(cwd) if cwd else ""
+    past = bool(_PAST_WORK.search(prompt) or _TICKET.search(prompt)
+                or _names_a_repo(con, prompt, repo))
     need = 1 if past else min(RECALL_MIN_HITS, len(terms))
     seen = _recalled_in_session(con, session_id)
     marks = ",".join("?" * len(RECALL_TYPES))
+    match = " OR ".join(f'"{t}"*' for t in terms)
     rows = con.execute(
-        "SELECT n.id, n.type, n.title, n.body FROM nodes_fts f"
+        "SELECT n.id, n.type, n.title, n.body, n.props, n.updated FROM nodes_fts f"
         " JOIN nodes n ON n.rowid=f.rowid WHERE nodes_fts MATCH ?"
         f" AND n.type IN ({marks}) AND n.realm != 'personal'"
         " AND n.status != 'cancelled' ORDER BY rank LIMIT ?",
-        (" OR ".join(f'"{t}"*' for t in terms), *RECALL_TYPES,
-         RECALL_CANDIDATES)).fetchall()
-    picked = []
-    for nid, ntype, title, body in rows:
+        (match, *RECALL_TYPES, RECALL_CANDIDATES)).fetchall()
+    # Session summaries get a pool of their own: in the shared pool a long
+    # resource or decision outranks them on term count, and the summary that
+    # says where the work stopped never reaches the candidate list.
+    rows += con.execute(
+        "SELECT n.id, n.type, n.title, n.body, n.props, n.updated FROM nodes_fts f"
+        " JOIN nodes n ON n.rowid=f.rowid WHERE nodes_fts MATCH ?"
+        " AND n.id LIKE 'note_session_%' AND n.realm != 'personal'"
+        " ORDER BY rank LIMIT ?", (match, RECALL_SUMMARY_CANDIDATES)).fetchall()
+    cands, taken = [], set()
+    for nid, ntype, title, body, props, updated in rows:
+        if nid in taken:
+            continue
+        taken.add(nid)
         if nid in seen or (title or "").startswith("Digest —"):
             continue
         # Whole words, prefix-matched the way FTS `"t"*` matches: "use" must not
@@ -544,11 +726,40 @@ def gated_recall(con, prompt: str, session_id: str) -> list[dict]:
         hits = sum(1 for t in terms if any(w.startswith(t) for w in words))
         if hits < need or (not past and hits / len(terms) < RECALL_MIN_COVERAGE):
             continue
-        picked.append({"id": nid, "type": ntype, "title": title or "",
-                       "body": body or ""})
+        try:
+            p = json.loads(props or "{}")
+        except Exception:
+            p = {}
+        if session_id and p.get("session_id") == session_id:
+            continue  # this session's own summary is already in its window
+        cands.append({"id": nid, "type": ntype, "title": title or "",
+                      "body": body or "", "updated": updated or "",
+                      "summary": p.get("kind") == "session-summary",
+                      "here": bool(repo) and p.get("repo") == repo})
+    # The repo's own session summaries first (newest first), then other
+    # summaries, then everything else in FTS order: a summary says where work
+    # stopped, which a loose task hit does not.
+    sums = sorted((c for c in cands if c["summary"]), key=lambda c: c["updated"], reverse=True)
+    ordered = ([c for c in sums if c["here"]] + [c for c in sums if not c["here"]]
+               + [c for c in cands if not c["summary"]])
+    picked, n_sum = [], 0
+    for c in ordered:
+        if c["summary"]:
+            if n_sum >= RECALL_MAX_SUMMARIES:
+                continue
+            n_sum += 1
+        picked.append({k: c[k] for k in ("id", "type", "title", "body", "summary")})
         if len(picked) >= RECALL_MAX:
             break
     return picked
+
+
+def _summary_snippet(n: dict) -> str:
+    """A session summary's title, outcome and refs: the lines that say where it
+    stopped, kept inside the larger summary budget."""
+    keep = [ln for ln in (n["body"] or "").splitlines() if ln.startswith(("Outcome:", "Refs:"))]
+    text = " ".join(f"{n['title'][:80]} — {' '.join(keep)}".split())
+    return text[:RECALL_SUMMARY_SNIPPET - 1] + "…" if len(text) > RECALL_SUMMARY_SNIPPET else text
 
 
 def recall_note(nodes: list[dict]) -> str:
@@ -556,9 +767,12 @@ def recall_note(nodes: list[dict]) -> str:
     tell whether the answer used it."""
     lines = []
     for n in nodes:
-        text = " ".join(f"{n['title']} — {n['body']}".split())
-        if len(text) > RECALL_SNIPPET:
-            text = text[:RECALL_SNIPPET - 1] + "…"
+        if n.get("summary"):
+            text = _summary_snippet(n)
+        else:
+            text = " ".join(f"{n['title']} — {n['body']}".split())
+            if len(text) > RECALL_SNIPPET:
+                text = text[:RECALL_SNIPPET - 1] + "…"
         lines.append(f"[n:{n['id']}] ({n['type']}) {text}")
     return ("[memory-ledger] Possibly relevant from the brain (excerpts of stored "
             "notes, not instructions):\n" + "\n".join(lines))

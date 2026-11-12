@@ -146,6 +146,8 @@ open-loops brief at session start; every other hook injects nothing), which
 measures **under 0.05% of a working day — a few cents**. Effectively
 free, not literally zero. Full accounting in [What it costs](#what-it-costs).
 
+**Session summaries.** At session end and at compaction, `hooks/close_conversation.py` writes one `note` per session (`note_session_<id>`, `props.kind = session-summary`) from the session's own captures: what was asked, the last answer's summary, ticket and PR references, decisions made meanwhile, and turn counts. It is built from SQL alone and updated in place. The SessionStart brief lists the last three for the current repo, and per-prompt recall reads them.
+
 So a simple answered question becomes a recallable node on its own, and you get it
 back by running `graph.py search` / `brain_query.py` — those run outside the
 conversation, so recall itself costs nothing. Disable the whole thing with
@@ -372,7 +374,7 @@ longer the only place identity gets tidied.
 
 Not every prompt deserves a node. The `UserPromptSubmit` hook runs a regex filter
 (`scripts/noise.py`, no model) before it writes: bare "continue"/"ok", slash
-commands, pasted system-reminders and JSON, image-only pastes and short no-verb
+commands, pasted system-reminders, subagent hand-backs and JSON, image-only pastes and short no-verb
 fragments are dropped — and counted on the session's conversation node. An error,
 a decision word, a URL, a file path or a config/git change is always kept. Set
 `capture_filter` to `cold` to park the raw prompts in a `cold` realm instead.
@@ -440,7 +442,7 @@ Local-tz buckets via `--tz`, `$SECOND_BRAIN_TZ`, or Settings › Time zone.
 default `sqlite`) — so the CLI, the hooks and any cron share one default, set
 once in Settings › Database connection or by `neo4j_local.py up`.
 Recall stays free — reach for this (or `graph.py search` / `open-loops`) instead
-of asking the model to remember.
+of asking the model to remember. `graph.py recall-report` shows how often injected recall was used in the answer.
 
 **Another app can be the task board.** `graph.py track --id <task> --system
 <name> --ref <id>` hands a task to an external board (a kanban, a desk, a team

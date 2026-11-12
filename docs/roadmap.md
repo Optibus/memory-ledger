@@ -25,6 +25,12 @@ one without reading every page. Nothing here is a promise of a date.
   `~/.memory-ledger` today through a symlink; the engine accepting either
   directly, with no link, is still open.
 
+- **Fresh-session recall.** A session summary note is written at session end and
+  at compaction, the SessionStart brief lists the last three for the current
+  repo, and per-prompt recall reads them (generic words ignored; a repo name or
+  ticket key lowers the bar). Still open: summaries for sessions that ended
+  before this existed, and a summary of work spread across several repos.
+
 ## Next
 
 - **A Jira bot user**, so a mention does not have to be of you
