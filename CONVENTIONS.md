@@ -51,7 +51,14 @@ time", a ticket key, a PR link). Never a `capture`, `rule` or digest, never a
 `personal`-realm node, never the same node twice in a session, and never into a
 respond session (`$MEMORY_LEDGER_REQUEST_ID` set). Each snippet carries its id
 (`[n:<id>]`), and the ids injected are logged on the turn's capture node
-(`props.recalled`), so the hit rate is measured rather than guessed.
+(`props.recalled`, plus `props.recalled_tokens_est`), so the hit rate is measured
+rather than guessed. The SessionStart brief logs the notes it names and its size on
+the session's conversation node (`props.brief_injected`, `brief_chars`,
+`brief_tokens_est`; only notes actually shown). `graph.py recall-report` reads both: `used_by_id` (the answer
+holds the id; rare) and `used_by_words` (the answer shares at least two distinctive
+words with the note, none taken from the prompt; `rate_used` follows this), per
+source, plus `never_matched` (injected, never used: prune candidates) and
+`tokens_per_used_injection`.
 
 So: effectively free, **not literally zero**.
 Say "no model call" when you mean it. Re-measure with the recipe in

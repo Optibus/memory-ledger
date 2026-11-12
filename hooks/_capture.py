@@ -762,6 +762,11 @@ def _summary_snippet(n: dict) -> str:
     return text[:RECALL_SUMMARY_SNIPPET - 1] + "…" if len(text) > RECALL_SUMMARY_SNIPPET else text
 
 
+def est_tokens(text: str) -> int:
+    """Rough token count (about 4 characters a token); enough to compare sources."""
+    return (len(text or "") + 3) // 4
+
+
 def recall_note(nodes: list[dict]) -> str:
     """The injected text. Each snippet carries its node id, so a later check can
     tell whether the answer used it."""
