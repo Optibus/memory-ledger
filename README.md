@@ -146,6 +146,8 @@ open-loops brief at session start; every other hook injects nothing), which
 measures **under 0.05% of a working day — a few cents**. Effectively
 free, not literally zero. Full accounting in [What it costs](#what-it-costs).
 
+**Session summaries.** At session end and at compaction, `hooks/close_conversation.py` writes one `note` per session (`note_session_<id>`, `props.kind = session-summary`) from the session's own captures: what was asked, the last answer's summary, ticket and PR references, decisions made meanwhile, and turn counts. It is built from SQL alone and updated in place. The SessionStart brief lists the last three for the current repo, and per-prompt recall reads them.
+
 So a simple answered question becomes a recallable node on its own, and you get it
 back by running `graph.py search` / `brain_query.py` — those run outside the
 conversation, so recall itself costs nothing. Disable the whole thing with

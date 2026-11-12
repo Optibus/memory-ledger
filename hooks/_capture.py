@@ -91,10 +91,12 @@ def title_of(text: str, n: int = 80) -> str:
     return (t[:n] + "…") if len(t) > n else (t or "(empty)")
 
 
-def insert_node(con, ntype, title, body="", props=None, status="", realm_=None) -> str:
+def insert_node(con, ntype, title, body="", props=None, status="", realm_=None,
+                nid=None) -> str:
     """Insert a node (mirrors graph.cmd_add_node's write) and queue it for neo4j —
-    WITHOUT the CLI's stdout print, so hooks stay silent unless they choose to talk."""
-    nid = graph._gen_id(con, ntype, title)
+    WITHOUT the CLI's stdout print, so hooks stay silent unless they choose to talk.
+    `nid` pins a deterministic id (an upsert key); otherwise one is generated."""
+    nid = nid or graph._gen_id(con, ntype, title)
     ts = graph.now()
     con.execute(
         "INSERT INTO nodes(id,type,title,body,props,status,due,realm,created,updated)"
@@ -453,6 +455,109 @@ def read_transcript_tail(path: str):
     except Exception:
         pass
     return last_user, last_asst
+
+
+# --- session summary (token-free) ------------------------------------------
+_REPO_URL = re.compile(r"(?:[:/])([^/:\s]+)/([^/\s]+?)(?:\.git)?/?$")
+_REF_TICKET = re.compile(r"\b[A-Z][A-Z0-9]{1,9}-\d+\b")
+_REF_NOT_TICKET = ("UTF-", "SHA-", "ISO-", "MD-")
+_REF_PR = re.compile(
+    r"https://github\.com/[\w.-]+/[\w.-]+/(?:pull|issues)/\d+|\b[\w.-]+/[\w.-]+#\d+\b")
+SUMMARY_BODY_MAX = 900
+SUMMARY_OUTCOME_MAX = 300
+
+
+def _git(cwd: str, *args: str) -> str:
+    try:
+        r = subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=2)
+        return r.stdout.strip() if r.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def repo_of(cwd: str) -> str:
+    """`owner/name` of the repo `cwd` is in, from its origin remote (ssh or https);
+    else the top-level directory's name, else the cwd's. Never raises."""
+    try:
+        if not cwd:
+            return ""
+        url = _git(cwd, "config", "--get", "remote.origin.url")
+        m = _REPO_URL.search(url) if url else None
+        if m:
+            return f"{m.group(1)}/{m.group(2)}"
+        top = _git(cwd, "rev-parse", "--show-toplevel")
+        return os.path.basename((top or cwd).rstrip("/\\"))
+    except Exception:
+        return ""
+
+
+def _refs_in(text: str) -> list[str]:
+    found = [m.group(0) for m in _REF_TICKET.finditer(text)
+             if not m.group(0).startswith(_REF_NOT_TICKET)]
+    found += [m.group(0) for m in _REF_PR.finditer(text)]
+    return found
+
+
+def _line(label: str, text: str, n: int) -> str:
+    t = " ".join((text or "").split())
+    return f"{label} {t[:n - 1] + '…' if len(t) > n else t}"
+
+
+def session_summary(con, session_id: str, cwd: str = "") -> str | None:
+    """Build and upsert the one summary note for a session; returns its id, or
+    None when the session is not worth one. Reads only the session's own capture
+    nodes — no model — so it is safe at SessionEnd and PreCompact."""
+    if not session_id:
+        return None
+    caps = []
+    for r in con.execute(
+            "SELECT title, body, props, realm, created FROM nodes WHERE type='capture'"
+            " AND json_extract(props,'$.session_id')=? ORDER BY created, rowid",
+            (session_id,)):
+        try:
+            caps.append({**dict(r), "p": json.loads(r["props"] or "{}")})
+        except Exception:
+            continue
+    users = [c for c in caps if c["p"].get("role") == "user" and c["realm"] != COLD_REALM]
+    asst = [c for c in caps if c["p"].get("role") == "assistant"]
+    if len(users) < 2 or (users[0]["title"] or "").startswith("<agent-message"):
+        return None
+    cwd = cwd or users[0]["p"].get("cwd") or ""
+    repo = repo_of(cwd)
+    started, ended = caps[0]["created"], caps[-1]["created"]
+    lines = [_line("Asked:", users[0]["title"], 120)]
+    if len(users) > 3:
+        lines[0] += " … " + " ".join((users[-1]["title"] or "").split())[:120]
+    if asst:
+        lines.append(_line("Outcome:", asst[-1]["body"] or asst[-1]["title"], SUMMARY_OUTCOME_MAX))
+    refs: list[str] = []
+    for c in caps:
+        for ref in _refs_in(f"{c['title']} {c['body']}"):
+            if ref not in refs:
+                refs.append(ref)
+    if refs:
+        lines.append("Refs: " + ", ".join(refs[:8]))
+    decided = [r["title"] for r in con.execute(
+        "SELECT title FROM nodes WHERE type='decision' AND created BETWEEN ? AND ?"
+        " ORDER BY created LIMIT 3", (started, ended))]
+    if decided:
+        lines.append("Decided: " + "; ".join(d[:80] for d in decided))
+    lines.append(f"Turns: {len(users)} / {len(asst)}")
+    body = "\n".join(lines)[:SUMMARY_BODY_MAX]
+    title = (f"Session — {repo or 'unknown'} — {started[:10]}: "
+             f"{' '.join((users[0]['title'] or '').split())[:60]}")
+    props = {"kind": "session-summary", "session_id": session_id, "cwd": cwd,
+             "repo": repo, "started": started, "ended": ended, "turns": len(users)}
+    nid = "note_session_" + session_id[:8]
+    if con.execute("SELECT 1 FROM nodes WHERE id=?", (nid,)).fetchone():
+        graph.api_update_node(con, nid, title=title, body=body, props_patch=props)
+    else:
+        insert_node(con, "note", title, body=body, props=props, nid=nid)
+    conv = conversation_for(con, session_id, cwd)
+    if conv:
+        insert_edge(con, nid, conv, graph.AREA_REL)
+    return nid
 
 
 # --- gated per-prompt recall (opt-in, token-free to decide) ----------------
