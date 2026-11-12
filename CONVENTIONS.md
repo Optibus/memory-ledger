@@ -882,7 +882,8 @@ the last answer's summary, ticket and PR references,
 decisions made meanwhile, turn counts. It is rewritten in place, so compaction
 then end leaves one note. The SessionStart brief lists the last three for the
 current repo (`repo_of(cwd)`, the origin remote as `owner/name`), so a new
-session opens knowing where the last ones stopped. Per-prompt recall searches
+session opens knowing where the last ones stopped. `resume` leaves them out of
+its focus list, so a session note is shown once, in the recent-sessions block. Per-prompt recall searches
 the summaries in a pool of their own beside the shared one, and a prompt that
 names the current repo in plain words ("memory ledger") counts as asking about
 past work in it.

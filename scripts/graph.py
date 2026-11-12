@@ -5140,7 +5140,8 @@ def cmd_resume(args):
         "SELECT * FROM nodes WHERE updated>=? AND type NOT IN"
         " ('capture','parked','channel','person','skill','rule','spec','area','team',"
         "  'conversation','agent','transition','gauge','context-event')"
-        " AND id NOT LIKE 'note_digest_%' ORDER BY updated DESC LIMIT 60",
+        " AND id NOT LIKE 'note_digest_%' AND id NOT LIKE 'note_session_%'"
+        " ORDER BY updated DESC LIMIT 60",
             (since,)).fetchall():
         d = _node_dict(r)
         a = str((d["props"] or {}).get("assignee", "")).strip().lower()
