@@ -47,7 +47,59 @@ CAPTURE_ON = ("[memory-ledger] Capture is on: every turn is stored without a mod
 
 def emit(note):
     print(_switch.hook_context("SessionStart", CAPTURE_ON + "\n" + note))
+
+
+try:
+    _stdin = json.load(sys.stdin)
+    if not isinstance(_stdin, dict):
+        _stdin = {}
+except Exception:
+    _stdin = {}
 graph = os.path.join(root, "scripts", "graph.py")
+
+
+RECENT_MAX_CHARS = 700
+
+
+def recent_sessions_block():
+    """The last three session summaries for THIS repo: what was done, where it
+    stopped. Plain SQL over notes the close hook wrote; empty when there is no
+    repo, no summary, or anything goes wrong."""
+    try:
+        cwd = _stdin.get("cwd") or ""
+        sid = _stdin.get("session_id") or ""
+        if not cwd:
+            return ""
+        sys.path.insert(0, os.path.join(root, "hooks"))
+        import _capture as C
+        repo = C.repo_of(cwd)
+        if not repo:
+            return ""
+        con = C.connect()
+        out = []
+        for r in con.execute(
+                "SELECT id, title, body, props FROM nodes WHERE id LIKE 'note_session_%'"
+                " AND json_extract(props,'$.kind')='session-summary' AND realm != 'personal'"
+                " ORDER BY updated DESC LIMIT 50"):
+            p = json.loads(r["props"] or "{}")
+            if sid and p.get("session_id") == sid:
+                continue
+            here = (p.get("repo") == repo) if p.get("repo") else (
+                bool(p.get("cwd")) and cwd.startswith(p["cwd"]))
+            if not here:
+                continue
+            outcome = next((ln[len("Outcome:"):].strip() for ln in (r["body"] or "").splitlines()
+                            if ln.startswith("Outcome:")), "")
+            title = (r["title"] or "").split(": ", 1)[-1]
+            out.append(f"- {title[:70]} \u2192 {outcome[:140]} [n:{r['id']}]")
+            if len(out) >= 3:
+                break
+        if not out:
+            return ""
+        head = f"\nRecent sessions in {repo} (what was done, where it stopped):\n"
+        return (head + "\n".join(out))[:RECENT_MAX_CHARS]
+    except Exception:
+        return ""
 
 
 def revived_lines():
@@ -216,6 +268,7 @@ if tracked:
 if not n:
     rev = revived_lines()
     note = "[memory-ledger] State: no open loops — all clear." + tracked_line
+    note += recent_sessions_block()
     if rev:
         note += ("\nBecame possible again (the condition that blocked these no "
                  "longer holds — offer them, don't resume them):\n" + "\n".join(rev))
@@ -262,6 +315,7 @@ msg = (
     + tracked_line
     + focus_block
     + revived_block
+    + recent_sessions_block()
     + "\n(full list: open-loops · thread + parked: resume · park to offload context)"
 )
 emit(msg)

@@ -874,6 +874,15 @@ clear it, and ask for it back if it turns out to matter.
    **no model call**. `SessionStart` fires on `/clear`, so the brief hands most of
    this back automatically — `resume` is the fuller, on-demand version.
 
+**Session summaries make a fresh session cheap.** At session end and at compaction
+the close hook writes one `note` per session (`note_session_<id>`,
+`props.kind = session-summary`), built from the session's own captures with no
+model call: what was asked, the last answer's summary, ticket and PR references,
+decisions made meanwhile, turn counts. It is rewritten in place, so compaction
+then end leaves one note. The SessionStart brief lists the last three for the
+current repo (`repo_of(cwd)`, the origin remote as `owner/name`), so a new
+session opens knowing where the last ones stopped.
+
 **Answer from a query, not from memory of the window.** When a question is about
 something already in the brain, look it up (`recall`, `search`, `brain_query.py`,
 `match-rules`) rather than keeping the answer resident in context so it can be
