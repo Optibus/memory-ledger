@@ -102,6 +102,7 @@ python3 scripts/graph.py due
 python3 scripts/graph.py open-loops --stale-days 7
 python3 scripts/graph.py open-loops --include-tracked  # also what external boards hold
 python3 scripts/graph.py recall-report --days 14      # injected recall and brief: used by id / by words, never-matched nodes, tokens per use
+python3 scripts/recall_weekly.py                     # weekly recall-quality report: verdict vs last week, deltas, never-matched notes, next steps (history + report outside the repo)
 python3 scripts/graph.py stats
 python3 scripts/graph.py export
 ```
