@@ -1527,8 +1527,8 @@ def cmd_recall_report(args):
                 t["used"] += 1
     used = {uid for uid in injected if uid in used_id or uid in used_words}
     top = sorted(per.values(), key=lambda t: (-t["injected"], -t["used"], t["id"]))[:10]
-    never = sorted((t for t in per.values() if t["used"] == 0),
-                   key=lambda t: (-t["injected"], t["id"]))[:10]
+    never_all = [t for t in per.values() if t["used"] == 0]
+    never = sorted(never_all, key=lambda t: (-t["injected"], t["id"]))[:10]
     never = [{"id": t["id"], "injected": t["injected"],
               "title": (lambda r: r["title"][:80] if r else "")(
                   con.execute("SELECT title FROM nodes WHERE id=?", (t["id"],)).fetchone())}
@@ -1566,7 +1566,7 @@ def cmd_recall_report(args):
          "rate_injected": rate(len(injected), prompts),
          "rate_used": rate(len(used_words), len(injected)),
          "rate_used_by_id": rate(len(used_id), len(injected)),
-         "top_nodes": top, "never_matched": never,
+         "top_nodes": top, "never_matched": never, "never_matched_total": len(never_all),
          "sources": {
              "prompt_recall": {"injections": len(injected), "used_by_words": len(used_words),
                                "rate_used": rate(len(used_words), len(injected)),

@@ -123,6 +123,7 @@ def test_echoing_the_prompt_or_one_shared_word_is_not_use(fresh):
     rep = brain.g("recall-report")
     assert (rep["injected"], rep["used_by_words"], rep["rate_used"]) == (2, 0, 0.0)
     assert [n["injected"] for n in rep["never_matched"]] == [2]
+    assert rep["never_matched_total"] == 1
     assert rep["never_matched"][0]["title"].startswith("Shapefile export")
 
 
